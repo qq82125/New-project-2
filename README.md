@@ -1,6 +1,6 @@
-# NMPA IVD 注册情报看板（Dashboard-First）
+# IVD产品雷达（Dashboard-First）
 
-本项目用于汇总 NMPA IVD 产品变更信息，提供：
+本项目用于汇总 IVD 产品变更信息，提供：
 - 每日数据同步
 - 可检索的产品/企业信息
 - Dashboard 趋势与榜单

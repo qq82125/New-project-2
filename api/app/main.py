@@ -42,7 +42,7 @@ from app.schemas.api import (
     StatusItem,
 )
 
-app = FastAPI(title='NMPA IVD Dashboard API', version='0.4.0')
+app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
 
 
 SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']

@@ -80,6 +80,9 @@ export default async function DashboardPage() {
   return (
     <div className="grid">
       <section className="card">
+        <h2>IVD产品雷达</h2>
+      </section>
+      <section className="card">
         <h2>同步状态</h2>
         {statusRes.error ? (
           <ErrorState text={`状态加载失败：${statusRes.error}`} />
