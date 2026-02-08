@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from base64 import b64encode
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+import app.main as main
 from app.main import app
 
 
@@ -85,15 +85,43 @@ def test_status_api(monkeypatch) -> None:
 
 
 def test_admin_configs_requires_auth(monkeypatch) -> None:
-    monkeypatch.setattr('app.main.get_settings', lambda: SimpleNamespace(admin_username='admin', admin_password='secret'))
+    monkeypatch.setattr(
+        'app.main.get_settings',
+        lambda: SimpleNamespace(
+            auth_secret='test-secret',
+            auth_cookie_name='ivd_session',
+            auth_session_ttl_hours=1,
+            auth_cookie_secure=False,
+            cors_origins='http://localhost:3000',
+            bootstrap_admin_email='',
+            bootstrap_admin_password='',
+            admin_username='admin',
+            admin_password='secret',
+            data_sources_crypto_key='unit-test-key',
+        ),
+    )
     client = TestClient(app)
     resp = client.get('/api/admin/configs')
     assert resp.status_code == 401
 
 
 def test_admin_configs_list_and_update(monkeypatch) -> None:
-    settings = SimpleNamespace(admin_username='admin', admin_password='secret')
+    settings = SimpleNamespace(
+        auth_secret='test-secret',
+        auth_cookie_name='ivd_session',
+        auth_session_ttl_hours=1,
+        auth_cookie_secure=False,
+        cors_origins='http://localhost:3000',
+        bootstrap_admin_email='',
+        bootstrap_admin_password='',
+        admin_username='admin',
+        admin_password='secret',
+        data_sources_crypto_key='unit-test-key',
+    )
     monkeypatch.setattr('app.main.get_settings', lambda: settings)
+
+    admin_user = SimpleNamespace(id=1, email='admin@example.com', password_hash='x', role='admin')
+    monkeypatch.setattr('app.main.get_user_by_id', lambda _db, user_id: admin_user if int(user_id) == 1 else None)
 
     now = datetime.now(timezone.utc)
     cfg = SimpleNamespace(config_key='field_mapping', config_value={'version': 'v1'}, updated_at=now)
@@ -102,15 +130,14 @@ def test_admin_configs_list_and_update(monkeypatch) -> None:
     monkeypatch.setattr('app.main.list_admin_configs', lambda *args, **kwargs: [cfg])
     monkeypatch.setattr('app.main.upsert_admin_config', lambda *args, **kwargs: updated)
 
-    token = b64encode(b'admin:secret').decode('ascii')
-    headers = {'Authorization': f'Basic {token}'}
-
     client = TestClient(app)
+    token_admin = main.create_session_token(user_id=1, secret='test-secret', ttl_seconds=3600)
+    client.cookies.set('ivd_session', token_admin)
 
-    list_resp = client.get('/api/admin/configs', headers=headers)
+    list_resp = client.get('/api/admin/configs')
     assert list_resp.status_code == 200
     assert list_resp.json()['data']['items'][0]['config_key'] == 'field_mapping'
 
-    put_resp = client.put('/api/admin/configs/field_mapping', json={'config_value': {'version': 'v2'}}, headers=headers)
+    put_resp = client.put('/api/admin/configs/field_mapping', json={'config_value': {'version': 'v2'}})
     assert put_resp.status_code == 200
     assert put_resp.json()['data']['config_value']['version'] == 'v2'

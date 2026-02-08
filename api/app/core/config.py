@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     export_quota_pro_daily: int = 50
     export_quota_enterprise_daily: int = 500
 
+    # PR-E: data sources encryption key (symmetric). This must be kept secret.
+    # Any string is accepted; we derive a proper key from it.
+    data_sources_crypto_key: str = 'change-me-data-sources-key'
+
 
 @lru_cache
 def get_settings() -> Settings:

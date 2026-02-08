@@ -4,6 +4,7 @@ from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class CompanyOut(BaseModel):
@@ -174,6 +175,45 @@ class AuthUserOut(BaseModel):
     id: int
     email: str
     role: str
+    created_at: datetime | None = None
+    plan: str = 'free'
+    plan_status: str = 'inactive'
+    plan_expires_at: datetime | None = None
+    plan_remaining_days: int | None = None
+    entitlements: dict | None = None
+    onboarded: bool = False
+
+
+class ApiResponseOnboarded(BaseModel):
+    code: int
+    message: str
+    data: dict
+
+
+class SubscriptionCreateIn(BaseModel):
+    subscription_type: str
+    target_value: str
+    channel: str = 'webhook'  # webhook/email
+    webhook_url: str | None = None
+    email_to: str | None = None
+
+
+class SubscriptionOut(BaseModel):
+    id: int
+    subscriber_key: str
+    channel: str
+    email_to: str | None = None
+    subscription_type: str
+    target_value: str
+    webhook_url: str | None = None
+    is_active: bool
+    created_at: datetime
+
+
+class ApiResponseSubscription(BaseModel):
+    code: int
+    message: str
+    data: SubscriptionOut
 
 
 class AuthRegisterIn(BaseModel):
@@ -190,3 +230,76 @@ class ApiResponseAuthUser(BaseModel):
     code: int
     message: str
     data: AuthUserOut
+
+
+class AdminUserItemOut(BaseModel):
+    id: int
+    email: str
+    role: str
+    plan: str
+    plan_status: str
+    plan_expires_at: datetime | None = None
+    created_at: datetime
+
+
+class AdminUsersData(BaseModel):
+    items: list[AdminUserItemOut]
+    limit: int
+    offset: int
+
+
+class ApiResponseAdminUsers(BaseModel):
+    code: int
+    message: str
+    data: AdminUsersData
+
+
+class AdminMembershipGrantOut(BaseModel):
+    id: UUID
+    user_id: int
+    granted_by_user_id: int | None = None
+    plan: str
+    start_at: datetime
+    end_at: datetime
+    reason: str | None = None
+    note: str | None = None
+    created_at: datetime
+
+
+class AdminUserDetailOut(BaseModel):
+    user: AdminUserItemOut
+    recent_grants: list[AdminMembershipGrantOut]
+
+
+class ApiResponseAdminUserDetail(BaseModel):
+    code: int
+    message: str
+    data: AdminUserDetailOut
+
+
+class AdminMembershipGrantIn(BaseModel):
+    user_id: int
+    plan: str = Field(default='pro_annual')
+    months: int = Field(gt=0)
+    start_at: datetime | None = None
+    reason: str | None = None
+    note: str | None = None
+
+
+class AdminMembershipExtendIn(BaseModel):
+    user_id: int
+    months: int = Field(gt=0)
+    reason: str | None = None
+    note: str | None = None
+
+
+class AdminMembershipActionIn(BaseModel):
+    user_id: int
+    reason: str | None = None
+    note: str | None = None
+
+
+class ApiResponseAdminUserItem(BaseModel):
+    code: int
+    message: str
+    data: AdminUserItemOut

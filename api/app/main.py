@@ -2,20 +2,40 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from secrets import compare_digest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import User
 from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
+from app.repositories.data_sources import (
+    activate_data_source,
+    create_data_source,
+    delete_data_source,
+    get_data_source,
+    list_data_sources,
+    update_data_source,
+)
 from app.repositories.products import get_company, get_product, search_products
 from app.repositories.radar import list_admin_configs, upsert_admin_config
-from app.repositories.source_runs import latest_runs
+from app.repositories.radar import count_active_subscriptions_by_subscriber, create_subscription
+from app.repositories.source_runs import latest_runs, list_source_runs
 from app.repositories.users import create_user, get_user_by_email, get_user_by_id
+from app.repositories.admin_membership import (
+    admin_extend_membership,
+    admin_get_user,
+    admin_grant_membership,
+    admin_list_recent_grants,
+    admin_list_users,
+    admin_revoke_membership,
+    admin_suspend_membership,
+)
 from app.schemas.api import (
     AdminConfigItem,
     AdminConfigUpdateIn,
@@ -47,6 +67,20 @@ from app.schemas.api import (
     AuthLoginIn,
     AuthRegisterIn,
     AuthUserOut,
+    ApiResponseSubscription,
+    SubscriptionCreateIn,
+    SubscriptionOut,
+    ApiResponseOnboarded,
+    AdminMembershipActionIn,
+    AdminMembershipExtendIn,
+    AdminMembershipGrantIn,
+    AdminMembershipGrantOut,
+    AdminUserDetailOut,
+    AdminUserItemOut,
+    AdminUsersData,
+    ApiResponseAdminUserDetail,
+    ApiResponseAdminUserItem,
+    ApiResponseAdminUsers,
 )
 from app.services.auth import (
     create_session_token,
@@ -55,6 +89,9 @@ from app.services.auth import (
     parse_session_token,
     verify_password,
 )
+from app.services.entitlements import get_entitlements, get_membership_info
+from app.services.exports import export_search_to_csv
+from app.services.crypto import decrypt_json, encrypt_json
 
 app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
 
@@ -82,7 +119,58 @@ def _ok(data):
 
 
 def _auth_user_out(user: User) -> AuthUserOut:
-    return AuthUserOut(id=user.id, email=user.email, role=user.role)
+    info = get_membership_info(user)
+    ent = get_entitlements(user)
+    remaining_days = None
+    exp = info.plan_expires_at
+    if exp is not None:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        exp0 = exp if exp.tzinfo else exp.replace(tzinfo=timezone.utc)
+        remaining_days = int((exp0 - now).total_seconds() // 86400)
+    return AuthUserOut(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        created_at=getattr(user, 'created_at', None),
+        plan=info.plan,
+        plan_status=info.plan_status,
+        plan_expires_at=info.plan_expires_at,
+        plan_remaining_days=remaining_days,
+        entitlements={
+            'can_export': ent.can_export,
+            'max_subscriptions': ent.max_subscriptions,
+            'trend_range_days': ent.trend_range_days,
+        },
+        onboarded=bool(getattr(user, 'onboarded', False)),
+    )
+
+
+def _admin_user_item_out(user: User) -> AdminUserItemOut:
+    return AdminUserItemOut(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        plan=(getattr(user, 'plan', None) or 'free'),
+        plan_status=(getattr(user, 'plan_status', None) or 'inactive'),
+        plan_expires_at=getattr(user, 'plan_expires_at', None),
+        created_at=user.created_at,
+    )
+
+
+def _admin_grant_out(g) -> AdminMembershipGrantOut:
+    return AdminMembershipGrantOut(
+        id=g.id,
+        user_id=g.user_id,
+        granted_by_user_id=getattr(g, 'granted_by_user_id', None),
+        plan=g.plan,
+        start_at=g.start_at,
+        end_at=g.end_at,
+        reason=getattr(g, 'reason', None),
+        note=getattr(g, 'note', None),
+        created_at=g.created_at,
+    )
 
 
 def _set_auth_cookie(response: Response, user_id: int) -> None:
@@ -105,7 +193,18 @@ def _set_auth_cookie(response: Response, user_id: int) -> None:
 
 def _clear_auth_cookie(response: Response) -> None:
     cfg = _settings()
-    response.delete_cookie(key=cfg.auth_cookie_name, path='/')
+    # Must match the cookie attributes used in _set_auth_cookie, otherwise browsers
+    # may keep the old cookie and users appear still logged in.
+    response.set_cookie(
+        key=cfg.auth_cookie_name,
+        value='',
+        max_age=0,
+        expires=0,
+        httponly=True,
+        secure=cfg.auth_cookie_secure,
+        samesite='lax',
+        path='/',
+    )
 
 
 def _require_current_user(request: Request, db: Session = Depends(get_db)) -> User:
@@ -120,6 +219,23 @@ def _require_current_user(request: Request, db: Session = Depends(get_db)) -> Us
     if not user:
         raise HTTPException(status_code=401, detail='Not authenticated')
     return user
+
+
+def _get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> User | None:
+    cfg = _settings()
+    token = request.cookies.get(cfg.auth_cookie_name)
+    if not token:
+        return None
+    user_id = parse_session_token(token=token, secret=cfg.auth_secret)
+    if user_id is None:
+        return None
+    return get_user_by_id(db, user_id)
+
+
+def _require_admin_user(current_user: User = Depends(_require_current_user)) -> User:
+    if getattr(current_user, 'role', None) != 'admin':
+        raise HTTPException(status_code=403, detail='Admin only')
+    return current_user
 
 
 def serialize_company(company) -> CompanyOut:
@@ -205,11 +321,33 @@ def login(payload: AuthLoginIn, response: Response, db: Session = Depends(get_db
 @app.post('/api/auth/logout')
 def logout(response: Response) -> dict:
     _clear_auth_cookie(response)
-    return _ok({'logged_out': True})
+    return {'ok': True}
 
 
 @app.get('/api/auth/me', response_model=ApiResponseAuthUser)
 def me(current_user: User = Depends(_require_current_user)) -> ApiResponseAuthUser:
+    return _ok(_auth_user_out(current_user))
+
+
+@app.post('/api/users/onboarded', response_model=ApiResponseOnboarded)
+def mark_onboarded(
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseOnboarded:
+    # Best-effort idempotent marker.
+    if not getattr(current_user, 'onboarded', False):
+        current_user.onboarded = True
+        db.add(current_user)
+        db.commit()
+        try:
+            db.refresh(current_user)
+        except Exception:
+            pass
+    return _ok({'onboarded': True})
+
+
+@app.get('/api/admin/me', response_model=ApiResponseAuthUser)
+def admin_me(current_user: User = Depends(_require_admin_user)) -> ApiResponseAuthUser:
     return _ok(_auth_user_out(current_user))
 
 
@@ -233,8 +371,15 @@ def dashboard_summary(
 @app.get('/api/dashboard/trend', response_model=ApiResponseTrend)
 def dashboard_trend(
     days: int = Query(default=30, ge=1, le=365),
+    current_user: User | None = Depends(_get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> ApiResponseTrend:
+    ent = get_entitlements(current_user or object())
+    if days > ent.trend_range_days:
+        raise HTTPException(
+            status_code=403,
+            detail=f'Trend range exceeds your plan limit (max {ent.trend_range_days} days). Upgrade to Pro for more.',
+        )
     items = get_trend(db, days)
     data = DashboardTrendData(
         items=[
@@ -317,6 +462,82 @@ def search(
     return _ok(data)
 
 
+@app.get('/api/export/search.csv')
+def export_search_csv(
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    ent = get_entitlements(current_user)
+    if not ent.can_export:
+        raise HTTPException(status_code=403, detail='Export is not available on your plan. Upgrade to Pro.')
+
+    csv_text = export_search_to_csv(db, plan='pro', q=q, company=company, registration_no=reg_no)
+    headers = {'Content-Disposition': 'attachment; filename="ivd_search_export.csv"'}
+    return Response(content=csv_text, media_type='text/csv; charset=utf-8', headers=headers)
+
+
+@app.post('/api/subscriptions', response_model=ApiResponseSubscription)
+def create_subscription_api(
+    payload: SubscriptionCreateIn,
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseSubscription:
+    ent = get_entitlements(current_user)
+    subscriber_key = current_user.email
+    active_count = count_active_subscriptions_by_subscriber(db, subscriber_key=subscriber_key)
+    if active_count >= ent.max_subscriptions:
+        # Required error contract for frontend handling.
+        return JSONResponse(
+            status_code=403,
+            content={
+                'error': 'SUBSCRIPTION_LIMIT',
+                'message': 'Free 用户最多订阅 3 个，请升级或联系开通。',
+            },
+        )
+
+    stype = (payload.subscription_type or '').strip().lower()
+    if stype not in {'company', 'product', 'keyword'}:
+        raise HTTPException(status_code=400, detail='Invalid subscription_type')
+
+    channel = (payload.channel or 'webhook').strip().lower()
+    if channel not in {'webhook', 'email'}:
+        raise HTTPException(status_code=400, detail='Invalid channel')
+
+    target_value = (payload.target_value or '').strip()
+    if not target_value:
+        raise HTTPException(status_code=400, detail='target_value is required')
+
+    webhook_url = (payload.webhook_url or '').strip() if payload.webhook_url else None
+    email_to = (payload.email_to or '').strip() if payload.email_to else None
+    if channel == 'webhook' and not webhook_url:
+        raise HTTPException(status_code=400, detail='webhook_url is required for webhook subscriptions')
+
+    sub = create_subscription(
+        db,
+        subscription_type=stype,
+        target_value=target_value,
+        webhook_url=webhook_url,
+        subscriber_key=subscriber_key,
+        channel=channel,
+        email_to=email_to,
+    )
+    out = SubscriptionOut(
+        id=sub.id,
+        subscriber_key=sub.subscriber_key,
+        channel=sub.channel,
+        email_to=sub.email_to,
+        subscription_type=sub.subscription_type,
+        target_value=sub.target_value,
+        webhook_url=sub.webhook_url,
+        is_active=bool(sub.is_active),
+        created_at=sub.created_at,
+    )
+    return _ok(out)
+
+
 @app.get('/api/products/{product_id}', response_model=ApiResponseProduct)
 def product_detail(product_id: str, db: Session = Depends(get_db)) -> ApiResponseProduct:
     product = get_product(db, product_id)
@@ -358,9 +579,251 @@ def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
     return _ok(data)
 
 
+def _spawn_sync_thread() -> None:
+    import threading
+
+    def _job():
+        from app.workers.sync import sync_nmpa_ivd
+
+        sync_nmpa_ivd()
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
+@app.get('/api/admin/source-runs')
+def admin_source_runs(
+    limit: int = Query(default=50, ge=1, le=200),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    runs = list_source_runs(db, limit=limit)
+    items = [
+        {
+            'id': r.id,
+            'source': r.source,
+            'status': r.status,
+            'message': getattr(r, 'message', None),
+            'records_total': int(getattr(r, 'records_total', 0) or 0),
+            'records_success': int(getattr(r, 'records_success', 0) or 0),
+            'records_failed': int(getattr(r, 'records_failed', 0) or 0),
+            'added_count': int(getattr(r, 'added_count', 0) or 0),
+            'updated_count': int(getattr(r, 'updated_count', 0) or 0),
+            'removed_count': int(getattr(r, 'removed_count', 0) or 0),
+            'started_at': r.started_at,
+            'finished_at': getattr(r, 'finished_at', None),
+        }
+        for r in runs
+    ]
+    return _ok({'items': items})
+
+
+@app.post('/api/admin/sync/run')
+def admin_sync_run(
+    background_tasks: BackgroundTasks,
+    _admin: User = Depends(_require_admin_user),
+) -> dict:
+    background_tasks.add_task(_spawn_sync_thread)
+    return _ok({'queued': True})
+
+
+def _ds_preview(cfg: dict) -> dict:
+    return {
+        'host': cfg.get('host') or '',
+        'port': int(cfg.get('port') or 5432),
+        'database': cfg.get('database') or '',
+        'username': cfg.get('username') or '',
+        'sslmode': cfg.get('sslmode'),
+    }
+
+
+@app.get('/api/admin/data-sources')
+def admin_list_data_sources_api(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = []
+    for ds in list_data_sources(db):
+        cfg = decrypt_json(ds.config_encrypted)
+        items.append(
+            {
+                'id': ds.id,
+                'name': ds.name,
+                'type': ds.type,
+                'is_active': bool(ds.is_active),
+                'updated_at': ds.updated_at,
+                'config_preview': _ds_preview(cfg),
+            }
+        )
+    return _ok({'items': items})
+
+
+@app.post('/api/admin/data-sources')
+def admin_create_data_source_api(
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    type_ = (payload.get('type') or '').strip()
+    if type_ != 'postgres':
+        raise HTTPException(status_code=400, detail='Only postgres data sources are supported')
+
+    name = (payload.get('name') or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='name is required')
+
+    cfg = payload.get('config') if isinstance(payload.get('config'), dict) else None
+    if not cfg:
+        raise HTTPException(status_code=400, detail='config is required')
+
+    token = encrypt_json(cfg)
+    try:
+        ds = create_data_source(db, name=name, type_=type_, config_encrypted=token)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='Data source name already exists')
+
+    return _ok(
+        {
+            'id': ds.id,
+            'name': ds.name,
+            'type': ds.type,
+            'is_active': bool(ds.is_active),
+            'updated_at': ds.updated_at,
+            'config_preview': _ds_preview(cfg),
+        }
+    )
+
+
+@app.delete('/api/admin/data-sources/{data_source_id}')
+def admin_delete_data_source_api(
+    data_source_id: int,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    ds = get_data_source(db, data_source_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail='Data source not found')
+    if ds.is_active:
+        raise HTTPException(status_code=409, detail='Cannot delete active data source')
+    ok = delete_data_source(db, data_source_id)
+    return _ok({'deleted': ok})
+
+
+@app.get('/api/admin/users', response_model=ApiResponseAdminUsers)
+def admin_users(
+    query: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1000000),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUsers:
+    items = admin_list_users(db, query=query, limit=limit, offset=offset)
+    out = [_admin_user_item_out(u) for u in items]
+    return _ok(AdminUsersData(items=out, limit=limit, offset=offset))
+
+
+@app.get('/api/admin/users/{user_id}', response_model=ApiResponseAdminUserDetail)
+def admin_user_detail(
+    user_id: int,
+    grants_limit: int = Query(default=20, ge=0, le=200),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUserDetail:
+    user = admin_get_user(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    grants = admin_list_recent_grants(db, user_id=user_id, limit=grants_limit) if grants_limit else []
+    detail = AdminUserDetailOut(user=_admin_user_item_out(user), recent_grants=[_admin_grant_out(g) for g in grants])
+    return _ok(detail)
+
+
+@app.post('/api/admin/membership/grant', response_model=ApiResponseAdminUserItem)
+def admin_membership_grant(
+    payload: AdminMembershipGrantIn,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUserItem:
+    plan = (payload.plan or '').strip().lower()
+    if plan != 'pro_annual':
+        raise HTTPException(status_code=400, detail='Only plan=pro_annual is supported')
+    try:
+        user = admin_grant_membership(
+            db,
+            user_id=payload.user_id,
+            actor_user_id=admin.id,
+            plan=plan,
+            months=payload.months,
+            start_at=payload.start_at,
+            reason=payload.reason,
+            note=payload.note,
+        )
+    except ValueError as e:
+        if str(e) == 'already_active_pro':
+            raise HTTPException(status_code=409, detail='User already has active Pro. Use /extend instead.')
+        raise
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    return _ok(_admin_user_item_out(user))
+
+
+@app.post('/api/admin/membership/extend', response_model=ApiResponseAdminUserItem)
+def admin_membership_extend(
+    payload: AdminMembershipExtendIn,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUserItem:
+    user = admin_extend_membership(
+        db,
+        user_id=payload.user_id,
+        actor_user_id=admin.id,
+        months=payload.months,
+        reason=payload.reason,
+        note=payload.note,
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    return _ok(_admin_user_item_out(user))
+
+
+@app.post('/api/admin/membership/suspend', response_model=ApiResponseAdminUserItem)
+def admin_membership_suspend(
+    payload: AdminMembershipActionIn,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUserItem:
+    user = admin_suspend_membership(
+        db,
+        user_id=payload.user_id,
+        actor_user_id=admin.id,
+        reason=payload.reason,
+        note=payload.note,
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    return _ok(_admin_user_item_out(user))
+
+
+@app.post('/api/admin/membership/revoke', response_model=ApiResponseAdminUserItem)
+def admin_membership_revoke(
+    payload: AdminMembershipActionIn,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminUserItem:
+    user = admin_revoke_membership(
+        db,
+        user_id=payload.user_id,
+        actor_user_id=admin.id,
+        reason=payload.reason,
+        note=payload.note,
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail='User not found')
+    return _ok(_admin_user_item_out(user))
+
+
 @app.get('/api/admin/configs', response_model=ApiResponseAdminConfigs)
 def admin_list_configs(
-    _admin: str = Depends(_require_admin),
+    _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseAdminConfigs:
     configs = list_admin_configs(db)
@@ -381,7 +844,7 @@ def admin_list_configs(
 def admin_upsert_config(
     config_key: str,
     payload: AdminConfigUpdateIn,
-    _admin: str = Depends(_require_admin),
+    _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseAdminConfig:
     cfg = upsert_admin_config(db, config_key, payload.config_value)

@@ -1,6 +1,12 @@
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { EmptyState, ErrorState } from '../../../components/States';
 import { apiGet } from '../../../lib/api';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Badge } from '../../../components/ui/badge';
+
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 type ProductData = {
   id: string;
@@ -15,6 +21,14 @@ type ProductData = {
 };
 
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const cookie = (await headers()).get('cookie') || '';
+  const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+    method: 'GET',
+    headers: cookie ? { cookie } : undefined,
+    cache: 'no-store',
+  });
+  if (meRes.status === 401) redirect('/login');
+
   const { id } = await params;
   const res = await apiGet<ProductData>(`/api/products/${id}`);
 
@@ -27,22 +41,60 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="grid">
-      <div className="card">
-        <h2>{res.data.name}</h2>
-        <p>reg_no: {res.data.reg_no || '-'}</p>
-        <p>udi_di: {res.data.udi_di}</p>
-        <p>status: {res.data.status}</p>
-        <p>approved_date: {res.data.approved_date || '-'}</p>
-        <p>expiry_date: {res.data.expiry_date || '-'}</p>
-        <p>class: {res.data.class_name || '-'}</p>
-        <p>
-          company:{' '}
-          {res.data.company ? <Link href={`/companies/${res.data.company.id}`}>{res.data.company.name}</Link> : '-'}
-        </p>
-      </div>
-      <div className="card">
-        <Link href={`/search?reg_no=${encodeURIComponent(res.data.reg_no || '')}`}>按 reg_no 搜索</Link>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>{res.data.name}</CardTitle>
+          <CardDescription>
+            {res.data.company ? (
+              <>
+                <span className="muted">企业：</span>
+                <Link href={`/companies/${res.data.company.id}`}>{res.data.company.name}</Link>
+              </>
+            ) : (
+              <span className="muted">企业：-</span>
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Badge variant="muted">reg_no: {res.data.reg_no || '-'}</Badge>
+            <Badge variant="muted">udi_di: {res.data.udi_di}</Badge>
+            <Badge
+              variant={
+                res.data.status === 'active'
+                  ? 'success'
+                  : res.data.status === 'expired'
+                    ? 'warning'
+                    : res.data.status === 'cancelled'
+                      ? 'danger'
+                      : 'muted'
+              }
+            >
+              status: {res.data.status}
+            </Badge>
+          </div>
+          <div className="columns-2">
+            <div>
+              <div className="muted">approved_date</div>
+              <div>{res.data.approved_date || '-'}</div>
+            </div>
+            <div>
+              <div className="muted">expiry_date</div>
+              <div>{res.data.expiry_date || '-'}</div>
+            </div>
+          </div>
+          <div>
+            <div className="muted">class</div>
+            <div>{res.data.class_name || '-'}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <Link href={`/search?reg_no=${encodeURIComponent(res.data.reg_no || '')}`}>按 reg_no 搜索</Link>
+        </CardContent>
+      </Card>
     </div>
   );
 }

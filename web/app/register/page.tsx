@@ -3,6 +3,11 @@
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
+import { Input } from '../../components/ui/input';
+import { Button } from '../../components/ui/button';
+import { toast } from '../../components/ui/use-toast';
+import { refreshAuth } from '../../components/auth/use-auth';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -26,45 +31,55 @@ export default function RegisterPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(body?.detail || `注册失败 (${res.status})`);
+        const msg = body?.detail || `注册失败 (${res.status})`;
+        setError(msg);
+        toast({ variant: 'destructive', title: '注册失败', description: msg });
         return;
       }
-      router.push('/');
+      // Refresh client-side auth state so header/side-nav immediately reflect login.
+      await refreshAuth();
+      router.push('/welcome');
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '网络错误');
+      const msg = err instanceof Error ? err.message : '网络错误';
+      setError(msg);
+      toast({ variant: 'destructive', title: '网络错误', description: msg });
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <section className="card">
-      <h2>注册</h2>
-      <form onSubmit={onSubmit} className="grid">
-        <input
+    <Card>
+      <CardHeader>
+        <CardTitle>注册</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={onSubmit} className="grid">
+          <Input
           type="email"
           placeholder="邮箱"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
-        />
-        <input
+          />
+          <Input
           type="password"
           placeholder="密码（至少8位）"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           minLength={8}
           required
-        />
-        <button type="submit" disabled={submitting}>
-          {submitting ? '注册中...' : '注册'}
-        </button>
-      </form>
-      {error ? <p className="error card">{error}</p> : null}
-      <p className="muted">
-        已有账号？<Link href="/login">去登录</Link>
-      </p>
-    </section>
+          />
+          <Button type="submit" disabled={submitting}>
+            {submitting ? '注册中...' : '注册'}
+          </Button>
+        </form>
+        {error ? <p className="muted" style={{ marginTop: 10 }}>{error}</p> : null}
+        <p className="muted" style={{ marginTop: 10 }}>
+          已有账号？<Link href="/login">去登录</Link>
+        </p>
+      </CardContent>
+    </Card>
   );
 }

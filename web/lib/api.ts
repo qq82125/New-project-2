@@ -4,7 +4,10 @@ export type ApiEnvelope<T> = {
   data: T;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+// Server components run inside the container, so they must call the API via
+// the internal service name (e.g. http://api:8000). Browser calls should use
+// NEXT_PUBLIC_API_BASE_URL (e.g. http://localhost:8000).
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 export async function apiGet<T>(path: string): Promise<{ data: T | null; error: string | null }> {
   try {

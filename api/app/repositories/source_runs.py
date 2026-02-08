@@ -58,3 +58,8 @@ def finish_source_run(
 def latest_runs(db: Session, limit: int = 10) -> list[SourceRun]:
     stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).limit(limit)
     return list(db.scalars(stmt))
+
+
+def list_source_runs(db: Session, limit: int = 50) -> list[SourceRun]:
+    stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).limit(limit)
+    return list(db.scalars(stmt))

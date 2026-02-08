@@ -62,7 +62,11 @@ def test_auth_register_login_logout_me(monkeypatch) -> None:
 
     logout_resp = client.post('/api/auth/logout')
     assert logout_resp.status_code == 200
-    assert logout_resp.json()['data']['logged_out'] is True
+    assert logout_resp.json()['ok'] is True
+    set_cookie = logout_resp.headers.get('set-cookie') or ''
+    assert cfg.auth_cookie_name in set_cookie
+    assert 'Max-Age=0' in set_cookie
+    assert 'Path=/' in set_cookie
     assert cfg.auth_cookie_name not in client.cookies
 
     me_after_logout = client.get('/api/auth/me')
