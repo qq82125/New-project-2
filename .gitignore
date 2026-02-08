@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.pytest_cache/
+.mypy_cache/
+api/.venv/
+api/.pytest_cache/
+api/.mypy_cache/
+node_modules/
+.next/
+.DS_Store
+staging/
