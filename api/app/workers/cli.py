@@ -5,6 +5,8 @@ import json
 from datetime import date
 
 from app.db.session import SessionLocal
+from app.repositories.users import get_user_by_email
+from app.repositories.admin_membership import admin_grant_membership
 from app.services.metrics import generate_daily_metrics
 from app.services.subscriptions import dispatch_daily_subscription_digest
 from app.workers.loop import main as loop_main
@@ -28,6 +30,13 @@ def build_parser() -> argparse.ArgumentParser:
     digest_parser = sub.add_parser('daily-digest', help='Dispatch daily subscription digest via webhook')
     digest_parser.add_argument('--date', dest='digest_date', default=None, help='YYYY-MM-DD')
     digest_parser.add_argument('--force', action='store_true', help='Resend even if already sent')
+
+    grant_parser = sub.add_parser('grant', help='Dev: grant Pro annual membership (admin)')
+    grant_parser.add_argument('--email', required=True, help='Target user email')
+    grant_parser.add_argument('--months', type=int, default=12, help='Months to grant (default: 12)')
+    grant_parser.add_argument('--reason', default=None)
+    grant_parser.add_argument('--note', default=None)
+    grant_parser.add_argument('--actor-email', default=None, help='Admin actor email (default: BOOTSTRAP_ADMIN_EMAIL)')
 
     sub.add_parser('loop', help='Run sync loop')
     return parser
@@ -66,6 +75,62 @@ def _run_daily_digest(digest_date: str | None, force: bool) -> int:
         db.close()
 
 
+def _run_grant(email: str, months: int, reason: str | None, note: str | None, actor_email: str | None) -> int:
+    if months <= 0:
+        raise SystemExit('months must be > 0')
+
+    db = SessionLocal()
+    try:
+        target = get_user_by_email(db, email)
+        if not target:
+            raise SystemExit(f'user not found: {email}')
+
+        from app.core.config import get_settings
+
+        cfg = get_settings()
+        actor_lookup = actor_email or getattr(cfg, 'bootstrap_admin_email', None) or ''
+        actor = get_user_by_email(db, actor_lookup) if actor_lookup else None
+        if not actor or getattr(actor, 'role', None) != 'admin':
+            # Fallback: first admin user.
+            from sqlalchemy import select
+            from app.models import User
+
+            actor = db.scalars(select(User).where(User.role == 'admin').limit(1)).first()
+        if not actor:
+            raise SystemExit('admin actor not found; create bootstrap admin first')
+
+        user = admin_grant_membership(
+            db,
+            user_id=target.id,
+            actor_user_id=actor.id,
+            plan='pro_annual',
+            months=months,
+            start_at=None,
+            reason=reason,
+            note=note,
+        )
+        if not user:
+            raise SystemExit('grant failed: user not found')
+        print(
+            json.dumps(
+                {
+                    'ok': True,
+                    'user_id': user.id,
+                    'email': user.email,
+                    'plan': getattr(user, 'plan', None),
+                    'plan_status': getattr(user, 'plan_status', None),
+                    'plan_expires_at': getattr(user, 'plan_expires_at', None).isoformat()
+                    if getattr(user, 'plan_expires_at', None)
+                    else None,
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -76,6 +141,8 @@ def main() -> None:
         raise SystemExit(_run_daily_metrics(args.metric_date))
     if args.cmd == 'daily-digest':
         raise SystemExit(_run_daily_digest(args.digest_date, args.force))
+    if args.cmd == 'grant':
+        raise SystemExit(_run_grant(args.email, args.months, args.reason, args.note, args.actor_email))
     if args.cmd == 'loop':
         loop_main()
         return

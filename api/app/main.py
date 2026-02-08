@@ -739,23 +739,52 @@ def admin_user_detail(
 
 @app.post('/api/admin/membership/grant', response_model=ApiResponseAdminUserItem)
 def admin_membership_grant(
-    payload: AdminMembershipGrantIn,
+    payload: dict,
     admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseAdminUserItem:
-    plan = (payload.plan or '').strip().lower()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail='Invalid JSON body')
+
+    user_id = payload.get('user_id')
+    try:
+        user_id = int(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='user_id must be an integer')
+
+    plan = str(payload.get('plan') or 'pro_annual').strip().lower()
     if plan != 'pro_annual':
         raise HTTPException(status_code=400, detail='Only plan=pro_annual is supported')
+
+    months = payload.get('months')
+    try:
+        months = int(months)
+    except Exception:
+        raise HTTPException(status_code=400, detail='months must be an integer > 0')
+    if months <= 0:
+        raise HTTPException(status_code=400, detail='months must be an integer > 0')
+
+    start_at = payload.get('start_at')
+    # Keep backward compatible: allow null; if provided it must be ISO datetime string.
+    if start_at is not None and not isinstance(start_at, str):
+        raise HTTPException(status_code=400, detail='start_at must be an ISO datetime string')
+
+    # Ensure user exists (404) before touching DB write path.
+    if not admin_get_user(db, user_id):
+        raise HTTPException(status_code=404, detail='User not found')
+
+    reason = payload.get('reason')
+    note = payload.get('note')
     try:
         user = admin_grant_membership(
             db,
-            user_id=payload.user_id,
+            user_id=user_id,
             actor_user_id=admin.id,
             plan=plan,
-            months=payload.months,
-            start_at=payload.start_at,
-            reason=payload.reason,
-            note=payload.note,
+            months=months,
+            start_at=None,
+            reason=str(reason).strip() if isinstance(reason, str) and reason.strip() else None,
+            note=str(note).strip() if isinstance(note, str) and note.strip() else None,
         )
     except ValueError as e:
         if str(e) == 'already_active_pro':
@@ -768,17 +797,39 @@ def admin_membership_grant(
 
 @app.post('/api/admin/membership/extend', response_model=ApiResponseAdminUserItem)
 def admin_membership_extend(
-    payload: AdminMembershipExtendIn,
+    payload: dict,
     admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseAdminUserItem:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail='Invalid JSON body')
+
+    user_id = payload.get('user_id')
+    try:
+        user_id = int(user_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail='user_id must be an integer')
+
+    months = payload.get('months')
+    try:
+        months = int(months)
+    except Exception:
+        raise HTTPException(status_code=400, detail='months must be an integer > 0')
+    if months <= 0:
+        raise HTTPException(status_code=400, detail='months must be an integer > 0')
+
+    if not admin_get_user(db, user_id):
+        raise HTTPException(status_code=404, detail='User not found')
+
+    reason = payload.get('reason')
+    note = payload.get('note')
     user = admin_extend_membership(
         db,
-        user_id=payload.user_id,
+        user_id=user_id,
         actor_user_id=admin.id,
-        months=payload.months,
-        reason=payload.reason,
-        note=payload.note,
+        months=months,
+        reason=str(reason).strip() if isinstance(reason, str) and reason.strip() else None,
+        note=str(note).strip() if isinstance(note, str) and note.strip() else None,
     )
     if not user:
         raise HTTPException(status_code=404, detail='User not found')

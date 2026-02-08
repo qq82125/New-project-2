@@ -68,18 +68,41 @@ export default function MembershipActionModal({
         body: JSON.stringify(body),
       });
       const text = await res.text();
-      let parsed: ApiResp<AdminUserItem> | null = null;
+      let parsedAny: any = null;
       try {
-        parsed = JSON.parse(text);
+        parsedAny = JSON.parse(text);
       } catch {
-        parsed = null;
+        parsedAny = null;
       }
 
+      // Debug prints for grant/extend failures (no sensitive fields in payload).
+      // eslint-disable-next-line no-console
+      console.debug('[admin-membership]', {
+        endpoint,
+        status: res.status,
+        payload: body,
+        response_body: parsedAny ?? text,
+      });
+
       if (!res.ok) {
-        const msg = parsed?.message || `操作失败 (${res.status})`;
+        // FastAPI validation error: {detail:[{loc,msg,type}...]}
+        if (res.status === 422 && parsedAny && Array.isArray(parsedAny.detail)) {
+          const msg = parsedAny.detail
+            .map((d: any) => {
+              const loc = Array.isArray(d.loc) ? d.loc.filter((x: any) => x !== 'body').join('.') : 'body';
+              const m = d.msg || 'invalid';
+              return `${loc}: ${m}`;
+            })
+            .join('\n');
+          toast({ variant: 'destructive', title: '参数校验失败', description: msg });
+          return;
+        }
+        const detail = parsedAny?.detail;
+        const msg = (typeof detail === 'string' && detail) || parsedAny?.message || `操作失败 (${res.status})`;
         toast({ variant: 'destructive', title: '操作失败', description: msg });
         return;
       }
+      const parsed = parsedAny as ApiResp<AdminUserItem> | null;
       if (!parsed || parsed.code !== 0) {
         const msg = parsed?.message || '接口返回异常';
         toast({ variant: 'destructive', title: '操作失败', description: msg });
@@ -176,4 +199,3 @@ export default function MembershipActionModal({
     </Modal>
   );
 }
-

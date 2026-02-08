@@ -62,6 +62,7 @@ def test_membership_grant_extend_suspend_revoke_routes(monkeypatch) -> None:
 
     monkeypatch.setattr('app.main.get_user_by_id', lambda _db, user_id: admin if int(user_id) == 2 else target)
     monkeypatch.setattr('app.main.get_settings', lambda: _cfg())
+    monkeypatch.setattr('app.main.admin_get_user', lambda _db, user_id: target if int(user_id) == 1 else None)
 
     def _grant(_db, **kwargs):
         target.plan = 'pro_annual'
@@ -129,6 +130,7 @@ def test_membership_grant_when_already_active_returns_409(monkeypatch) -> None:
 
     monkeypatch.setattr('app.main.get_user_by_id', lambda _db, user_id: admin if int(user_id) == 2 else user)
     monkeypatch.setattr('app.main.get_settings', lambda: _cfg())
+    monkeypatch.setattr('app.main.admin_get_user', lambda _db, user_id: user if int(user_id) == 1 else None)
 
     def _grant(_db, **_kwargs):
         raise ValueError('already_active_pro')
@@ -141,3 +143,50 @@ def test_membership_grant_when_already_active_returns_409(monkeypatch) -> None:
 
     r = client.post('/api/admin/membership/grant', json={'user_id': 1, 'plan': 'pro_annual', 'months': 12})
     assert r.status_code == 409
+
+
+def test_membership_grant_validation_returns_400(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    admin = SimpleNamespace(id=2, email='admin@example.com', password_hash='x', role='admin', created_at=now)
+    target = SimpleNamespace(
+        id=1,
+        email='user@example.com',
+        password_hash='x',
+        role='user',
+        plan='free',
+        plan_status='inactive',
+        plan_expires_at=None,
+        created_at=now,
+    )
+
+    monkeypatch.setattr('app.main.get_user_by_id', lambda _db, user_id: admin if int(user_id) == 2 else target)
+    monkeypatch.setattr('app.main.get_settings', lambda: _cfg())
+    monkeypatch.setattr('app.main.admin_get_user', lambda _db, user_id: target if int(user_id) == 1 else None)
+    monkeypatch.setattr('app.main.admin_grant_membership', lambda *_a, **_k: target)
+
+    client = TestClient(main.app)
+    token_admin = main.create_session_token(user_id=2, secret='test-secret', ttl_seconds=3600)
+    client.cookies.set('ivd_session', token_admin)
+
+    r0 = client.post('/api/admin/membership/grant', json={'user_id': 1, 'plan': 'pro_annual', 'months': 0})
+    assert r0.status_code == 400
+    assert 'months' in r0.json().get('detail', '')
+
+    r1 = client.post('/api/admin/membership/grant', json={'user_id': 1, 'plan': 'bad', 'months': 12})
+    assert r1.status_code == 400
+    assert 'plan' in r1.json().get('detail', '').lower()
+
+
+def test_membership_grant_user_not_found_returns_404(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    admin = SimpleNamespace(id=2, email='admin@example.com', password_hash='x', role='admin', created_at=now)
+    monkeypatch.setattr('app.main.get_user_by_id', lambda _db, user_id: admin if int(user_id) == 2 else None)
+    monkeypatch.setattr('app.main.get_settings', lambda: _cfg())
+    monkeypatch.setattr('app.main.admin_get_user', lambda _db, user_id: None)
+
+    client = TestClient(main.app)
+    token_admin = main.create_session_token(user_id=2, secret='test-secret', ttl_seconds=3600)
+    client.cookies.set('ivd_session', token_admin)
+
+    r = client.post('/api/admin/membership/grant', json={'user_id': 999, 'plan': 'pro_annual', 'months': 12})
+    assert r.status_code == 404
