@@ -1,64 +1,128 @@
-# NMPA IVD 注册/备案产品查询工具
+# NMPA IVD 注册情报看板（Dashboard-First）
 
-技术栈：FastAPI + Postgres + Next.js。
-数据源优先：NMPA UDI 下载页每日包，并预留扩展到数据共享 API。
+本项目用于汇总 NMPA IVD 产品变更信息，提供：
+- 每日数据同步
+- 可检索的产品/企业信息
+- Dashboard 趋势与榜单
+- 每日订阅摘要推送（Webhook / Email）
 
-## PR 拆分实现
+## 架构图（ASCII）
 
-### PR1 数据库 schema 与迁移
-- SQL 迁移：`migrations/0001_init.sql`
-- 表：`products`、`companies`、`registrations`、`source_runs`、`change_log`
-- 索引：全文检索 GIN（`to_tsvector`）+ trigram GIN（`gin_trgm_ops`）
+```text
+                 +-----------------------------+
+                 |  NMPA UDI Download Source   |
+                 +-------------+---------------+
+                               |
+                               v
++-------------------+   +------+-------+   +-------------------+
+|  worker (Python)  +---> staging dir  +---> ingest/upsert DB  |
+|  sync + metrics   |   | downloads/... |   | products/change.. |
++---------+---------+   +------+-------+   +---------+---------+
+          |                        |                   |
+          | daily-metrics          |                   v
+          v                        |          +-------------------+
++-------------------+              |          | PostgreSQL        |
+| daily_metrics     +--------------+          | companies/...     |
++-------------------+                         +----+---------+----+
+                                                    |         |
+                                                    v         v
+                                            +-------+--+   +--+-------+
+                                            | FastAPI  |   | Next.js  |
+                                            | /api/*   |   | Dashboard|
+                                            +----------+   +----------+
+```
 
-### PR2 抓取器
-- 文件：`api/app/services/crawler.py`
-- 能力：解析每日更新包文件名/MD5/下载链接，下载、MD5 校验、解压到 staging
-- `source_runs` 记录由 `app/repositories/source_runs.py` + `app/workers/sync.py` 维护
+## 启动步骤
 
-### PR3 解析与字段映射
-- 文件：`api/app/services/mapping.py`
-- 统一字段映射，保留 `raw_json`
-- 增量 upsert + `change_log`：`api/app/services/ingest.py`
+### 1) 准备环境变量
 
-### PR4 后端 API
-- 入口：`api/app/main.py`
-- 路由：`/search`、`/product/{id}`、`/company/{id}`、`/status`
-
-### PR5 前端
-- Next.js 页面：
-  - 搜索页：`web/app/page.tsx`
-  - 产品详情：`web/app/product/[id]/page.tsx`
-  - 企业详情：`web/app/company/[id]/page.tsx`
-  - 更新状态：`web/app/status/page.tsx`
-
-### PR6 部署
-- Docker Compose：`docker-compose.yml`
-- 服务：`api + db + web + worker`
-- 定时：worker loop（`SYNC_INTERVAL_SECONDS`）
-- 失败告警：日志 + 可选 `WEBHOOK_URL`
-
-## 本地运行
-
-1. 复制环境变量
 ```bash
 cp .env.example .env
 ```
 
-2. 启动
+### 2) 一键启动
+
 ```bash
 docker compose up --build
 ```
 
-3. 访问
-- Web: [http://localhost:3000](http://localhost:3000)
-- API: [http://localhost:8000/docs](http://localhost:8000/docs)
+### 3) 访问入口
 
-## 测试
+- Web Dashboard: [http://localhost:3000](http://localhost:3000)
+- API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-- 测试文件：`api/tests`
-- 运行：
+### 4) 停止
+
 ```bash
-cd api
-pip install -r requirements.txt
-pytest -q
+docker compose down
 ```
+
+## 数据同步说明
+
+系统包含 `worker` 服务，持续循环执行同步任务：
+- 下载 NMPA 包（支持 checksum）
+- 解压到 `staging`
+- 解析并 upsert 到 `products`
+- 写入 `change_log`
+- 生成 `daily_metrics`
+- 触发每日订阅摘要推送
+
+手动触发（容器内）：
+
+```bash
+# 单次同步
+docker compose exec worker python -m app.workers.cli sync --once
+
+# 生成某日聚合
+docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-08
+
+# 发送某日摘要
+docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-08
+```
+
+可重跑说明：
+- `daily_metrics` 按 `metric_date` upsert（同日重跑覆盖更新）
+- 摘要推送按 `(digest_date, subscriber_key, channel)` 去重，默认同日不重复发送
+
+## Dashboard 口径说明
+
+Dashboard 读取后端 `/api/dashboard/*`，核心口径如下：
+
+- `summary`
+  - `total_new`: 指定时间窗内 `change_log.change_type = new`
+  - `total_updated`: 指定时间窗内 `change_log.change_type = update`
+  - `total_removed`: 指定时间窗内 `change_log.change_type in (cancel, expire)`
+  - `latest_active_subscriptions`: 当前 `subscriptions.is_active = true` 数量
+
+- `trend`
+  - 按 `daily_metrics.metric_date` 返回日级序列
+  - 使用字段：`new_products/updated_products/cancelled_products`
+
+- `rankings`
+  - 基于 `daily_metrics` 选取窗口内 Top N 日期（新增/移除）
+
+- `radar`
+  - 使用最近一日 `daily_metrics` 的雷达维度
+
+## 服务健康排查
+
+1. 查看容器状态
+```bash
+docker compose ps
+```
+2. 查看日志
+```bash
+docker compose logs -f api
+docker compose logs -f worker
+docker compose logs -f web
+```
+3. 数据库连通性
+```bash
+docker compose exec db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+```
+
+## 可选 CI（基础）
+
+项目包含基础 CI（后端测试 + 前端 build 检查）。
+- 文件：`.github/workflows/ci.yml`
+

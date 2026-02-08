@@ -16,7 +16,19 @@ class Settings(BaseSettings):
     download_base_url: str = 'https://udi.nmpa.gov.cn'
     staging_dir: str = './staging'
     sync_interval_seconds: int = 86400
+    sync_retry_attempts: int = 3
+    sync_retry_backoff_seconds: int = 5
+    sync_retry_backoff_multiplier: float = 2.0
     webhook_url: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: bool = True
+    email_from: Optional[str] = None
+    export_quota_basic_daily: int = 5
+    export_quota_pro_daily: int = 50
+    export_quota_enterprise_daily: int = 500
 
 
 @lru_cache

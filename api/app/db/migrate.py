@@ -18,8 +18,9 @@ def run_sql_migration(file_path: Path) -> None:
 
 def main() -> None:
     root = Path(__file__).resolve().parents[3]
-    migration_file = root / 'migrations' / '0001_init.sql'
-    run_sql_migration(migration_file)
+    migration_dir = root / 'migrations'
+    for migration_file in sorted(migration_dir.glob('*.sql')):
+        run_sql_migration(migration_file)
 
 
 if __name__ == '__main__':

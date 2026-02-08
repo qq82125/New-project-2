@@ -36,12 +36,18 @@ def finish_source_run(
     records_total: int,
     records_success: int,
     records_failed: int,
+    added_count: int = 0,
+    updated_count: int = 0,
+    removed_count: int = 0,
 ) -> SourceRun:
     run.status = status
     run.message = message
     run.records_total = records_total
     run.records_success = records_success
     run.records_failed = records_failed
+    run.added_count = added_count
+    run.updated_count = updated_count
+    run.removed_count = removed_count
     run.finished_at = datetime.now(timezone.utc)
     db.add(run)
     db.commit()

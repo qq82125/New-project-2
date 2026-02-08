@@ -75,18 +75,31 @@ def download_file(url: str, destination: Path) -> Path:
     return destination
 
 
-def calculate_md5(file_path: Path) -> str:
-    md5 = hashlib.md5()
+def _calculate_hash(file_path: Path, algorithm: str) -> str:
+    h = hashlib.new(algorithm)
     with file_path.open('rb') as f:
         for chunk in iter(lambda: f.read(8192), b''):
-            md5.update(chunk)
-    return md5.hexdigest()
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def calculate_md5(file_path: Path) -> str:
+    return _calculate_hash(file_path, 'md5')
+
+
+def calculate_sha256(file_path: Path) -> str:
+    return _calculate_hash(file_path, 'sha256')
+
+
+def verify_checksum(file_path: Path, expected: str | None, algorithm: str = 'md5') -> bool:
+    if not expected:
+        return True
+    actual = _calculate_hash(file_path, algorithm)
+    return actual.lower() == expected.lower()
 
 
 def verify_md5(file_path: Path, expected_md5: str | None) -> bool:
-    if not expected_md5:
-        return True
-    return calculate_md5(file_path).lower() == expected_md5.lower()
+    return verify_checksum(file_path, expected_md5, 'md5')
 
 
 def extract_to_staging(archive_path: Path, staging_dir: Path) -> Path:

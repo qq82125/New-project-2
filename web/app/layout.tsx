@@ -6,12 +6,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body>
         <main>
-          <div className="card">
-            <h1>NMPA IVD 注册/备案查询</h1>
-            <nav>
-              <Link href="/">搜索</Link> | <Link href="/status">更新状态</Link>
+          <header className="card">
+            <h1>NMPA IVD 注册情报看板</h1>
+            <nav className="topnav">
+              <Link href="/">Dashboard</Link>
+              <Link href="/search">Search</Link>
+              <Link href="/status">Status</Link>
             </nav>
-          </div>
+          </header>
           {children}
         </main>
       </body>

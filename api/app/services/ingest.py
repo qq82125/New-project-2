@@ -5,13 +5,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import ChangeLog, Company, Product, Registration
-from app.services.mapping import UnifiedRecord, diff_fields, map_raw_record
+from app.models import ChangeLog, Company, Product
+from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 
-TRACKED_FIELDS = ('name', 'model', 'specification', 'category', 'company_id', 'registration_id')
+TRACKED_FIELDS = (
+    'status',
+    'expiry_date',
+    'approved_date',
+    'company_id',
+    'name',
+    'reg_no',
+    'udi_di',
+    'class',
+)
 
 
 def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
@@ -31,124 +40,139 @@ def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def get_or_create_company(db: Session, unified: UnifiedRecord) -> Company | None:
-    if not unified.company_name:
+def get_or_create_company(db: Session, record: ProductRecord) -> Company | None:
+    if not record.company_name:
         return None
-    stmt = select(Company).where(Company.name == unified.company_name)
-    company = db.scalar(stmt)
+    company = db.scalar(select(Company).where(Company.name == record.company_name))
     if company:
+        if record.company_country and not company.country:
+            company.country = record.company_country
         return company
-    company = Company(name=unified.company_name, country=unified.company_country, raw_json={})
+    company = Company(name=record.company_name, country=record.company_country, raw={}, raw_json={})
     db.add(company)
     db.flush()
     return company
 
 
-def get_or_create_registration(db: Session, unified: UnifiedRecord) -> Registration | None:
-    if not unified.registration_no:
-        return None
-    stmt = select(Registration).where(Registration.registration_no == unified.registration_no)
-    reg = db.scalar(stmt)
-    if reg:
-        if unified.filing_no and not reg.filing_no:
-            reg.filing_no = unified.filing_no
-        if unified.registration_status:
-            reg.status = unified.registration_status
-        return reg
-    reg = Registration(
-        registration_no=unified.registration_no,
-        filing_no=unified.filing_no,
-        status=unified.registration_status,
-        approval_date=unified.approval_date,
-        expiry_date=unified.expiry_date,
-        raw_json={},
-    )
-    db.add(reg)
-    db.flush()
-    return reg
+def find_existing_product(db: Session, record: ProductRecord) -> Product | None:
+    stmt = select(Product).where(or_(Product.udi_di == record.udi_di, Product.reg_no == record.reg_no))
+    return db.scalar(stmt)
 
 
 def _product_state(product: Product) -> dict[str, Any]:
     return {
-        'name': product.name,
-        'model': product.model,
-        'specification': product.specification,
-        'category': product.category,
+        'status': product.status,
+        'expiry_date': product.expiry_date.isoformat() if product.expiry_date else None,
+        'approved_date': product.approved_date.isoformat() if product.approved_date else None,
         'company_id': str(product.company_id) if product.company_id else None,
-        'registration_id': str(product.registration_id) if product.registration_id else None,
-        'raw_json': product.raw_json,
+        'name': product.name,
+        'reg_no': product.reg_no,
+        'udi_di': product.udi_di,
+        'class': product.class_name,
     }
 
 
-def upsert_unified_record(db: Session, unified: UnifiedRecord, source_run_id: int | None) -> tuple[str, Product]:
-    company = get_or_create_company(db, unified)
-    registration = get_or_create_registration(db, unified)
+def _detect_change_type(after: Product, changed: dict[str, dict[str, Any]]) -> str:
+    if after.status == 'cancelled':
+        return 'cancel'
+    if after.status == 'expired':
+        return 'expire'
+    if changed:
+        return 'update'
+    return 'noop'
 
-    stmt = select(Product).where(Product.udi_di == unified.udi_di)
-    existing = db.scalar(stmt)
+
+def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int | None) -> tuple[str, Product]:
+    company = get_or_create_company(db, record)
+    existing = find_existing_product(db, record)
 
     if not existing:
         product = Product(
-            udi_di=unified.udi_di,
-            name=unified.product_name,
-            model=unified.model,
-            specification=unified.specification,
-            category=unified.category,
+            name=record.name,
+            reg_no=record.reg_no,
+            udi_di=record.udi_di,
+            status=record.status,
+            approved_date=record.approved_date,
+            expiry_date=record.expiry_date,
+            class_name=record.class_name,
             company_id=company.id if company else None,
-            registration_id=registration.id if registration else None,
-            raw_json=unified.raw_json,
+            raw=dict(record.raw),
+            raw_json=dict(record.raw),
         )
         db.add(product)
         db.flush()
+
+        after_state = _product_state(product)
         db.add(
             ChangeLog(
+                product_id=product.id,
                 entity_type='product',
                 entity_id=product.id,
-                change_type='INSERT',
-                changed_fields={'all': 'created'},
+                change_type='new',
+                changed_fields={k: {'old': None, 'new': v} for k, v in after_state.items()},
+                before_raw=None,
+                after_raw=dict(record.raw),
                 before_json=None,
-                after_json=_product_state(product),
+                after_json=after_state,
                 source_run_id=source_run_id,
             )
         )
-        return 'inserted', product
+        return 'added', product
 
-    before = _product_state(existing)
-    existing.name = unified.product_name
-    existing.model = unified.model
-    existing.specification = unified.specification
-    existing.category = unified.category
+    before_state = _product_state(existing)
+    existing.name = record.name
+    existing.reg_no = record.reg_no
+    existing.udi_di = record.udi_di
+    existing.status = record.status
+    existing.approved_date = record.approved_date
+    existing.expiry_date = record.expiry_date
+    existing.class_name = record.class_name
     existing.company_id = company.id if company else None
-    existing.registration_id = registration.id if registration else None
-    existing.raw_json = unified.raw_json
-    after = _product_state(existing)
+    existing.raw = dict(record.raw)
+    existing.raw_json = dict(record.raw)
+    after_state = _product_state(existing)
 
-    changed = diff_fields(before, after, TRACKED_FIELDS + ('raw_json',))
-    if changed:
-        db.add(
-            ChangeLog(
-                entity_type='product',
-                entity_id=existing.id,
-                change_type='UPDATE',
-                changed_fields=changed,
-                before_json=before,
-                after_json=after,
-                source_run_id=source_run_id,
-            )
+    changed = diff_fields(before_state, after_state, TRACKED_FIELDS)
+    if not changed:
+        return 'unchanged', existing
+
+    change_type = _detect_change_type(existing, changed)
+    db.add(
+        ChangeLog(
+            product_id=existing.id,
+            entity_type='product',
+            entity_id=existing.id,
+            change_type=change_type,
+            changed_fields=changed,
+            before_raw=before_state,
+            after_raw=dict(record.raw),
+            before_json=before_state,
+            after_json=after_state,
+            source_run_id=source_run_id,
         )
-        return 'updated', existing
-    return 'unchanged', existing
+    )
+
+    if change_type in {'cancel', 'expire'}:
+        return 'removed', existing
+    return 'updated', existing
 
 
-def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_run_id: int | None) -> tuple[int, int, int]:
-    success = 0
-    failed = 0
+def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_run_id: int | None) -> dict[str, int]:
+    stats = {'total': len(records), 'success': 0, 'failed': 0, 'added': 0, 'updated': 0, 'removed': 0}
+
     for raw in records:
         try:
-            unified = map_raw_record(raw)
-            upsert_unified_record(db, unified, source_run_id)
-            success += 1
+            record = map_raw_record(raw)
+            action, _ = upsert_product_record(db, record, source_run_id)
+            stats['success'] += 1
+            if action == 'added':
+                stats['added'] += 1
+            elif action == 'updated':
+                stats['updated'] += 1
+            elif action == 'removed':
+                stats['removed'] += 1
         except Exception:
-            failed += 1
+            stats['failed'] += 1
+
     db.commit()
-    return len(records), success, failed
+    return stats

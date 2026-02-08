@@ -1,10 +1,11 @@
 :root {
-  --bg: #f3f8f4;
+  --bg: #eef4f0;
   --panel: #ffffff;
-  --ink: #112114;
-  --muted: #536259;
-  --accent: #0f766e;
-  --border: #d5e2d8;
+  --ink: #13261a;
+  --muted: #5b6f63;
+  --accent: #176b52;
+  --border: #cfe0d5;
+  --danger: #b42318;
 }
 
 * {
@@ -15,7 +16,7 @@ body {
   margin: 0;
   font-family: "Source Sans 3", "Noto Sans SC", sans-serif;
   color: var(--ink);
-  background: radial-gradient(circle at top left, #d8efe8, transparent 45%), var(--bg);
+  background: radial-gradient(circle at 0% 0%, #dcefe6 0%, transparent 45%), var(--bg);
 }
 
 a {
@@ -24,17 +25,16 @@ a {
 }
 
 main {
-  max-width: 1080px;
+  max-width: 1160px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 20px;
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px;
-  margin-bottom: 12px;
+  border-radius: 12px;
+  padding: 14px;
 }
 
 .grid {
@@ -42,13 +42,65 @@ main {
   gap: 12px;
 }
 
+.topnav {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 .controls {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
-input, button {
+.kpis {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.columns-2 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.columns-3 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.list {
+  display: grid;
+  gap: 8px;
+}
+
+.list-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--danger);
+  border-color: #f4c7c3;
+  background: #fff1ef;
+}
+
+input,
+button,
+select {
   width: 100%;
   padding: 10px;
   border: 1px solid var(--border);
@@ -57,10 +109,38 @@ input, button {
 
 button {
   background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
   cursor: pointer;
 }
 
-mark {
-  background: #ffd369;
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 8px;
+  font-size: 14px;
+}
+
+.spark {
+  display: grid;
+  gap: 8px;
+}
+
+.spark-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 60px;
+  gap: 8px;
+  align-items: center;
+}
+
+.spark-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #59a98e, #176b52);
 }

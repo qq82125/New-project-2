@@ -1,23 +1,44 @@
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { EmptyState, ErrorState } from '../../components/States';
+import { apiGet } from '../../lib/api';
 
-async function getStatus() {
-  const res = await fetch(`${API}/status`, { cache: 'no-store' });
-  if (!res.ok) return { latest_runs: [] };
-  return res.json();
-}
+type StatusData = {
+  latest_runs: Array<{
+    id: number;
+    source: string;
+    status: string;
+    message?: string | null;
+    records_total: number;
+    records_success: number;
+    records_failed: number;
+    added_count: number;
+    updated_count: number;
+    removed_count: number;
+    started_at: string;
+    finished_at?: string | null;
+  }>;
+};
 
 export default async function StatusPage() {
-  const data = await getStatus();
+  const res = await apiGet<StatusData>('/api/status');
+
+  if (res.error) {
+    return <ErrorState text={`状态页加载失败：${res.error}`} />;
+  }
+  if (!res.data || res.data.latest_runs.length === 0) {
+    return <EmptyState text="暂无同步状态数据" />;
+  }
+
   return (
     <div className="grid">
-      {data.latest_runs.map((run: any) => (
+      {res.data.latest_runs.map((run) => (
         <div className="card" key={run.id}>
-          <h3>{run.source}</h3>
-          <p>状态: {run.status}</p>
-          <p>包名: {run.package_name || '-'}</p>
-          <p>开始: {run.started_at}</p>
-          <p>结束: {run.finished_at || '-'}</p>
-          <p>信息: {run.message || '-'}</p>
+          <h3>#{run.id} {run.source}</h3>
+          <p>status: {run.status}</p>
+          <p>records: {run.records_success}/{run.records_total} (failed {run.records_failed})</p>
+          <p>added/updated/removed: {run.added_count}/{run.updated_count}/{run.removed_count}</p>
+          <p>started_at: {new Date(run.started_at).toLocaleString()}</p>
+          <p>finished_at: {run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}</p>
+          <p>message: {run.message || '-'}</p>
         </div>
       ))}
     </div>

@@ -1,101 +1,207 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Company, Registration
+from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
 from app.repositories.products import get_company, get_product, search_products
 from app.repositories.source_runs import latest_runs
 from app.schemas.api import (
+    ApiResponseCompany,
+    ApiResponseProduct,
+    ApiResponseRadar,
+    ApiResponseRankings,
+    ApiResponseSearch,
+    ApiResponseStatus,
+    ApiResponseSummary,
+    ApiResponseTrend,
     CompanyOut,
+    DashboardRadarData,
+    DashboardRadarItem,
+    DashboardRankingsData,
+    DashboardRankingItem,
+    DashboardSummary,
+    DashboardTrendData,
+    DashboardTrendItem,
     ProductOut,
-    RegistrationOut,
+    SearchData,
     SearchItem,
-    SearchResponse,
+    StatusData,
     StatusItem,
-    StatusResponse,
 )
 
-app = FastAPI(title='NMPA IVD 查询工具 API', version='0.1.0')
+app = FastAPI(title='NMPA IVD Dashboard API', version='0.4.0')
 
 
-def serialize_product(product) -> ProductOut:
-    company = None
-    if product.company:
-        company = CompanyOut(id=product.company.id, name=product.company.name, country=product.company.country)
-
-    registration = None
-    if product.registration:
-        registration = RegistrationOut(
-            id=product.registration.id,
-            registration_no=product.registration.registration_no,
-            filing_no=product.registration.filing_no,
-            status=product.registration.status,
-        )
-
-    return ProductOut(
-        id=product.id,
-        udi_di=product.udi_di,
-        name=product.name,
-        model=product.model,
-        specification=product.specification,
-        category=product.category,
-        company=company,
-        registration=registration,
-    )
+SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']
+SortOrder = Literal['asc', 'desc']
 
 
-@app.get('/search', response_model=SearchResponse)
-def search(
-    q: str | None = Query(default=None),
-    company: str | None = Query(default=None),
-    registration_no: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-) -> SearchResponse:
-    products, total = search_products(db, q, company, registration_no, page, page_size)
-    items = [
-        SearchItem(
-            product=serialize_product(item),
-            highlight=(item.name.replace(q, f'<mark>{q}</mark>') if q and q in item.name else None),
-        )
-        for item in products
-    ]
-    return SearchResponse(total=total, page=page, page_size=page_size, items=items)
+def _ok(data):
+    return {'code': 0, 'message': 'ok', 'data': data}
 
 
-@app.get('/product/{product_id}', response_model=ProductOut)
-def product_detail(product_id: str, db: Session = Depends(get_db)) -> ProductOut:
-    product = get_product(db, product_id)
-    if not product:
-        raise HTTPException(status_code=404, detail='Product not found')
-    return serialize_product(product)
-
-
-@app.get('/company/{company_id}', response_model=CompanyOut)
-def company_detail(company_id: str, db: Session = Depends(get_db)) -> CompanyOut:
-    company = get_company(db, company_id)
-    if not company:
-        raise HTTPException(status_code=404, detail='Company not found')
+def serialize_company(company) -> CompanyOut:
     return CompanyOut(id=company.id, name=company.name, country=company.country)
 
 
-@app.get('/status', response_model=StatusResponse)
-def status(db: Session = Depends(get_db)) -> StatusResponse:
+def serialize_product(product) -> ProductOut:
+    return ProductOut(
+        id=product.id,
+        udi_di=product.udi_di,
+        reg_no=product.reg_no,
+        name=product.name,
+        status=product.status,
+        approved_date=product.approved_date,
+        expiry_date=product.expiry_date,
+        class_name=product.class_name,
+        company=serialize_company(product.company) if product.company else None,
+    )
+
+
+@app.get('/api/dashboard/summary', response_model=ApiResponseSummary)
+def dashboard_summary(
+    days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+) -> ApiResponseSummary:
+    start_date, end_date, total_new, total_updated, total_removed, latest_active_subscriptions = get_summary(db, days)
+    data = DashboardSummary(
+        start_date=start_date,
+        end_date=end_date,
+        total_new=total_new,
+        total_updated=total_updated,
+        total_removed=total_removed,
+        latest_active_subscriptions=latest_active_subscriptions,
+    )
+    return _ok(data)
+
+
+@app.get('/api/dashboard/trend', response_model=ApiResponseTrend)
+def dashboard_trend(
+    days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+) -> ApiResponseTrend:
+    items = get_trend(db, days)
+    data = DashboardTrendData(
+        items=[
+            DashboardTrendItem(
+                metric_date=item.metric_date,
+                new_products=item.new_products,
+                updated_products=item.updated_products,
+                cancelled_products=item.cancelled_products,
+            )
+            for item in items
+        ]
+    )
+    return _ok(data)
+
+
+@app.get('/api/dashboard/rankings', response_model=ApiResponseRankings)
+def dashboard_rankings(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> ApiResponseRankings:
+    top_new, top_removed = get_rankings(db, days, limit)
+    data = DashboardRankingsData(
+        top_new_days=[DashboardRankingItem(metric_date=row[0], value=int(row[1])) for row in top_new],
+        top_removed_days=[DashboardRankingItem(metric_date=row[0], value=int(row[1])) for row in top_removed],
+    )
+    return _ok(data)
+
+
+@app.get('/api/dashboard/radar', response_model=ApiResponseRadar)
+def dashboard_radar(db: Session = Depends(get_db)) -> ApiResponseRadar:
+    metric = get_radar(db)
+    if not metric:
+        return _ok(DashboardRadarData(metric_date=None, items=[]))
+
+    data = DashboardRadarData(
+        metric_date=metric.metric_date,
+        items=[
+            DashboardRadarItem(metric='new_products', value=metric.new_products),
+            DashboardRadarItem(metric='updated_products', value=metric.updated_products),
+            DashboardRadarItem(metric='cancelled_products', value=metric.cancelled_products),
+            DashboardRadarItem(metric='expiring_in_90d', value=metric.expiring_in_90d),
+            DashboardRadarItem(metric='active_subscriptions', value=metric.active_subscriptions),
+        ],
+    )
+    return _ok(data)
+
+
+@app.get('/api/search', response_model=ApiResponseSearch)
+def search(
+    q: str | None = Query(default=None, description='fuzzy query on name/reg_no/udi_di/company'),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    sort_by: SortBy = Query(default='updated_at'),
+    sort_order: SortOrder = Query(default='desc'),
+    db: Session = Depends(get_db),
+) -> ApiResponseSearch:
+    products, total = search_products(
+        db,
+        query=q,
+        company=company,
+        reg_no=reg_no,
+        status=status,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    data = SearchData(
+        total=total,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        items=[SearchItem(product=serialize_product(item)) for item in products],
+    )
+    return _ok(data)
+
+
+@app.get('/api/products/{product_id}', response_model=ApiResponseProduct)
+def product_detail(product_id: str, db: Session = Depends(get_db)) -> ApiResponseProduct:
+    product = get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail='Product not found')
+    return _ok(serialize_product(product))
+
+
+@app.get('/api/companies/{company_id}', response_model=ApiResponseCompany)
+def company_detail(company_id: str, db: Session = Depends(get_db)) -> ApiResponseCompany:
+    company = get_company(db, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail='Company not found')
+    return _ok(serialize_company(company))
+
+
+@app.get('/api/status', response_model=ApiResponseStatus)
+def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
     runs = latest_runs(db)
-    return StatusResponse(
+    data = StatusData(
         latest_runs=[
             StatusItem(
                 id=run.id,
                 source=run.source,
-                package_name=run.package_name,
                 status=run.status,
+                message=run.message,
+                records_total=run.records_total,
+                records_success=run.records_success,
+                records_failed=run.records_failed,
+                added_count=getattr(run, 'added_count', 0),
+                updated_count=getattr(run, 'updated_count', 0),
+                removed_count=getattr(run, 'removed_count', 0),
                 started_at=run.started_at,
                 finished_at=run.finished_at,
-                message=run.message,
             )
             for run in runs
         ]
     )
+    return _ok(data)

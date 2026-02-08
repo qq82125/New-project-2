@@ -11,3 +11,7 @@ node_modules/
 .next/
 .DS_Store
 staging/
+.tools/
+.local/
+venv/
+web/.dev.log

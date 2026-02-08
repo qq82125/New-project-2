@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.services.crawler import parse_daily_packages, pick_latest_package, verify_md5
+from app.services.crawler import parse_daily_packages, pick_latest_package, verify_checksum, verify_md5
 
 
 def test_parse_daily_packages_extracts_md5_and_url() -> None:
@@ -30,3 +30,13 @@ def test_verify_md5(tmp_path: Path) -> None:
     file_path = tmp_path / 'x.txt'
     file_path.write_text('', encoding='utf-8')
     assert verify_md5(file_path, 'd41d8cd98f00b204e9800998ecf8427e')
+
+
+def test_verify_checksum_sha256(tmp_path: Path) -> None:
+    file_path = tmp_path / 'x.txt'
+    file_path.write_text('', encoding='utf-8')
+    assert verify_checksum(
+        file_path,
+        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        algorithm='sha256',
+    )
