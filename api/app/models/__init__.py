@@ -10,6 +10,7 @@ from app.models.entities import (
     SourceRun,
     Subscription,
     SubscriptionDelivery,
+    User,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     'SubscriptionDelivery',
     'ExportUsage',
     'AdminConfig',
+    'User',
 ]

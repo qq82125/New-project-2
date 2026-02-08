@@ -2,21 +2,25 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from secrets import compare_digest
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
+from app.models import User
 from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
 from app.repositories.products import get_company, get_product, search_products
 from app.repositories.radar import list_admin_configs, upsert_admin_config
 from app.repositories.source_runs import latest_runs
+from app.repositories.users import create_user, get_user_by_email, get_user_by_id
 from app.schemas.api import (
     AdminConfigItem,
     AdminConfigUpdateIn,
     AdminConfigsData,
+    ApiResponseAuthUser,
     ApiResponseCompany,
     ApiResponseAdminConfig,
     ApiResponseAdminConfigs,
@@ -40,9 +44,32 @@ from app.schemas.api import (
     SearchItem,
     StatusData,
     StatusItem,
+    AuthLoginIn,
+    AuthRegisterIn,
+    AuthUserOut,
+)
+from app.services.auth import (
+    create_session_token,
+    hash_password,
+    normalize_email,
+    parse_session_token,
+    verify_password,
 )
 
 app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
+
+def _settings():
+    return get_settings()
+
+
+cfg0 = _settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in cfg0.cors_origins.split(',') if origin.strip()],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 
 
 SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']
@@ -52,6 +79,47 @@ security = HTTPBasic()
 
 def _ok(data):
     return {'code': 0, 'message': 'ok', 'data': data}
+
+
+def _auth_user_out(user: User) -> AuthUserOut:
+    return AuthUserOut(id=user.id, email=user.email, role=user.role)
+
+
+def _set_auth_cookie(response: Response, user_id: int) -> None:
+    cfg = _settings()
+    token = create_session_token(
+        user_id=user_id,
+        secret=cfg.auth_secret,
+        ttl_seconds=cfg.auth_session_ttl_hours * 3600,
+    )
+    response.set_cookie(
+        key=cfg.auth_cookie_name,
+        value=token,
+        max_age=cfg.auth_session_ttl_hours * 3600,
+        httponly=True,
+        secure=cfg.auth_cookie_secure,
+        samesite='lax',
+        path='/',
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    cfg = _settings()
+    response.delete_cookie(key=cfg.auth_cookie_name, path='/')
+
+
+def _require_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    cfg = _settings()
+    token = request.cookies.get(cfg.auth_cookie_name)
+    if not token:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    user_id = parse_session_token(token=token, secret=cfg.auth_secret)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    return user
 
 
 def serialize_company(company) -> CompanyOut:
@@ -73,9 +141,9 @@ def serialize_product(product) -> ProductOut:
 
 
 def _require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    settings = get_settings()
-    valid_user = compare_digest(credentials.username, settings.admin_username)
-    valid_pass = compare_digest(credentials.password, settings.admin_password)
+    cfg = get_settings()
+    valid_user = compare_digest(credentials.username, cfg.admin_username)
+    valid_pass = compare_digest(credentials.password, cfg.admin_password)
     if not (valid_user and valid_pass):
         raise HTTPException(
             status_code=401,
@@ -83,6 +151,66 @@ def _require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str
             headers={'WWW-Authenticate': 'Basic'},
         )
     return credentials.username
+
+
+@app.on_event('startup')
+def bootstrap_admin() -> None:
+    cfg = _settings()
+    email = normalize_email(cfg.bootstrap_admin_email)
+    password = cfg.bootstrap_admin_password
+    if not email or '@' not in email or not password:
+        return
+
+    db = SessionLocal()
+    try:
+        existing = get_user_by_email(db, email)
+        if existing:
+            if existing.role != 'admin':
+                existing.role = 'admin'
+                db.add(existing)
+                db.commit()
+            return
+        password_hash = hash_password(password)
+        create_user(db, email=email, password_hash=password_hash, role='admin')
+    finally:
+        db.close()
+
+
+@app.post('/api/auth/register', response_model=ApiResponseAuthUser)
+def register(payload: AuthRegisterIn, response: Response, db: Session = Depends(get_db)) -> ApiResponseAuthUser:
+    email = normalize_email(payload.email)
+    password = payload.password
+    if not email or '@' not in email:
+        raise HTTPException(status_code=400, detail='Invalid email')
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail='Password must be at least 8 characters')
+    if get_user_by_email(db, email):
+        raise HTTPException(status_code=409, detail='Email already registered')
+
+    user = create_user(db, email=email, password_hash=hash_password(password), role='user')
+    _set_auth_cookie(response, user.id)
+    return _ok(_auth_user_out(user))
+
+
+@app.post('/api/auth/login', response_model=ApiResponseAuthUser)
+def login(payload: AuthLoginIn, response: Response, db: Session = Depends(get_db)) -> ApiResponseAuthUser:
+    email = normalize_email(payload.email)
+    user = get_user_by_email(db, email)
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail='Invalid email or password')
+    _set_auth_cookie(response, user.id)
+    return _ok(_auth_user_out(user))
+
+
+@app.post('/api/auth/logout')
+def logout(response: Response) -> dict:
+    _clear_auth_cookie(response)
+    return _ok({'logged_out': True})
+
+
+@app.get('/api/auth/me', response_model=ApiResponseAuthUser)
+def me(current_user: User = Depends(_require_current_user)) -> ApiResponseAuthUser:
+    return _ok(_auth_user_out(current_user))
 
 
 @app.get('/api/dashboard/summary', response_model=ApiResponseSummary)

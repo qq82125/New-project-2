@@ -168,3 +168,25 @@ class ApiResponseAdminConfig(BaseModel):
     code: int
     message: str
     data: AdminConfigItem
+
+
+class AuthUserOut(BaseModel):
+    id: int
+    email: str
+    role: str
+
+
+class AuthRegisterIn(BaseModel):
+    email: str
+    password: str
+
+
+class AuthLoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class ApiResponseAuthUser(BaseModel):
+    code: int
+    message: str
+    data: AuthUserOut

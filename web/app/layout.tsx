@@ -1,6 +1,7 @@
 import './globals.css';
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import AuthNav from '../components/AuthNav';
 
 export const metadata: Metadata = {
   title: 'IVD产品雷达',
@@ -18,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/search">Search</Link>
               <Link href="/status">Status</Link>
               <Link href="/admin">Admin</Link>
+              <AuthNav />
             </nav>
           </header>
           {children}

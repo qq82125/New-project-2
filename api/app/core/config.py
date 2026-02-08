@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://nmpa:nmpa@localhost:5432/nmpa'
     api_host: str = '0.0.0.0'
     api_port: int = 8000
+    auth_secret: str = 'change-me-auth-secret'
+    auth_cookie_name: str = 'ivd_session'
+    auth_session_ttl_hours: int = 168
+    auth_cookie_secure: bool = False
+    cors_origins: str = 'http://localhost:3000,http://127.0.0.1:3000'
+    bootstrap_admin_email: str = 'admin@example.com'
+    bootstrap_admin_password: str = 'change-me-admin-password'
     admin_username: str = 'admin'
     admin_password: str = 'change-me'
 
