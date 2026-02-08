@@ -50,6 +50,7 @@ docker compose up --build
 
 - Web Dashboard: [http://localhost:3000](http://localhost:3000)
 - API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Admin: [http://localhost:3000/admin](http://localhost:3000/admin)（账号密码来自 `.env` 中 `ADMIN_USERNAME`/`ADMIN_PASSWORD`）
 
 ### 4) 停止
 
@@ -125,4 +126,3 @@ docker compose exec db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
 项目包含基础 CI（后端测试 + 前端 build 检查）。
 - 文件：`.github/workflows/ci.yml`
-

@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = 'postgresql+psycopg://nmpa:nmpa@localhost:5432/nmpa'
     api_host: str = '0.0.0.0'
     api_port: int = 8000
+    admin_username: str = 'admin'
+    admin_password: str = 'change-me'
 
     nmpa_udi_download_page: str = 'https://udi.nmpa.gov.cn/download.html'
     download_base_url: str = 'https://udi.nmpa.gov.cn'

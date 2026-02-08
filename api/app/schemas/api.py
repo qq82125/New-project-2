@@ -96,6 +96,20 @@ class DashboardRadarData(BaseModel):
     items: list[DashboardRadarItem]
 
 
+class AdminConfigItem(BaseModel):
+    config_key: str
+    config_value: dict
+    updated_at: datetime
+
+
+class AdminConfigsData(BaseModel):
+    items: list[AdminConfigItem]
+
+
+class AdminConfigUpdateIn(BaseModel):
+    config_value: dict
+
+
 class ApiResponseSummary(BaseModel):
     code: int
     message: str
@@ -142,3 +156,15 @@ class ApiResponseStatus(BaseModel):
     code: int
     message: str
     data: StatusData
+
+
+class ApiResponseAdminConfigs(BaseModel):
+    code: int
+    message: str
+    data: AdminConfigsData
+
+
+class ApiResponseAdminConfig(BaseModel):
+    code: int
+    message: str
+    data: AdminConfigItem

@@ -3,14 +3,23 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from secrets import compare_digest
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
 from app.repositories.products import get_company, get_product, search_products
+from app.repositories.radar import list_admin_configs, upsert_admin_config
 from app.repositories.source_runs import latest_runs
 from app.schemas.api import (
+    AdminConfigItem,
+    AdminConfigUpdateIn,
+    AdminConfigsData,
     ApiResponseCompany,
+    ApiResponseAdminConfig,
+    ApiResponseAdminConfigs,
     ApiResponseProduct,
     ApiResponseRadar,
     ApiResponseRankings,
@@ -38,6 +47,7 @@ app = FastAPI(title='NMPA IVD Dashboard API', version='0.4.0')
 
 SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']
 SortOrder = Literal['asc', 'desc']
+security = HTTPBasic()
 
 
 def _ok(data):
@@ -60,6 +70,19 @@ def serialize_product(product) -> ProductOut:
         class_name=product.class_name,
         company=serialize_company(product.company) if product.company else None,
     )
+
+
+def _require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    settings = get_settings()
+    valid_user = compare_digest(credentials.username, settings.admin_username)
+    valid_pass = compare_digest(credentials.password, settings.admin_password)
+    if not (valid_user and valid_pass):
+        raise HTTPException(
+            status_code=401,
+            detail='Unauthorized',
+            headers={'WWW-Authenticate': 'Basic'},
+        )
+    return credentials.username
 
 
 @app.get('/api/dashboard/summary', response_model=ApiResponseSummary)
@@ -203,5 +226,40 @@ def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
             )
             for run in runs
         ]
+    )
+    return _ok(data)
+
+
+@app.get('/api/admin/configs', response_model=ApiResponseAdminConfigs)
+def admin_list_configs(
+    _admin: str = Depends(_require_admin),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminConfigs:
+    configs = list_admin_configs(db)
+    data = AdminConfigsData(
+        items=[
+            AdminConfigItem(
+                config_key=cfg.config_key,
+                config_value=cfg.config_value,
+                updated_at=cfg.updated_at,
+            )
+            for cfg in configs
+        ]
+    )
+    return _ok(data)
+
+
+@app.put('/api/admin/configs/{config_key}', response_model=ApiResponseAdminConfig)
+def admin_upsert_config(
+    config_key: str,
+    payload: AdminConfigUpdateIn,
+    _admin: str = Depends(_require_admin),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminConfig:
+    cfg = upsert_admin_config(db, config_key, payload.config_value)
+    data = AdminConfigItem(
+        config_key=cfg.config_key,
+        config_value=cfg.config_value,
+        updated_at=cfg.updated_at,
     )
     return _ok(data)

@@ -131,6 +131,10 @@ def get_admin_config(db: Session, key: str) -> AdminConfig | None:
     return db.scalar(stmt)
 
 
+def list_admin_configs(db: Session) -> list[AdminConfig]:
+    return list(db.scalars(select(AdminConfig).order_by(AdminConfig.config_key.asc())))
+
+
 def upsert_admin_config(db: Session, key: str, value: dict) -> AdminConfig:
     cfg = get_admin_config(db, key)
     if cfg:
