@@ -1,17 +1,26 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { toast } from './ui/use-toast';
+import { useAuth } from './auth/use-auth';
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
 type Subscription = {
   id: number;
+  subscriber_key?: string;
+  channel?: string;
+  email_to?: string | null;
   subscription_type: string;
   target_value: string;
   webhook_url?: string | null;
   is_active: boolean;
   last_digest_date?: string | null;
+  created_at?: string;
 };
+
+type ApiEnvelope<T> = { code: number; message: string; data: T };
 
 export function SubscriptionManager({
   initialType,
@@ -22,6 +31,7 @@ export function SubscriptionManager({
   initialTarget?: string;
   initialSubs: Subscription[];
 }) {
+  const auth = useAuth();
   const [subs, setSubs] = useState<Subscription[]>(initialSubs);
   const [type, setType] = useState(initialType || 'company');
   const [target, setTarget] = useState(initialTarget || '');
@@ -29,25 +39,59 @@ export function SubscriptionManager({
   const [loading, setLoading] = useState(false);
 
   const activeCount = useMemo(() => subs.filter((s) => s.is_active).length, [subs]);
+  const quota = auth.user?.entitlements?.max_subscriptions;
+  const plan = (auth.user?.plan || 'free').toLowerCase();
 
   async function createSub() {
     if (!target.trim()) return;
     setLoading(true);
-    const res = await fetch(`${API}/subscriptions`, {
+    const res = await fetch(`${API}/api/subscriptions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ subscription_type: type, target_value: target, webhook_url: webhookUrl || null }),
+      credentials: 'include',
+      body: JSON.stringify({
+        subscription_type: type,
+        target_value: target,
+        channel: 'webhook',
+        webhook_url: webhookUrl || null,
+      }),
     });
     setLoading(false);
-    if (!res.ok) return;
-    const created = (await res.json()) as Subscription;
-    setSubs([created, ...subs]);
+    const bodyText = await res.text();
+    let body: any = null;
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      body = null;
+    }
+
+    if (!res.ok) {
+      if (body?.error === 'SUBSCRIPTION_LIMIT') {
+        toast({
+          variant: 'destructive',
+          title: '订阅数量达到上限',
+          description: body?.message || '请升级或联系开通 Pro。',
+        });
+        return;
+      }
+      toast({ variant: 'destructive', title: '创建失败', description: `请求失败 (${res.status})` });
+      return;
+    }
+
+    const env = body as ApiEnvelope<Subscription>;
+    if (!env || env.code !== 0) {
+      toast({ variant: 'destructive', title: '创建失败', description: env?.message || '接口返回异常' });
+      return;
+    }
+    setSubs([env.data, ...subs]);
   }
 
   async function deactivate(id: number) {
-    const res = await fetch(`${API}/subscriptions/${id}`, { method: 'DELETE' });
-    if (!res.ok) return;
-    setSubs(subs.map((s) => (s.id === id ? { ...s, is_active: false } : s)));
+    toast({
+      variant: 'destructive',
+      title: '暂不支持',
+      description: '当前版本未实现订阅停用 API。',
+    });
   }
 
   return (
@@ -68,7 +112,17 @@ export function SubscriptionManager({
         </div>
       </div>
 
-      <div className="card">活跃订阅：{activeCount}</div>
+      <div className="card">
+        活跃订阅：{activeCount}
+        {quota ? (
+          <>
+            {' '}
+            · 配额：{activeCount}/{quota}（{plan === 'pro_annual' ? 'Pro' : 'Free'}）
+          </>
+        ) : null}
+        {' '}
+        · <Link href="/contact?intent=pro">联系开通/试用</Link>
+      </div>
 
       {subs.map((sub) => (
         <div className="card" key={sub.id}>

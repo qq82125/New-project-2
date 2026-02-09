@@ -27,8 +27,32 @@ def get_active_subscriptions(db: Session) -> list[Subscription]:
     return list(db.scalars(stmt))
 
 
-def create_subscription(db: Session, subscription_type: str, target_value: str, webhook_url: str | None) -> Subscription:
-    sub = Subscription(subscription_type=subscription_type, target_value=target_value, webhook_url=webhook_url)
+def count_active_subscriptions_by_subscriber(db: Session, subscriber_key: str) -> int:
+    stmt = select(func.count(Subscription.id)).where(
+        Subscription.subscriber_key == subscriber_key,
+        Subscription.is_active.is_(True),
+    )
+    return int(db.scalar(stmt) or 0)
+
+
+def create_subscription(
+    db: Session,
+    subscription_type: str,
+    target_value: str,
+    webhook_url: str | None,
+    *,
+    subscriber_key: str = 'default',
+    channel: str = 'webhook',
+    email_to: str | None = None,
+) -> Subscription:
+    sub = Subscription(
+        subscriber_key=subscriber_key,
+        channel=channel,
+        email_to=email_to,
+        subscription_type=subscription_type,
+        target_value=target_value,
+        webhook_url=webhook_url,
+    )
     db.add(sub)
     db.commit()
     db.refresh(sub)

@@ -1,186 +1,64 @@
-'use client';
+import Link from 'next/link';
+import { headers } from 'next/headers';
+import { notFound, redirect } from 'next/navigation';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
+import { Badge } from '../../components/ui/badge';
 
-type AdminConfigItem = {
-  config_key: string;
-  config_value: Record<string, unknown>;
-  updated_at: string;
-};
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
-type AdminConfigsResponse = {
-  code: number;
-  message: string;
-  data: {
-    items: AdminConfigItem[];
-  };
-};
+type AdminMe = { id: number; email: string; role: string };
+type AdminMeResp = { code: number; message: string; data: AdminMe };
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-const AUTH_KEY = 'admin_basic_auth';
+export const dynamic = 'force-dynamic';
 
-function toBasicAuth(username: string, password: string): string {
-  return `Basic ${btoa(`${username}:${password}`)}`;
+async function getAdminMe(): Promise<AdminMe> {
+  const cookie = (await headers()).get('cookie') || '';
+  const res = await fetch(`${API_BASE}/api/admin/me`, {
+    method: 'GET',
+    headers: cookie ? { cookie } : undefined,
+    cache: 'no-store',
+  });
+
+  if (res.status === 401) redirect('/login');
+  if (res.status === 403) notFound();
+  if (!res.ok) throw new Error(`admin/me failed: ${res.status}`);
+
+  const body = (await res.json()) as AdminMeResp;
+  if (body.code !== 0) throw new Error(body.message || 'admin/me returned error');
+  return body.data;
 }
 
-export default function AdminPage() {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [auth, setAuth] = useState('');
-  const [items, setItems] = useState<AdminConfigItem[]>([]);
-  const [editMap, setEditMap] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const stored = typeof window !== 'undefined' ? localStorage.getItem(AUTH_KEY) : null;
-    if (stored) setAuth(stored);
-  }, []);
-
-  async function loadConfigs(token?: string) {
-    const finalToken = token || auth;
-    if (!finalToken) return;
-    setLoading(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const resp = await fetch(`${API}/api/admin/configs`, {
-        headers: { Authorization: finalToken },
-        cache: 'no-store',
-      });
-      if (resp.status === 401) {
-        setError('认证失败，请检查管理员账号密码。');
-        return;
-      }
-      if (!resp.ok) {
-        setError(`加载失败（${resp.status}）`);
-        return;
-      }
-      const body = (await resp.json()) as AdminConfigsResponse;
-      if (body.code !== 0) {
-        setError(body.message || '接口返回异常');
-        return;
-      }
-      setItems(body.data.items);
-      const initialEditMap: Record<string, string> = {};
-      body.data.items.forEach((item) => {
-        initialEditMap[item.config_key] = JSON.stringify(item.config_value, null, 2);
-      });
-      setEditMap(initialEditMap);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '网络错误');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function login() {
-    const token = toBasicAuth(username.trim(), password);
-    localStorage.setItem(AUTH_KEY, token);
-    setAuth(token);
-    await loadConfigs(token);
-  }
-
-  function logout() {
-    localStorage.removeItem(AUTH_KEY);
-    setAuth('');
-    setItems([]);
-    setEditMap({});
-    setMessage('已退出管理员模式。');
-  }
-
-  async function saveConfig(configKey: string) {
-    const raw = editMap[configKey];
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      setError(`${configKey} 不是合法 JSON`);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const resp = await fetch(`${API}/api/admin/configs/${encodeURIComponent(configKey)}`, {
-        method: 'PUT',
-        headers: {
-          'content-type': 'application/json',
-          Authorization: auth,
-        },
-        body: JSON.stringify({ config_value: parsed }),
-      });
-      if (resp.status === 401) {
-        setError('认证已失效，请重新登录。');
-        return;
-      }
-      if (!resp.ok) {
-        setError(`保存失败（${resp.status}）`);
-        return;
-      }
-      setMessage(`已保存：${configKey}`);
-      await loadConfigs();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '网络错误');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const canLoad = useMemo(() => Boolean(auth), [auth]);
+export default async function AdminHomePage() {
+  const me = await getAdminMe();
 
   return (
     <div className="grid">
-      <section className="card">
-        <h2>后台管理</h2>
-        {!auth ? (
-          <div className="controls">
-            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="管理员账号" />
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              placeholder="管理员密码"
-            />
-            <button onClick={login} disabled={loading}>
-              登录
-            </button>
-          </div>
-        ) : (
-          <div className="controls">
-            <button onClick={() => loadConfigs()} disabled={loading || !canLoad}>
-              刷新配置
-            </button>
-            <button onClick={logout} disabled={loading}>
-              退出
-            </button>
-          </div>
-        )}
-        {error && <div className="card error">{error}</div>}
-        {message && <div className="card">{message}</div>}
-      </section>
+      <Card>
+        <CardHeader>
+          <CardTitle>管理后台</CardTitle>
+          <CardDescription>仅 admin 可访问。请先在 /login 使用管理员邮箱密码登录。</CardDescription>
+        </CardHeader>
+        <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="muted">当前：</span>
+          <Badge variant="muted">#{me.id}</Badge>
+          <Badge variant="muted">{me.email}</Badge>
+          <Badge variant={me.role === 'admin' ? 'success' : 'muted'}>{me.role}</Badge>
+        </CardContent>
+      </Card>
 
-      {auth &&
-        items.map((item) => (
-          <section className="card" key={item.config_key}>
-            <h3>{item.config_key}</h3>
-            <div className="muted">更新时间：{new Date(item.updated_at).toLocaleString()}</div>
-            <textarea
-              value={editMap[item.config_key] || ''}
-              onChange={(e) =>
-                setEditMap((prev) => ({
-                  ...prev,
-                  [item.config_key]: e.target.value,
-                }))
-              }
-              rows={10}
-            />
-            <button onClick={() => saveConfig(item.config_key)} disabled={loading}>
-              保存 {item.config_key}
-            </button>
-          </section>
-        ))}
+      <Card>
+        <CardHeader>
+          <CardTitle>功能入口</CardTitle>
+          <CardDescription>用户与会员管理走 cookie 登录态，不需要额外的 BasicAuth 账号密码。</CardDescription>
+        </CardHeader>
+        <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Link className="ui-btn" href="/admin/users">
+            用户与会员
+          </Link>
+        </CardContent>
+      </Card>
     </div>
   );
 }
+

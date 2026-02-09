@@ -2,14 +2,18 @@ from app.models.entities import (
     AdminConfig,
     ChangeLog,
     Company,
+    DataSource,
     DailyDigestRun,
     DailyMetric,
     ExportUsage,
+    MembershipEvent,
+    MembershipGrant,
     Product,
     Registration,
     SourceRun,
     Subscription,
     SubscriptionDelivery,
+    User,
 )
 
 __all__ = [
@@ -24,4 +28,8 @@ __all__ = [
     'SubscriptionDelivery',
     'ExportUsage',
     'AdminConfig',
+    'DataSource',
+    'User',
+    'MembershipGrant',
+    'MembershipEvent',
 ]

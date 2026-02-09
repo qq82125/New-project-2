@@ -19,8 +19,18 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-nmpa}:${POSTGRES_PASSWORD:-nmpa}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-nmpa}}
+      AUTH_SECRET: ${AUTH_SECRET:-local-dev-auth-secret}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-ivd_session}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-168}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      # Admin bootstrap account (created/updated on api startup)
+      BOOTSTRAP_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      BOOTSTRAP_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      DATA_SOURCES_CRYPTO_KEY: ${DATA_SOURCES_CRYPTO_KEY:-local-dev-data-sources-key}
+      STAGING_DIR: ${STAGING_DIR:-/app/staging}
     depends_on:
       db:
         condition: service_healthy
@@ -28,14 +38,28 @@ services:
       - "8000:8000"
     command: >
       sh -c "python -m app.db.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./staging:/app/staging
     restart: unless-stopped
 
   worker:
     build:
       context: .
       dockerfile: api/Dockerfile
-    env_file:
-      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-nmpa}:${POSTGRES_PASSWORD:-nmpa}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-nmpa}}
+      AUTH_SECRET: ${AUTH_SECRET:-local-dev-auth-secret}
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:-ivd_session}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-168}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      BOOTSTRAP_ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      BOOTSTRAP_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      DATA_SOURCES_CRYPTO_KEY: ${DATA_SOURCES_CRYPTO_KEY:-local-dev-data-sources-key}
+      STAGING_DIR: ${STAGING_DIR:-/app/staging}
+      SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-86400}
+      NMPA_UDI_DOWNLOAD_PAGE: ${NMPA_UDI_DOWNLOAD_PAGE:-https://udi.nmpa.gov.cn/download.html}
+      DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-https://udi.nmpa.gov.cn}
     depends_on:
       db:
         condition: service_healthy
@@ -49,8 +73,9 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
-    env_file:
-      - .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8000}
     depends_on:
       - api
     ports:

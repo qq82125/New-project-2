@@ -179,6 +179,18 @@ class AdminConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DataSource(Base):
+    __tablename__ = 'data_sources'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    type: Mapped[str] = mapped_column(String(20), index=True)
+    config_encrypted: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class DailyMetric(Base):
     __tablename__ = 'daily_metrics'
 
@@ -191,3 +203,46 @@ class DailyMetric(Base):
     source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey('source_runs.id'), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default='user', index=True)
+    # Membership snapshot (current state). Historical records live in membership_grants.
+    plan: Mapped[str] = mapped_column(Text, default='free', index=True)
+    plan_status: Mapped[str] = mapped_column(Text, default='inactive', index=True)
+    plan_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    onboarded: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MembershipGrant(Base):
+    __tablename__ = 'membership_grants'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.id'), index=True)
+    granted_by_user_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('users.id'), nullable=True, index=True
+    )
+    plan: Mapped[str] = mapped_column(Text, index=True)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MembershipEvent(Base):
+    __tablename__ = 'membership_events'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('users.id'), index=True)
+    actor_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('users.id'), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(Text, index=True)
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
