@@ -25,6 +25,7 @@ from app.repositories.data_sources import (
 from app.repositories.products import get_company, get_product, search_products
 from app.repositories.radar import list_admin_configs, upsert_admin_config
 from app.repositories.radar import count_active_subscriptions_by_subscriber, create_subscription
+from app.repositories.changes import get_change_stats, list_recent_changes
 from app.repositories.source_runs import latest_runs, list_source_runs
 from app.repositories.users import create_user, get_user_by_email, get_user_by_id
 from app.repositories.admin_membership import (
@@ -51,6 +52,11 @@ from app.schemas.api import (
     ApiResponseStatus,
     ApiResponseSummary,
     ApiResponseTrend,
+    ApiResponseChangeStats,
+    ApiResponseChangesList,
+    ChangeStatsOut,
+    ChangeListItemOut,
+    ChangesListOut,
     CompanyOut,
     DashboardRadarData,
     DashboardRadarItem,
@@ -235,6 +241,13 @@ def _get_current_user_optional(request: Request, db: Session = Depends(get_db)) 
 def _require_admin_user(current_user: User = Depends(_require_current_user)) -> User:
     if getattr(current_user, 'role', None) != 'admin':
         raise HTTPException(status_code=403, detail='Admin only')
+    return current_user
+
+
+def _require_pro_user(current_user: User = Depends(_require_current_user)) -> User:
+    ent = get_entitlements(current_user)
+    if not ent.can_export:
+        raise HTTPException(status_code=403, detail='Pro membership required')
     return current_user
 
 
@@ -577,6 +590,59 @@ def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
         ]
     )
     return _ok(data)
+
+
+@app.get('/api/changes/stats', response_model=ApiResponseChangeStats)
+def changes_stats(
+    days: int = Query(default=30, ge=1, le=365),
+    _user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseChangeStats:
+    total, by_type = get_change_stats(db, days=int(days))
+    return _ok(ChangeStatsOut(days=int(days), total=int(total), by_type=by_type))
+
+
+@app.get('/api/changes', response_model=ApiResponseChangesList)
+def changes_list(
+    days: int = Query(default=30, ge=1, le=365),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    change_type: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    _pro: User = Depends(_require_pro_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseChangesList:
+    rows, total = list_recent_changes(
+        db,
+        days=int(days),
+        page=int(page),
+        page_size=int(page_size),
+        change_type=change_type,
+        q=q,
+        company=company,
+        reg_no=reg_no,
+    )
+    items: list[ChangeListItemOut] = []
+    for change, product in rows:
+        items.append(
+            ChangeListItemOut(
+                id=int(change.id),
+                change_type=str(change.change_type),
+                change_date=change.change_date,
+                product=serialize_product(product),
+            )
+        )
+    return _ok(
+        ChangesListOut(
+            days=int(days),
+            total=int(total),
+            page=int(page),
+            page_size=int(page_size),
+            items=items,
+        )
+    )
 
 
 def _spawn_sync_thread() -> None:

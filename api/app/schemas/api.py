@@ -159,6 +159,39 @@ class ApiResponseStatus(BaseModel):
     data: StatusData
 
 
+class ChangeStatsOut(BaseModel):
+    days: int = 30
+    total: int
+    by_type: dict[str, int] = Field(default_factory=dict)
+
+
+class ApiResponseChangeStats(BaseModel):
+    code: int
+    message: str
+    data: ChangeStatsOut
+
+
+class ChangeListItemOut(BaseModel):
+    id: int
+    change_type: str
+    change_date: datetime
+    product: ProductOut
+
+
+class ChangesListOut(BaseModel):
+    days: int = 30
+    total: int
+    page: int
+    page_size: int
+    items: list[ChangeListItemOut]
+
+
+class ApiResponseChangesList(BaseModel):
+    code: int
+    message: str
+    data: ChangesListOut
+
+
 class ApiResponseAdminConfigs(BaseModel):
     code: int
     message: str
