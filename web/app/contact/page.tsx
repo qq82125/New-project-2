@@ -1,13 +1,26 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
+import { apiGet } from '../../lib/api';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 
 export const dynamic = 'force-dynamic';
 
+type AdminConfigItem = { config_key: string; config_value: any; updated_at: string };
+type AdminConfigsData = { items: AdminConfigItem[] };
+
 export default async function ContactPage({ searchParams }: { searchParams: Promise<{ intent?: string }> }) {
   const { intent } = await searchParams;
   const tag = intent === 'trial' ? '试用申请' : intent === 'pro' ? '开通 Pro' : '联系';
+
+  // Best-effort: show configured contact info if available.
+  // For privacy: this endpoint currently requires admin; if user is not admin, fall back to placeholders.
+  const cookie = (await headers()).get('cookie') || '';
+  const cfgRes = cookie
+    ? await apiGet<AdminConfigsData>('/api/admin/configs')
+    : { data: null as AdminConfigsData | null, error: null as string | null };
+  const contact = (cfgRes.data?.items || []).find((x) => x.config_key === 'contact_info')?.config_value || {};
 
   return (
     <div className="grid">
@@ -31,14 +44,20 @@ export default async function ContactPage({ searchParams }: { searchParams: Prom
         </CardHeader>
         <CardContent className="grid">
           <div>
-            <span className="muted">邮箱：</span>sales@example.com
+            <span className="muted">邮箱：</span>{contact.email || 'sales@example.com'}
           </div>
           <div>
-            <span className="muted">企业微信：</span>（占位）扫码/ID
+            <span className="muted">企业微信：</span>{contact.wecom || '（占位）扫码/ID'}
           </div>
           <div>
-            <span className="muted">表单：</span>（占位）https://example.com/form
+            <span className="muted">表单：</span>{contact.form_url || '（占位）https://example.com/form'}
           </div>
+          {contact.note ? (
+            <div>
+              <span className="muted">备注：</span>
+              {contact.note}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -57,4 +76,3 @@ export default async function ContactPage({ searchParams }: { searchParams: Prom
     </div>
   );
 }
-

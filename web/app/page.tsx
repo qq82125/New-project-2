@@ -173,7 +173,7 @@ export default async function DashboardPage() {
         </CardContent>
       </Card>
 
-      <section className="columns-3">
+      <section className="columns-2">
         <Card>
           <CardHeader>
             <CardTitle>新增产品榜单</CardTitle>
@@ -207,6 +207,75 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle>日榜（后端聚合）</CardTitle>
+            <CardDescription>新增高峰日与移除高峰日。</CardDescription>
+          </CardHeader>
+          <CardContent>
+          {rankingsRes.error ? (
+            <ErrorState text={`榜单加载失败：${rankingsRes.error}`} />
+          ) : !rankingsRes.data ? (
+            <EmptyState text="暂无榜单" />
+          ) : (
+            <div className="columns-2">
+              <div>
+                <div className="muted">新增高峰日</div>
+                {rankingsRes.data.top_new_days.length === 0 ? (
+                  <EmptyState text="暂无" />
+                ) : (
+                  <TableWrap>
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>日期</th>
+                          <th style={{ width: 90 }}>新增</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rankingsRes.data.top_new_days.map((x) => (
+                          <tr key={x.metric_date}>
+                            <td>{x.metric_date}</td>
+                            <td>{x.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </TableWrap>
+                )}
+              </div>
+              <div>
+                <div className="muted">移除高峰日</div>
+                {rankingsRes.data.top_removed_days.length === 0 ? (
+                  <EmptyState text="暂无" />
+                ) : (
+                  <TableWrap>
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>日期</th>
+                          <th style={{ width: 90 }}>移除</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rankingsRes.data.top_removed_days.map((x) => (
+                          <tr key={x.metric_date}>
+                            <td>{x.metric_date}</td>
+                            <td>{x.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </TableWrap>
+                )}
+              </div>
+            </div>
+          )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="columns-3">
         <Card>
           <CardHeader>
             <CardTitle>企业榜单</CardTitle>
@@ -276,9 +345,7 @@ export default async function DashboardPage() {
           )}
           </CardContent>
         </Card>
-      </section>
 
-      <section className="columns-2">
         <Card>
           <CardHeader>
             <CardTitle>变更雷达列表</CardTitle>
@@ -311,78 +378,8 @@ export default async function DashboardPage() {
           )}
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>日榜（后端聚合）</CardTitle>
-            <CardDescription>新增高峰日与移除高峰日。</CardDescription>
-          </CardHeader>
-          <CardContent>
-          {rankingsRes.error ? (
-            <ErrorState text={`榜单加载失败：${rankingsRes.error}`} />
-          ) : !rankingsRes.data ? (
-            <EmptyState text="暂无榜单" />
-          ) : (
-            <div className="columns-2">
-              <div>
-                <div className="muted">新增高峰日</div>
-                {rankingsRes.data.top_new_days.length === 0 ? (
-                  <EmptyState text="暂无" />
-                ) : (
-                  <TableWrap>
-                    <Table>
-                      <thead>
-                        <tr>
-                          <th>日期</th>
-                          <th style={{ width: 90 }}>新增</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rankingsRes.data.top_new_days.map((x) => (
-                          <tr key={x.metric_date}>
-                            <td>
-                              <Link href={`/search${qs({})}`}>{x.metric_date}</Link>
-                            </td>
-                            <td>{x.value}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                  </TableWrap>
-                )}
-              </div>
-              <div>
-                <div className="muted">移除高峰日</div>
-                {rankingsRes.data.top_removed_days.length === 0 ? (
-                  <EmptyState text="暂无" />
-                ) : (
-                  <TableWrap>
-                    <Table>
-                      <thead>
-                        <tr>
-                          <th>日期</th>
-                          <th style={{ width: 90 }}>移除</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rankingsRes.data.top_removed_days.map((x) => (
-                          <tr key={x.metric_date}>
-                            <td>
-                              <Link href={`/search${qs({ status: 'cancelled' })}`}>{x.metric_date}</Link>
-                            </td>
-                            <td>{x.value}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                  </TableWrap>
-                )}
-              </div>
-            </div>
-          )}
-          </CardContent>
-        </Card>
       </section>
+
     </div>
   );
 }

@@ -64,6 +64,27 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
               管理后台
             </Link>
             <Link
+              href="/admin/sync"
+              className={cn('app-sidenav__item', pathname.startsWith('/admin/sync') ? 'is-active' : undefined)}
+            >
+              同步控制
+            </Link>
+            <Link
+              href="/admin/data-sources"
+              className={cn(
+                'app-sidenav__item',
+                pathname.startsWith('/admin/data-sources') ? 'is-active' : undefined
+              )}
+            >
+              数据源管理
+            </Link>
+            <Link
+              href="/admin/contact"
+              className={cn('app-sidenav__item', pathname.startsWith('/admin/contact') ? 'is-active' : undefined)}
+            >
+              联系人配置
+            </Link>
+            <Link
               href="/admin/users"
               className={cn('app-sidenav__item', pathname.startsWith('/admin/users') ? 'is-active' : undefined)}
             >

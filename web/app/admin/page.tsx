@@ -53,6 +53,15 @@ export default async function AdminHomePage() {
           <CardDescription>用户与会员管理走 cookie 登录态，不需要额外的 BasicAuth 账号密码。</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Link className="ui-btn" href="/admin/sync">
+            同步控制
+          </Link>
+          <Link className="ui-btn" href="/admin/data-sources">
+            数据源管理
+          </Link>
+          <Link className="ui-btn" href="/admin/contact">
+            联系人配置
+          </Link>
           <Link className="ui-btn" href="/admin/users">
             用户与会员
           </Link>
@@ -61,4 +70,3 @@ export default async function AdminHomePage() {
     </div>
   );
 }
-
