@@ -5,6 +5,7 @@ import { EmptyState, ErrorState } from '../../../components/States';
 import { apiGet } from '../../../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
+import { labelField, labelStatus } from '../../../lib/labelMap';
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -57,8 +58,12 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </CardHeader>
         <CardContent className="grid">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Badge variant="muted">reg_no: {res.data.reg_no || '-'}</Badge>
-            <Badge variant="muted">udi_di: {res.data.udi_di}</Badge>
+            <Badge variant="muted">
+              {labelField('reg_no')}：{res.data.reg_no || '-'}
+            </Badge>
+            <Badge variant="muted">
+              {labelField('udi_di')}：{res.data.udi_di}
+            </Badge>
             <Badge
               variant={
                 res.data.status === 'active'
@@ -70,21 +75,21 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                       : 'muted'
               }
             >
-              status: {res.data.status}
+              {labelField('status')}：{labelStatus(res.data.status)}
             </Badge>
           </div>
           <div className="columns-2">
             <div>
-              <div className="muted">approved_date</div>
+              <div className="muted">{labelField('approved_date')}</div>
               <div>{res.data.approved_date || '-'}</div>
             </div>
             <div>
-              <div className="muted">expiry_date</div>
+              <div className="muted">{labelField('expiry_date')}</div>
               <div>{res.data.expiry_date || '-'}</div>
             </div>
           </div>
           <div>
-            <div className="muted">class</div>
+            <div className="muted">{labelField('class_name', '类别')}</div>
             <div>{res.data.class_name || '-'}</div>
           </div>
         </CardContent>
@@ -92,7 +97,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       <Card>
         <CardContent>
-          <Link href={`/search?reg_no=${encodeURIComponent(res.data.reg_no || '')}`}>按 reg_no 搜索</Link>
+          <Link href={`/search?reg_no=${encodeURIComponent(res.data.reg_no || '')}`}>按注册证号搜索</Link>
         </CardContent>
       </Card>
     </div>

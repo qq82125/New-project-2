@@ -135,7 +135,7 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <Badge variant="muted">{user!.plan}</Badge>
                   <Badge variant={statusVariant(user!.plan_status)}>{user!.plan_status}</Badge>
-                  <Badge variant="muted">expires: {fmtTs(user!.plan_expires_at)}</Badge>
+                  <Badge variant="muted">到期日：{fmtTs(user!.plan_expires_at)}</Badge>
                 </div>
                 <div className="muted">
                   剩余天数：
@@ -170,12 +170,12 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
             </Card>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Grant 历史</CardTitle>
-              <CardDescription>展示最近 50 条 membership_grants（start/end/reason/note）。</CardDescription>
-            </CardHeader>
-            <CardContent>
+            <Card>
+              <CardHeader>
+                <CardTitle>Grant 历史</CardTitle>
+                <CardDescription>展示最近 50 条 membership_grants（start/end/reason/note）。</CardDescription>
+              </CardHeader>
+              <CardContent>
               {grants.length === 0 ? (
                 <EmptyState text="暂无 grant 记录" />
               ) : (
@@ -183,12 +183,12 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
                   <Table>
                     <thead>
                       <tr>
-                        <th style={{ width: 140 }}>Start</th>
-                        <th style={{ width: 140 }}>End</th>
-                        <th style={{ width: 120 }}>Plan</th>
-                        <th style={{ width: 160 }}>Created</th>
-                        <th>Reason</th>
-                        <th>Note</th>
+                        <th style={{ width: 140 }}>开始</th>
+                        <th style={{ width: 140 }}>结束</th>
+                        <th style={{ width: 120 }}>套餐</th>
+                        <th style={{ width: 160 }}>创建时间</th>
+                        <th>原因</th>
+                        <th>备注</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -230,4 +230,3 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
     </div>
   );
 }
-

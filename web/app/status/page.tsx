@@ -4,6 +4,7 @@ import { EmptyState, ErrorState } from '../../components/States';
 import { apiGet } from '../../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
+import { labelField, labelRunSource, labelRunStatus } from '../../lib/labelMap';
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -48,27 +49,30 @@ export default async function StatusPage() {
         <Card key={run.id}>
           <CardHeader>
             <CardTitle>
-              #{run.id} <span className="muted">{run.source}</span>
+              任务 #{run.id} <span className="muted">{labelRunSource(run.source)}</span>
             </CardTitle>
             <CardDescription>
-              <span className="muted">started:</span> {new Date(run.started_at).toLocaleString()}
+              <span className="muted">{labelField('started_at')}：</span> {new Date(run.started_at).toLocaleString()}
               {' · '}
-              <span className="muted">finished:</span> {run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}
+              <span className="muted">{labelField('finished_at')}：</span>{' '}
+              {run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid">
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <Badge variant={run.status === 'success' ? 'success' : run.status === 'failed' ? 'danger' : 'muted'}>
-                status: {run.status}
+                {labelField('status')}：{labelRunStatus(run.status)}
               </Badge>
               <Badge variant="muted">
-                records: {run.records_success}/{run.records_total} (failed {run.records_failed})
+                {labelField('records')}：{run.records_success}/{run.records_total}（失败 {run.records_failed}）
               </Badge>
               <Badge variant="muted">
-                added/updated/removed: {run.added_count}/{run.updated_count}/{run.removed_count}
+                {labelField('added_updated_removed')}：{run.added_count}/{run.updated_count}/{run.removed_count}
               </Badge>
             </div>
-            <div className="muted">message: {run.message || '-'}</div>
+            <div className="muted">
+              {labelField('message')}：{run.message || '-'}
+            </div>
           </CardContent>
         </Card>
       ))}

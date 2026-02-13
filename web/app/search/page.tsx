@@ -8,6 +8,7 @@ import { Input } from '../../components/ui/input';
 import { Select } from '../../components/ui/select';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
+import { labelField, labelSortBy, labelSortOrder, labelStatus } from '../../lib/labelMap';
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -83,19 +84,19 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <Input name="reg_no" defaultValue={params.reg_no} placeholder="注册证号" />
             <Select name="status" defaultValue={params.status || ''}>
           <option value="">全部状态</option>
-          <option value="active">active</option>
-          <option value="cancelled">cancelled</option>
-          <option value="expired">expired</option>
+          <option value="active">{labelStatus('active')}</option>
+          <option value="cancelled">{labelStatus('cancelled')}</option>
+          <option value="expired">{labelStatus('expired')}</option>
             </Select>
             <Select name="sort_by" defaultValue={sortBy}>
-          <option value="updated_at">updated_at</option>
-          <option value="approved_date">approved_date</option>
-          <option value="expiry_date">expiry_date</option>
-          <option value="name">name</option>
+          <option value="updated_at">{labelSortBy('updated_at')}</option>
+          <option value="approved_date">{labelSortBy('approved_date')}</option>
+          <option value="expiry_date">{labelSortBy('expiry_date')}</option>
+          <option value="name">{labelSortBy('name')}</option>
             </Select>
             <Select name="sort_order" defaultValue={sortOrder}>
-          <option value="desc">desc</option>
-          <option value="asc">asc</option>
+          <option value="desc">{labelSortOrder('desc')}</option>
+          <option value="asc">{labelSortOrder('asc')}</option>
             </Select>
             <Button type="submit">搜索</Button>
           </form>
@@ -112,7 +113,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <CardContent style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <Badge variant="muted">共 {res.data.total} 条</Badge>
               <span className="muted">
-                page {res.data.page} / size {res.data.page_size} / sort {res.data.sort_by} {res.data.sort_order}
+                第 {res.data.page} 页 / 每页 {res.data.page_size} 条 / 排序：{labelSortBy(res.data.sort_by)}（{labelSortOrder(res.data.sort_order)}）
               </span>
             </CardContent>
           </Card>
@@ -127,29 +128,33 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                       <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
                     </CardTitle>
                     <CardDescription>
-                      <span className="muted">UDI-DI:</span> {item.product.udi_di}
+                      <span className="muted">{labelField('udi_di')}：</span> {item.product.udi_di}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="grid">
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Badge variant="muted">reg_no: {item.product.reg_no || '-'}</Badge>
+                      <Badge variant="muted">
+                        {labelField('reg_no')}：{item.product.reg_no || '-'}
+                      </Badge>
                       <Badge
                         variant={
                           item.product.status === 'active'
                             ? 'success'
                             : item.product.status === 'expired'
                               ? 'warning'
-                              : item.product.status === 'cancelled'
+                            : item.product.status === 'cancelled'
                                 ? 'danger'
                                 : 'muted'
                         }
                       >
-                        status: {item.product.status}
+                        {labelField('status')}：{labelStatus(item.product.status)}
                       </Badge>
-                      <Badge variant="muted">expiry: {item.product.expiry_date || '-'}</Badge>
+                      <Badge variant="muted">
+                        {labelField('expiry_date')}：{item.product.expiry_date || '-'}
+                      </Badge>
                     </div>
                     <div>
-                      <span className="muted">company:</span>{' '}
+                      <span className="muted">{labelField('company')}：</span>{' '}
                       {item.product.company ? (
                         <Link href={`/companies/${item.product.company.id}`}>{item.product.company.name}</Link>
                       ) : (
