@@ -1,278 +1,172 @@
-# IVD产品雷达（Dashboard-First）
+# IVD 产品雷达 (IVD Product Radar)
 
-本项目用于汇总 IVD 产品变更信息，提供：
-- 每日数据同步
-- 可检索的产品/企业信息
-- Dashboard 趋势与榜单
-- 每日订阅摘要推送（Webhook / Email）
+面向体外诊断（IVD）的产品数据平台：聚合多数据源（NMPA/UDI/NHSA/招采等），以“证据链可追溯”为原则进行入库、清理归档与指标重算，并在前台/后台统一只展示 IVD 产品。
 
-## 架构图（ASCII）
+An IVD-focused product data platform that ingests authoritative sources (NMPA/UDI/NHSA/procurement), keeps an auditable raw evidence chain, enforces strict IVD-only persistence, supports cleanup/rollback and metrics recomputation, and shows IVD-only results in both user and admin UIs.
 
-```text
-                 +-----------------------------+
-                 |  NMPA UDI Download Source   |
-                 +-------------+---------------+
-                               |
-                               v
-+-------------------+   +------+-------+   +-------------------+
-|  worker (Python)  +---> staging dir  +---> ingest/upsert DB  |
-|  sync + metrics   |   | downloads/... |   | products/change.. |
-+---------+---------+   +------+-------+   +---------+---------+
-          |                        |                   |
-          | daily-metrics          |                   v
-          v                        |          +-------------------+
-+-------------------+              |          | PostgreSQL        |
-| daily_metrics     +--------------+          | companies/...     |
-+-------------------+                         +----+---------+----+
-                                                    |         |
-                                                    v         v
-                                            +-------+--+   +--+-------+
-                                            | FastAPI  |   | Next.js  |
-                                            | /api/*   |   | Dashboard|
-                                            +----------+   +----------+
-```
+---
 
-## 启动步骤
+## Key Features / 核心功能
 
-### 1) 一键启动（推荐）
+- 多数据源同步：NMPA Registry / NMPA UDI / NHSA（可扩展招采等）
+- 严格 IVD 入库口径：默认只入库 `is_ivd=true`；非 IVD 可进入拒收审计（可选）
+- 证据链可追溯：raw 原始文件落地 + `sha256` + `source_url` + `run_id`；解析/抽取保留日志与证据文本
+- 历史清理归档与回滚：先归档再删除，按 `archive_batch_id` 回滚
+- 指标重算：IVD 口径 daily metrics（按 scope 重算）
+- 说明书/附件参数结构化（v1）：规则优先抽取关键参数并展示证据
+- CLI：支持 `dry-run / execute / rollback`
+
+---
+
+## Tech Stack / 技术栈
+
+- Backend: Python, FastAPI, SQLAlchemy, Postgres
+- Frontend: Node.js, Next.js (App Router)
+- Infra: Docker Compose
+- Testing: pytest
+
+---
+
+## Getting Started / 快速开始
+
+### 1) Clone / 克隆项目
 
 ```bash
-docker compose up --build
+git clone https://github.com/qq82125/New-project-2.git
+cd "New project 2"
 ```
 
-### 2) 访问入口
+### 2) Install Dependencies / 安装依赖
 
-- Web Dashboard: [http://localhost:3000](http://localhost:3000)
-- API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-- Admin: [http://localhost:3000/admin](http://localhost:3000/admin)（仅 `admin` 角色可访问）
+#### Option A: Docker (Recommended) / Docker（推荐）
 
-### 3) 停止
-
-```bash
-docker compose down
-```
-
-## 管理员初始化与登录
-
-系统启动时会尝试用环境变量初始化管理员账号：
-
-- `ADMIN_EMAIL` / `ADMIN_PASSWORD`（推荐，默认：`admin@example.com` / `admin12345`）
-- `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`（兼容变量，含义同上）
-
-流程：
-1. `api` 服务启动时，如果该邮箱用户不存在则创建 `role=admin` 用户；如果已存在但不是 admin，会升级为 `admin`。
-2. 打开 Web 登录页 [http://localhost:3000/login](http://localhost:3000/login) 使用上述账号密码登录。
-3. 登录后左侧菜单会出现「管理后台」，进入 [http://localhost:3000/admin](http://localhost:3000/admin)。
-
-说明：
-- 普通用户可通过 [http://localhost:3000/register](http://localhost:3000/register) 注册，但无法访问 `/admin`。
-- Web 管理后台使用的是登录态 + `role=admin`（并非 BasicAuth）。
-
-## 会员体系（手动年度会员制）
-
-### 1) 会员状态字段（users 快照）
-
-系统使用 `users` 表保存“当前会员快照”：
-- `plan`: `free` / `pro_annual`
-- `plan_status`: `inactive` / `active` / `suspended`
-- `plan_expires_at`: 到期时间（`TIMESTAMPTZ`，可为空）
-
-历史开通/续费记录写入：
-- `membership_grants`: 每次开通/续费写一条（`start_at/end_at/reason/note`）
-- `membership_events`: 审计事件（`grant/extend/suspend/revoke`，payload 为 jsonb）
-
-### 2) 权益口径（entitlements）
-
-后端统一计算 `entitlements`（见 `/api/auth/me` 返回）：
-- free 或 inactive 或 suspended 或已过期：
-  - `can_export=false`
-  - `max_subscriptions=3`
-  - `trend_range_days=30`
-- `pro_annual` 且 `active` 且未过期：
-  - `can_export=true`
-  - `max_subscriptions=50`
-  - `trend_range_days=365`
-
-### 3) admin 如何开通/续费/暂停/撤销
-
-推荐使用 Web 管理后台：
-1. admin 登录后进入 [http://localhost:3000/admin/users](http://localhost:3000/admin/users)
-2. 搜索用户邮箱
-3. 点击「开通 / 续费 / 暂停 / 撤销」
-4. 操作成功后列表会自动刷新；详情页可查看 grants 历史
-
-也可直接调用 API（仅 admin 可用）：
-- `POST /api/admin/membership/grant`：开通（默认 12 个月）
-- `POST /api/admin/membership/extend`：续费（在当前到期日基础上延长；过期则从当前时间开始）
-- `POST /api/admin/membership/suspend`：暂停（不改到期日）
-- `POST /api/admin/membership/revoke`：撤销（回到 free/inactive）
-
-排错建议：
-- 登录后访问 `/api/auth/me`：检查 `plan/plan_status/plan_expires_at` 与 `entitlements`
-- `plan_status=suspended` 或 `plan_expires_at` 已过期时，权益会降级为 free
-
-### 4) 本地一键验收流程（注册 → 开通 → 权益生效）
-
-1. 启动：
-```bash
-docker compose up --build
-```
-2. 注册一个普通用户：
-   - 打开 [http://localhost:3000/register](http://localhost:3000/register) 注册并登录
-   - 访问 [http://localhost:8000/docs](http://localhost:8000/docs) 调用 `GET /api/auth/me`，确认 `plan=free` 且 `entitlements.can_export=false`
-3. 用 admin 账号登录并开通年度会员：
-   - 打开 [http://localhost:3000/login](http://localhost:3000/login) 用 `ADMIN_EMAIL/ADMIN_PASSWORD` 登录
-   - 进入 [http://localhost:3000/admin/users](http://localhost:3000/admin/users) 搜索用户并点击「开通」
-4. 切回普通用户验证权益：
-   - 再次调用 `GET /api/auth/me`，确认 `plan=pro_annual`、`plan_status=active`，且 `entitlements` 生效（订阅上限/趋势范围/导出权限）
-
-## 数据源配置（管理后台）
-
-管理后台提供「数据源管理」：
-- 配置会加密存储在 `data_sources.config_encrypted`
-- API 不会返回密码字段（前端也不会回显）
-
-必须配置（docker compose 默认已提供本地开发值）：
-- `DATA_SOURCES_CRYPTO_KEY`
-
-## 本地启动步骤（非 Docker）
-
-1. 启动 Postgres（或使用 `docker compose up db`）
-2. 后端迁移：
-```bash
-cd api
-python -m app.db.migrate
-```
-3. 启动 API：
-```bash
-cd api
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-4. 启动 Web：
-```bash
-cd web
-npm install
-npm run dev
-```
-
-## 数据同步说明
-
-系统包含 `worker` 服务，持续循环执行同步任务：
-- 下载 NMPA 包（支持 checksum）
-- 解压到 `staging`
-- 解析并 upsert 到 `products`
-- 写入 `change_log`
-- 生成 `daily_metrics`
-- 触发每日订阅摘要推送
-
-手动触发（容器内）：
-
-```bash
-# 单次同步
-docker compose exec worker python -m app.workers.cli sync --once
-
-# 生成某日聚合
-docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-08
-
-# 发送某日摘要
-docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-08
-```
-
-管理后台手动触发（Web）：
-- 进入 `/admin`，在「同步控制」区点击「手动触发同步」（有确认弹窗）
-- 对应 API：`POST /api/admin/sync/run`
-
-可重跑说明：
-- `daily_metrics` 按 `metric_date` upsert（同日重跑覆盖更新）
-- 摘要推送按 `(digest_date, subscriber_key, channel)` 去重，默认同日不重复发送
-
-## Dashboard 口径说明
-
-Dashboard 读取后端 `/api/dashboard/*`，核心口径如下：
-
-- `summary`
-  - `total_new`: 指定时间窗内 `change_log.change_type = new`
-  - `total_updated`: 指定时间窗内 `change_log.change_type = update`
-  - `total_removed`: 指定时间窗内 `change_log.change_type in (cancel, expire)`
-  - `latest_active_subscriptions`: 当前 `subscriptions.is_active = true` 数量
-
-- `trend`
-  - 按 `daily_metrics.metric_date` 返回日级序列
-  - 使用字段：`new_products/updated_products/cancelled_products`
-
-- `rankings`
-  - 基于 `daily_metrics` 选取窗口内 Top N 日期（新增/移除）
-
-- `radar`
-  - 使用最近一日 `daily_metrics` 的雷达维度
-
-## 服务健康排查
-
-1. 查看容器状态
-```bash
-docker compose ps
-```
-2. 查看日志
-```bash
-docker compose logs -f api
-docker compose logs -f worker
-docker compose logs -f web
-```
-3. 数据库连通性
-```bash
-docker compose exec db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-```
-
-## 开发时常用命令
-
-### 什么时候用 `docker compose up -d`
-
-适用场景：
-- 只是想把服务拉起来跑（不关心实时日志）
-- 代码没改 Dockerfile/依赖，或者你确定镜像已经是最新的
-
-常用命令：
-```bash
-docker compose up -d
-```
-
-想看日志：
-```bash
-docker compose logs -f api
-docker compose logs -f web
-docker compose logs -f worker
-```
-
-### 什么时候需要 `--build`
-
-适用场景：
-- 改了 `api/requirements.txt`、`web/package*.json` 等依赖文件
-- 改了 `api/Dockerfile`、`web/Dockerfile`、`docker-compose.yml`
-- 改了会影响构建产物的代码，并且你希望容器内立即生效（尤其是 `web` 生产构建）
-
-常用命令：
 ```bash
 docker compose up -d --build
 ```
 
-### 如何只重启单个服务
+#### Option B: Local Python + Node / 本机 Python + Node
 
-只重启（不重建镜像）：
+Backend:
+
 ```bash
-docker compose restart api
-docker compose restart web
-docker compose restart worker
-docker compose restart db
+python -m venv venv
+source venv/bin/activate
+pip install -r api/requirements.txt
 ```
 
-只重建并重启某个服务：
+Frontend:
+
 ```bash
-docker compose up -d --build api
-docker compose up -d --build web
-docker compose up -d --build worker
+cd web
+npm install
 ```
 
-## 可选 CI（基础）
+### 3) Run / 运行
 
-项目包含基础 CI（后端测试 + 前端 build 检查）。
-- 文件：`.github/workflows/ci.yml`
+Docker:
+- Web: http://localhost:3000
+- API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+
+Local:
+
+Backend:
+
+```bash
+PYTHONPATH=api uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Frontend:
+
+```bash
+cd web
+npm run dev
+```
+
+### 4) Run Tests / 运行测试
+
+```bash
+PYTHONPATH=api python -m pytest -q
+```
+
+---
+
+## Usage Example / 使用示例
+
+### CLI / 命令行（示例）
+
+```bash
+# 运行一次 UDI 同步（示例日期）
+python -m api.app.cli source:udi --date 2026-02-13 --mode execute
+
+# 全量 IVD 分类回填（先 dry-run 再 execute）
+python -m api.app.cli ivd:classify --version ivd_v1_20260213 --mode dry-run
+python -m api.app.cli ivd:classify --version ivd_v1_20260213 --mode execute
+
+# 清理非 IVD（先 dry-run 再 execute）
+python -m api.app.cli ivd:cleanup --mode dry-run
+python -m api.app.cli ivd:cleanup --mode execute
+
+# 回滚（按 archive_batch_id）
+python -m api.app.cli ivd:rollback --mode execute --archive-batch-id <batch_id>
+
+# 指标重算（IVD scope）
+python -m api.app.cli metrics:recompute --scope ivd --since 2026-01-01
+```
+
+### API / 接口（示例）
+
+```bash
+# IVD 搜索（后端会强制 is_ivd=true）
+curl "http://localhost:8000/api/products?query=PCR"
+
+# 产品参数（说明书/附件抽取结果）
+curl "http://localhost:8000/api/products/<product_id>/params"
+```
+
+### UI / 页面（示例）
+
+- Dashboard: http://localhost:3000
+- Search: http://localhost:3000/search
+- Admin: http://localhost:3000/admin
+
+---
+
+## Configuration / 配置
+
+### Admin bootstrap / 管理员初始化
+
+启动时可通过环境变量初始化管理员账号（若用户不存在则创建；存在则可升级 role）：
+
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD`（默认：`admin@example.com` / `admin12345`）
+
+### Data sources / 数据源
+
+管理后台的数据源配置会加密存储，需提供：
+
+- `DATA_SOURCES_CRYPTO_KEY`
+
+---
+
+## Documentation / 文档
+
+- Runbook: `docs/RUNBOOK.md`
+- Project structure: `docs/PROJECT_STRUCTURE.md`
+- Architecture notes: `api/docs/ARCH_NOTES.md`
+
+---
+
+## Contributing / 贡献指南
+
+欢迎贡献：
+
+- 提交 Issue：说明问题、复现步骤、期望行为
+- 提交 PR：保持改动小而聚焦，补充必要测试与文档
+- 新增数据源：遵守“低频增量 + 缓存 + 可追溯证据链”，不做对抗式绕过
+
+---
+
+## License
+
+MIT License.
+
