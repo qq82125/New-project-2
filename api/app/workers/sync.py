@@ -4,14 +4,27 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
+from uuid import UUID
 
 import requests
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.engine import URL
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.repositories.source_runs import finish_source_run, start_source_run
+from app.models import DataSource
+from app.repositories.radar import get_admin_config
+from app.repositories.source_runs import (
+    finish_source_run,
+    get_running_source_run,
+    mark_stale_running_runs_failed,
+    start_source_run,
+)
+from app.services.crypto import decrypt_json
 from app.services.crawler import (
     DailyPackage,
     download_file,
@@ -20,6 +33,8 @@ from app.services.crawler import (
     verify_checksum,
 )
 from app.services.ingest import ingest_staging_records, load_staging_records
+from app.services.ivd_classifier import VERSION as IVD_CLASSIFIER_VERSION
+from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 from app.services.metrics import generate_daily_metrics
 from app.services.subscriptions import dispatch_daily_subscription_digest
 
@@ -35,16 +50,121 @@ class SyncResult:
     message: str | None = None
 
 
-def prepare_staging_dirs(staging_root: Path, clean: bool = True) -> tuple[Path, Path]:
-    if clean and staging_root.exists():
-        # Do not remove the mount root itself (e.g. /app/staging volume).
-        for child in staging_root.iterdir():
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=False)
-            else:
-                child.unlink(missing_ok=True)
-    download_dir = staging_root / 'downloads'
-    extract_dir = staging_root / 'extracted'
+def _pick_primary_source(db) -> DataSource | None:
+    try:
+        rows = [x for x in db.scalars(select(DataSource).order_by(DataSource.id.asc())).all() if (x.type or '').strip() == 'postgres']
+    except Exception:
+        return None
+    if not rows:
+        return None
+    # 1) Prefer explicit policy key from admin config.
+    try:
+        cfg = get_admin_config(db, 'ivd_scope_policy')
+        policy = cfg.config_value if cfg and isinstance(cfg.config_value, dict) else {}
+        preferred_name = str(policy.get('primary_source') or '').strip()
+        if preferred_name:
+            for ds in rows:
+                if (ds.name or '').strip() == preferred_name:
+                    return ds
+    except Exception:
+        pass
+    # 2) Prefer active source.
+    active = next((x for x in rows if bool(getattr(x, 'is_active', False))), None)
+    if active:
+        return active
+    # 3) Fallback by name hint.
+    return next((x for x in rows if '主数据源' in (x.name or '') or '注册产品库' in (x.name or '')), None)
+
+
+def _dsn_from_config(cfg: dict) -> URL:
+    query = {}
+    sslmode = cfg.get('sslmode')
+    if sslmode:
+        query['sslmode'] = str(sslmode)
+    return URL.create(
+        'postgresql+psycopg',
+        username=str(cfg.get('username') or ''),
+        password=str(cfg.get('password') or ''),
+        host=str(cfg.get('host') or ''),
+        port=int(cfg.get('port') or 5432),
+        database=str(cfg.get('database') or ''),
+        query=query,
+    )
+
+
+def _sync_from_primary_source(db, run, source: DataSource, *, chunk_size: int = 5000) -> dict:
+    def _json_safe(v):
+        if isinstance(v, (UUID, datetime, date)):
+            return str(v)
+        if isinstance(v, dict):
+            return {str(k): _json_safe(val) for k, val in v.items()}
+        if isinstance(v, list):
+            return [_json_safe(x) for x in v]
+        return v
+
+    source_cfg = decrypt_json(source.config_encrypted)
+    if not isinstance(source_cfg, dict):
+        raise RuntimeError('primary source config invalid')
+    source_query = str(source_cfg.get('source_query') or '').strip()
+    source_table = str(source_cfg.get('source_table') or '').strip() or 'public.products'
+    sql = source_query or f"select * from {source_table}"
+    engine = create_engine(_dsn_from_config(source_cfg), pool_pre_ping=True, poolclass=NullPool)
+    total_scanned = 0
+    total_success = 0
+    total_failed = 0
+    total_filtered = 0
+    total_added = 0
+    total_updated = 0
+    total_removed = 0
+    try:
+        with engine.connect() as conn:
+            rows = conn.execution_options(stream_results=True).execute(
+                text(sql)
+            ).mappings()
+            batch: list[dict] = []
+            for row in rows:
+                batch.append({str(k): _json_safe(v) for k, v in dict(row).items()})
+                if len(batch) >= chunk_size:
+                    s = ingest_staging_records(db, batch, run.id)
+                    total_scanned += int(s.get('total', 0) or 0)
+                    total_success += int(s.get('success', 0) or 0)
+                    total_failed += int(s.get('failed', 0) or 0)
+                    total_filtered += int(s.get('filtered', 0) or 0)
+                    total_added += int(s.get('added', 0) or 0)
+                    total_updated += int(s.get('updated', 0) or 0)
+                    total_removed += int(s.get('removed', 0) or 0)
+                    batch = []
+            if batch:
+                s = ingest_staging_records(db, batch, run.id)
+                total_scanned += int(s.get('total', 0) or 0)
+                total_success += int(s.get('success', 0) or 0)
+                total_failed += int(s.get('failed', 0) or 0)
+                total_filtered += int(s.get('filtered', 0) or 0)
+                total_added += int(s.get('added', 0) or 0)
+                total_updated += int(s.get('updated', 0) or 0)
+                total_removed += int(s.get('removed', 0) or 0)
+    finally:
+        engine.dispose()
+    return {
+        'total': total_scanned,
+        'success': total_success,
+        'failed': total_failed,
+        'filtered': total_filtered,
+        'added': total_added,
+        'updated': total_updated,
+        'removed': total_removed,
+        'source_table': source_table,
+        'source_query_used': bool(source_query),
+    }
+
+
+def prepare_staging_dirs(staging_root: Path, run_id: int, clean: bool = True) -> tuple[Path, Path]:
+    # Use per-run isolated workspace to avoid cross-run cleanup races.
+    run_root = staging_root / f'run_{int(run_id)}'
+    if clean and run_root.exists():
+        shutil.rmtree(run_root, ignore_errors=True)
+    download_dir = run_root / 'downloads'
+    extract_dir = run_root / 'extracted'
     download_dir.mkdir(parents=True, exist_ok=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
     return download_dir, extract_dir
@@ -91,18 +211,67 @@ def sync_nmpa_ivd(
     retry_backoff = max(1, int(getattr(settings, 'sync_retry_backoff_seconds', 5)))
     retry_multiplier = max(1.0, float(getattr(settings, 'sync_retry_backoff_multiplier', 2.0)))
     staging_root = Path(settings.staging_dir)
-    download_dir, extract_dir = prepare_staging_dirs(staging_root, clean=clean_staging)
 
     db = SessionLocal()
+    primary_source = _pick_primary_source(db)
+    run_source_name = 'nmpa_registry' if primary_source else 'nmpa_udi'
+    stale_minutes = max(5, int(getattr(settings, 'sync_stale_run_minutes', 30) or 30))
+    mark_stale_running_runs_failed(db, source=run_source_name, stale_after_minutes=stale_minutes)
+    running = get_running_source_run(db, run_source_name)
+    if running is not None:
+        db.close()
+        return SyncResult(
+            run_id=int(running.id),
+            status='skipped',
+            download_path='',
+            staging_path='',
+            message=f'skipped: existing RUNNING run #{running.id}',
+        )
     run = start_source_run(
         db,
-        source='nmpa_udi',
+        source=run_source_name,
         package_name=None,
         package_md5=checksum if checksum_algorithm == 'md5' else None,
         download_url=package_url,
     )
+    download_dir, extract_dir = prepare_staging_dirs(staging_root, run_id=run.id, clean=clean_staging)
 
     try:
+        if primary_source is not None:
+            stats = _sync_from_primary_source(db, run, primary_source)
+            finish_source_run(
+                db,
+                run,
+                status='success',
+                message=f'primary source synced: {primary_source.name}',
+                records_total=stats['total'],
+                records_success=stats['success'],
+                records_failed=stats['failed'],
+                added_count=stats['added'],
+                updated_count=stats['updated'],
+                removed_count=stats['removed'],
+                ivd_kept_count=stats['success'],
+                non_ivd_skipped_count=stats['filtered'],
+                source_notes={
+                    'mode': 'primary_source',
+                    'primary_source_id': int(primary_source.id),
+                    'primary_source_name': primary_source.name,
+                    'source_table': stats.get('source_table'),
+                    'source_query_used': bool(stats.get('source_query_used')),
+                    'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
+                    'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
+                },
+            )
+            generate_daily_metrics(db)
+            dispatch_daily_subscription_digest(db)
+            return SyncResult(
+                run_id=run.id,
+                status='success',
+                download_path='',
+                staging_path=str(extract_dir),
+                message=f'primary source synced: {primary_source.name}',
+            )
+
         package = (
             _package_from_url(package_url, checksum)
             if package_url
@@ -144,6 +313,13 @@ def sync_nmpa_ivd(
             added_count=stats['added'],
             updated_count=stats['updated'],
             removed_count=stats['removed'],
+            ivd_kept_count=stats['success'],
+            non_ivd_skipped_count=stats['filtered'],
+            source_notes={
+                'ingest_filtered_non_ivd': int(stats['filtered']),
+                'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
+                'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
+            },
         )
         generate_daily_metrics(db)
         dispatch_daily_subscription_digest(db)
@@ -156,6 +332,10 @@ def sync_nmpa_ivd(
         )
     except Exception as exc:
         logger.exception('sync_nmpa_ivd failed')
+        try:
+            db.rollback()
+        except Exception:
+            pass
         finish_source_run(
             db,
             run,

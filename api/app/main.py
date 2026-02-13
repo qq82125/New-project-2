@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
@@ -8,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from secrets import compare_digest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
@@ -22,8 +26,10 @@ from app.repositories.data_sources import (
     list_data_sources,
     update_data_source,
 )
-from app.repositories.products import get_company, get_product, search_products
-from app.repositories.radar import list_admin_configs, upsert_admin_config
+from app.repositories.company_tracking import get_company_tracking_detail, list_company_tracking
+from app.repositories.changes import get_change_detail, get_change_stats, list_recent_changes
+from app.repositories.products import get_company, get_product, list_full_products, search_products
+from app.repositories.radar import get_admin_config, get_product_timeline, list_admin_configs, upsert_admin_config
 from app.repositories.radar import count_active_subscriptions_by_subscriber, create_subscription
 from app.repositories.source_runs import latest_runs, list_source_runs
 from app.repositories.users import create_user, get_user_by_email, get_user_by_id
@@ -44,7 +50,12 @@ from app.schemas.api import (
     ApiResponseCompany,
     ApiResponseAdminConfig,
     ApiResponseAdminConfigs,
+    ApiResponsePublicContactInfo,
     ApiResponseProduct,
+    ApiResponseChangeStats,
+    ApiResponseChangesList,
+    ApiResponseChangeDetail,
+    ApiResponseProductTimeline,
     ApiResponseRadar,
     ApiResponseRankings,
     ApiResponseSearch,
@@ -67,6 +78,7 @@ from app.schemas.api import (
     AuthLoginIn,
     AuthRegisterIn,
     AuthUserOut,
+    PublicContactInfo,
     ApiResponseSubscription,
     SubscriptionCreateIn,
     SubscriptionOut,
@@ -81,6 +93,16 @@ from app.schemas.api import (
     ApiResponseAdminUserDetail,
     ApiResponseAdminUserItem,
     ApiResponseAdminUsers,
+    ApiResponseMe,
+    MeOut,
+    MePlanOut,
+    MeUserOut,
+    ProductTimelineItemOut,
+    ProductTimelineOut,
+    ChangeStatsOut,
+    ChangeListItemOut,
+    ChangesListOut,
+    ChangeDetailOut,
 )
 from app.services.auth import (
     create_session_token,
@@ -90,10 +112,23 @@ from app.services.auth import (
     verify_password,
 )
 from app.services.entitlements import get_entitlements, get_membership_info
-from app.services.exports import export_search_to_csv
+from app.services.exports import export_changes_to_csv, export_search_to_csv
 from app.services.crypto import decrypt_json, encrypt_json
+from app.services.plan import compute_plan
+from app.services.source_audit import run_source_audit
+from app.services.data_quality import run_data_quality_audit
+from app.services.supplement_sync import (
+    DEFAULT_SUPPLEMENT_SOURCE_NAME,
+    run_nmpa_query_supplement_now,
+    run_supplement_sync_now,
+)
+from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 
 app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
+
+PRIMARY_SOURCE_NAME = 'NMPA注册产品库（主数据源）'
+POSTGRES_SOURCE_TYPE = 'postgres'
+LOCAL_REGISTRY_SOURCE_TYPE = 'local_registry'
 
 def _settings():
     return get_settings()
@@ -111,6 +146,7 @@ app.add_middleware(
 
 SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']
 SortOrder = Literal['asc', 'desc']
+SearchMode = Literal['limited', 'full']
 security = HTTPBasic()
 
 
@@ -199,7 +235,7 @@ def _clear_auth_cookie(response: Response) -> None:
         key=cfg.auth_cookie_name,
         value='',
         max_age=0,
-        expires=0,
+        expires='Thu, 01 Jan 1970 00:00:00 GMT',
         httponly=True,
         secure=cfg.auth_cookie_secure,
         samesite='lax',
@@ -238,6 +274,55 @@ def _require_admin_user(current_user: User = Depends(_require_current_user)) -> 
     return current_user
 
 
+def require_admin(current_user: User = Depends(_require_current_user)) -> User:
+    # Public alias for dependency injection (keeps existing logic intact).
+    return _require_admin_user(current_user)
+
+
+def require_pro(
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    p = compute_plan(current_user, db)
+    if not getattr(p, 'is_pro', False):
+        raise HTTPException(
+            status_code=403,
+            detail={'code': 'PRO_REQUIRED', 'message': 'Pro plan required. Please upgrade.'},
+        )
+    return current_user
+
+
+def _raise_pro_required() -> None:
+    raise HTTPException(
+        status_code=403,
+        detail={'code': 'PRO_REQUIRED', 'message': 'Pro plan required. Please upgrade.'},
+    )
+
+
+def _is_pro_user(current_user: User | None, db: Session) -> bool:
+    if not current_user:
+        return False
+    try:
+        return bool(getattr(compute_plan(current_user, db), 'is_pro', False))
+    except Exception:
+        return False
+
+
+def _debug_enabled() -> bool:
+    # Strict-ish gating: enabled by env override, otherwise only when cookie is not secure (dev compose default).
+    if os.environ.get('ENABLE_DEBUG_ENDPOINTS', '').strip().lower() in {'1', 'true', 'yes', 'y'}:
+        return True
+    try:
+        return not bool(_settings().auth_cookie_secure)
+    except Exception:
+        return False
+
+
+def _require_debug_enabled() -> None:
+    if not _debug_enabled():
+        raise HTTPException(status_code=404, detail='Not found')
+
+
 def serialize_company(company) -> CompanyOut:
     return CompanyOut(id=company.id, name=company.name, country=company.country)
 
@@ -252,6 +337,23 @@ def serialize_product(product) -> ProductOut:
         approved_date=product.approved_date,
         expiry_date=product.expiry_date,
         class_name=product.class_name,
+        ivd_category=getattr(product, 'ivd_category', None),
+        company=serialize_company(product.company) if product.company else None,
+    )
+
+
+def serialize_product_limited(product) -> ProductOut:
+    # Keep schema stable but trim optional fields for Free users (summary view).
+    return ProductOut(
+        id=product.id,
+        udi_di=product.udi_di,
+        reg_no=product.reg_no,
+        name=product.name,
+        status=product.status,
+        approved_date=None,
+        expiry_date=product.expiry_date,
+        class_name=None,
+        ivd_category=getattr(product, 'ivd_category', None),
         company=serialize_company(product.company) if product.company else None,
     )
 
@@ -274,20 +376,101 @@ def bootstrap_admin() -> None:
     cfg = _settings()
     email = normalize_email(cfg.bootstrap_admin_email)
     password = cfg.bootstrap_admin_password
-    if not email or '@' not in email or not password:
-        return
 
     db = SessionLocal()
     try:
-        existing = get_user_by_email(db, email)
-        if existing:
-            if existing.role != 'admin':
-                existing.role = 'admin'
-                db.add(existing)
-                db.commit()
-            return
-        password_hash = hash_password(password)
-        create_user(db, email=email, password_hash=password_hash, role='admin')
+        if email and '@' in email and password:
+            existing = get_user_by_email(db, email)
+            if existing:
+                if existing.role != 'admin':
+                    existing.role = 'admin'
+                    db.add(existing)
+                    db.commit()
+            else:
+                password_hash = hash_password(password)
+                create_user(db, email=email, password_hash=password_hash, role='admin')
+
+        # Keep data-source policy aligned with current scope upgrade:
+        # NMPA registration as primary source and UDI as supplement source.
+        rows = list_data_sources(db)
+        if rows:
+            primary = None
+            supplement = None
+            for ds in rows:
+                n = (ds.name or '').strip()
+                n0 = n.lower()
+                if primary is None and ('主源' in n or '注册产品库' in n or '主数据源' in n):
+                    primary = ds
+                if supplement is None and ('补全' in n or '纠错' in n or '补充' in n or 'udi' in n0):
+                    supplement = ds
+            if primary is None:
+                primary = next(
+                    (
+                        x
+                        for x in rows
+                        if (
+                            'nmpa' in (x.name or '').lower()
+                            and '补全' not in (x.name or '')
+                            and '纠错' not in (x.name or '')
+                            and '补充' not in (x.name or '')
+                            and 'udi' not in (x.name or '').lower()
+                        )
+                    ),
+                    None,
+                )
+            if primary is None:
+                primary = next((x for x in rows if bool(getattr(x, 'is_active', False))), rows[0])
+            if supplement is None:
+                supplement = next((x for x in rows if x.id != primary.id), None)
+
+            name_to_id = {(x.name or '').strip(): int(x.id) for x in rows}
+            if primary and primary.name != PRIMARY_SOURCE_NAME and PRIMARY_SOURCE_NAME not in name_to_id:
+                primary = update_data_source(db, int(primary.id), name=PRIMARY_SOURCE_NAME) or primary
+            if supplement and supplement.name != DEFAULT_SUPPLEMENT_SOURCE_NAME and DEFAULT_SUPPLEMENT_SOURCE_NAME not in name_to_id:
+                supplement = update_data_source(db, int(supplement.id), name=DEFAULT_SUPPLEMENT_SOURCE_NAME) or supplement
+            if primary and not bool(getattr(primary, 'is_active', False)):
+                activate_data_source(db, int(primary.id))
+
+            sched = get_admin_config(db, 'source_supplement_schedule')
+            sched_raw = sched.config_value if (sched and isinstance(sched.config_value, dict)) else {}
+            upsert_admin_config(
+                db,
+                'source_supplement_schedule',
+                {
+                    'enabled': bool(sched_raw.get('enabled', True)),
+                    'interval_hours': max(1, int(sched_raw.get('interval_hours', 24) or 24)),
+                    'batch_size': max(50, int(sched_raw.get('batch_size', 1000) or 1000)),
+                    'recent_hours': max(1, int(sched_raw.get('recent_hours', 72) or 72)),
+                    'source_name': (supplement.name if supplement else DEFAULT_SUPPLEMENT_SOURCE_NAME),
+                    'nmpa_query_enabled': bool(sched_raw.get('nmpa_query_enabled', True)),
+                    'nmpa_query_interval_hours': max(1, int(sched_raw.get('nmpa_query_interval_hours', 24) or 24)),
+                    'nmpa_query_batch_size': max(10, int(sched_raw.get('nmpa_query_batch_size', 200) or 200)),
+                    'nmpa_query_url': str(
+                        sched_raw.get('nmpa_query_url')
+                        or 'https://www.nmpa.gov.cn/datasearch/home-index.html?itemId=2c9ba384759c957701759ccef50f032b#category=ylqx'
+                    ),
+                    'nmpa_query_timeout_seconds': max(
+                        5, int(sched_raw.get('nmpa_query_timeout_seconds', 20) or 20)
+                    ),
+                },
+            )
+
+        upsert_admin_config(
+            db,
+            'ivd_scope_policy',
+            {
+                'primary_source': PRIMARY_SOURCE_NAME,
+                'supplement_source': DEFAULT_SUPPLEMENT_SOURCE_NAME,
+                'allowlist': list(IVD_SCOPE_ALLOWLIST),
+                'updated_by': 'startup-bootstrap',
+            },
+        )
+    except Exception:
+        # Never block API startup on optional bootstrap sync.
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -329,6 +512,33 @@ def me(current_user: User = Depends(_require_current_user)) -> ApiResponseAuthUs
     return _ok(_auth_user_out(current_user))
 
 
+@app.get('/api/me', response_model=ApiResponseMe)
+def me_v2(
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseMe:
+    p = compute_plan(current_user, db)
+    data = MeOut(
+        user=MeUserOut(id=current_user.id, email=current_user.email, role=current_user.role),
+        plan=MePlanOut(
+            plan=p.plan,
+            plan_status=p.plan_status,
+            plan_expires_at=p.plan_expires_at,
+            is_pro=p.is_pro,
+            is_admin=p.is_admin,
+        ),
+    )
+    return _ok(data)
+
+
+@app.get('/api/_debug/pro-required')
+def debug_pro_required(
+    _dbg: None = Depends(_require_debug_enabled),
+    user: User = Depends(require_pro),
+) -> dict:
+    return _ok({'ok': True, 'user_id': user.id, 'email': user.email})
+
+
 @app.post('/api/users/onboarded', response_model=ApiResponseOnboarded)
 def mark_onboarded(
     current_user: User = Depends(_require_current_user),
@@ -344,6 +554,30 @@ def mark_onboarded(
         except Exception:
             pass
     return _ok({'onboarded': True})
+
+
+@app.get('/api/public/contact-info', response_model=ApiResponsePublicContactInfo)
+def public_contact_info(db: Session = Depends(get_db)) -> ApiResponsePublicContactInfo:
+    """Public (no-auth) contact info used by /contact and upgrade flows.
+
+    Data lives in admin_configs so admins can edit without code changes.
+    Only whitelisted fields are exposed.
+    """
+    cfg = get_admin_config(db, 'public_contact_info')
+    v = cfg.config_value if (cfg and isinstance(cfg.config_value, dict)) else {}
+
+    def _clean_str(x):
+        if not isinstance(x, str):
+            return None
+        s = x.strip()
+        return s or None
+
+    data = PublicContactInfo(
+        email=_clean_str(v.get('email')),
+        wecom=_clean_str(v.get('wecom')),
+        form_url=_clean_str(v.get('form_url')),
+    )
+    return _ok(data)
 
 
 @app.get('/api/admin/me', response_model=ApiResponseAuthUser)
@@ -399,8 +633,12 @@ def dashboard_trend(
 def dashboard_rankings(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=10, ge=1, le=100),
+    current_user: User = Depends(_require_current_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseRankings:
+    ent = get_entitlements(current_user)
+    if getattr(current_user, 'role', None) != 'admin' and ent.trend_range_days <= 30:
+        raise HTTPException(status_code=403, detail='Rankings are available on Pro only. Upgrade to Pro.')
     top_new, top_removed = get_rankings(db, days, limit)
     data = DashboardRankingsData(
         top_new_days=[DashboardRankingItem(metric_date=row[0], value=int(row[1])) for row in top_new],
@@ -410,7 +648,13 @@ def dashboard_rankings(
 
 
 @app.get('/api/dashboard/radar', response_model=ApiResponseRadar)
-def dashboard_radar(db: Session = Depends(get_db)) -> ApiResponseRadar:
+def dashboard_radar(
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseRadar:
+    ent = get_entitlements(current_user)
+    if getattr(current_user, 'role', None) != 'admin' and ent.trend_range_days <= 30:
+        raise HTTPException(status_code=403, detail='Radar is available on Pro only. Upgrade to Pro.')
     metric = get_radar(db)
     if not metric:
         return _ok(DashboardRadarData(metric_date=None, items=[]))
@@ -438,8 +682,34 @@ def search(
     page_size: int = Query(default=20, ge=1, le=100),
     sort_by: SortBy = Query(default='updated_at'),
     sort_order: SortOrder = Query(default='desc'),
+    mode: SearchMode | None = Query(default=None, description='limited (free) or full (pro)'),
+    current_user: User | None = Depends(_get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> ApiResponseSearch:
+    ent = get_entitlements(current_user or object())
+    is_admin = getattr(current_user, 'role', None) == 'admin' if current_user else False
+    is_pro = ent.trend_range_days > 30
+
+    # Pro-only full mode: Free users cannot request full data even if bypassing the frontend.
+    plan_is_pro = _is_pro_user(current_user, db)
+    effective_mode: SearchMode = mode or ('full' if plan_is_pro else 'limited')
+    if effective_mode == 'full' and not plan_is_pro:
+        _raise_pro_required()
+
+    if effective_mode == 'limited' and not plan_is_pro:
+        # Enforce "first 10 only" regardless of requested pagination params.
+        page = 1
+        page_size = 10
+
+    # Pro-only search features:
+    # - larger page size
+    # - sorting by expiry_date (used for expiry risk workflows)
+    if not is_admin and not is_pro:
+        if page_size > 20:
+            raise HTTPException(status_code=403, detail='Free users can only use page_size<=20. Upgrade to Pro for more.')
+        if sort_by == 'expiry_date':
+            raise HTTPException(status_code=403, detail='Sorting by expiry_date is available on Pro only. Upgrade to Pro.')
+
     products, total = search_products(
         db,
         query=q,
@@ -451,13 +721,53 @@ def search(
         sort_by=sort_by,
         sort_order=sort_order,
     )
+    serializer = serialize_product if effective_mode == 'full' else serialize_product_limited
     data = SearchData(
         total=total,
         page=page,
         page_size=page_size,
         sort_by=sort_by,
         sort_order=sort_order,
-        items=[SearchItem(product=serialize_product(item)) for item in products],
+        items=[SearchItem(product=serializer(item)) for item in products],
+    )
+    return _ok(data)
+
+
+@app.get('/api/products/full', response_model=ApiResponseSearch)
+def products_full(
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    class_prefix: str | None = Query(default=None),
+    ivd_category: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=200),
+    sort_by: SortBy = Query(default='updated_at'),
+    sort_order: SortOrder = Query(default='desc'),
+    _user: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> ApiResponseSearch:
+    items, total = list_full_products(
+        db,
+        query=q,
+        company=company,
+        reg_no=reg_no,
+        status=status,
+        class_prefix=class_prefix,
+        ivd_category=ivd_category,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    data = SearchData(
+        total=total,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        items=[SearchItem(product=serialize_product(item)) for item in items],
     )
     return _ok(data)
 
@@ -476,6 +786,29 @@ def export_search_csv(
 
     csv_text = export_search_to_csv(db, plan='pro', q=q, company=company, registration_no=reg_no)
     headers = {'Content-Disposition': 'attachment; filename="ivd_search_export.csv"'}
+    return Response(content=csv_text, media_type='text/csv; charset=utf-8', headers=headers)
+
+
+@app.get('/api/export/changes.csv')
+def export_changes_csv(
+    days: int = Query(default=30, ge=1, le=365),
+    change_type: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> Response:
+    csv_text = export_changes_to_csv(
+        db,
+        plan='pro',
+        days=days,
+        change_type=change_type,
+        q=q,
+        company=company,
+        reg_no=reg_no,
+    )
+    headers = {'Content-Disposition': 'attachment; filename="ivd_changes_export.csv"'}
     return Response(content=csv_text, media_type='text/csv; charset=utf-8', headers=headers)
 
 
@@ -539,11 +872,53 @@ def create_subscription_api(
 
 
 @app.get('/api/products/{product_id}', response_model=ApiResponseProduct)
-def product_detail(product_id: str, db: Session = Depends(get_db)) -> ApiResponseProduct:
+def product_detail(
+    product_id: str,
+    mode: SearchMode | None = Query(default=None, description='limited (free) or full (pro)'),
+    current_user: User | None = Depends(_get_current_user_optional),
+    db: Session = Depends(get_db),
+) -> ApiResponseProduct:
+    plan_is_pro = _is_pro_user(current_user, db)
+    effective_mode: SearchMode = mode or ('full' if plan_is_pro else 'limited')
+    if effective_mode == 'full' and not plan_is_pro:
+        _raise_pro_required()
+
     product = get_product(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail='Product not found')
+    if effective_mode == 'limited' and not plan_is_pro:
+        return _ok(serialize_product_limited(product))
     return _ok(serialize_product(product))
+
+
+@app.get('/api/products/{product_id}/timeline', response_model=ApiResponseProductTimeline)
+def product_timeline(
+    product_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> ApiResponseProductTimeline:
+    from uuid import UUID
+
+    try:
+        pid = UUID(str(product_id))
+    except Exception:
+        raise HTTPException(status_code=404, detail='Product not found')
+
+    items = get_product_timeline(db, product_id=pid, limit=limit)
+    out = ProductTimelineOut(
+        product_id=pid,
+        items=[
+            ProductTimelineItemOut(
+                id=int(x.id),
+                change_type=str(getattr(x, 'change_type', '') or ''),
+                changed_fields=getattr(x, 'changed_fields', None) or {},
+                changed_at=getattr(x, 'changed_at', None),
+            )
+            for x in items
+        ],
+    )
+    return _ok(out)
 
 
 @app.get('/api/companies/{company_id}', response_model=ApiResponseCompany)
@@ -554,9 +929,60 @@ def company_detail(company_id: str, db: Session = Depends(get_db)) -> ApiRespons
     return _ok(serialize_company(company))
 
 
+@app.get('/api/company-tracking')
+def companies_tracking_list(
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=200),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> dict:
+    items, total = list_company_tracking(db, query=q, page=page, page_size=page_size)
+    return _ok(
+        {
+            'total': total,
+            'page': page,
+            'page_size': page_size,
+            'items': items,
+        }
+    )
+
+
+@app.get('/api/company-tracking/{company_id}')
+def company_tracking_detail(
+    company_id: str,
+    days: int = Query(default=30, ge=1, le=365),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> dict:
+    effective_page_size = int(limit) if limit is not None else int(page_size)
+    out = get_company_tracking_detail(
+        db,
+        company_id=company_id,
+        days=days,
+        page=page,
+        page_size=effective_page_size,
+    )
+    if not out:
+        raise HTTPException(status_code=404, detail='Company tracking not found')
+    return _ok(out)
+
+
 @app.get('/api/status', response_model=ApiResponseStatus)
-def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
+def status(
+    current_user: User | None = Depends(_get_current_user_optional),
+    db: Session = Depends(get_db),
+) -> ApiResponseStatus:
+    ent = get_entitlements(current_user or object())
+    is_admin = getattr(current_user, 'role', None) == 'admin' if current_user else False
+    is_pro = ent.trend_range_days > 30
+
     runs = latest_runs(db)
+    if not is_admin and not is_pro:
+        runs = runs[:1]
     data = StatusData(
         latest_runs=[
             StatusItem(
@@ -570,6 +996,8 @@ def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
                 added_count=getattr(run, 'added_count', 0),
                 updated_count=getattr(run, 'updated_count', 0),
                 removed_count=getattr(run, 'removed_count', 0),
+                ivd_kept_count=getattr(run, 'ivd_kept_count', 0),
+                non_ivd_skipped_count=getattr(run, 'non_ivd_skipped_count', 0),
                 started_at=run.started_at,
                 finished_at=run.finished_at,
             )
@@ -577,6 +1005,78 @@ def status(db: Session = Depends(get_db)) -> ApiResponseStatus:
         ]
     )
     return _ok(data)
+
+
+@app.get('/api/changes/stats', response_model=ApiResponseChangeStats)
+def changes_stats(
+    days: int = Query(default=30, ge=1, le=365),
+    _user: User | None = Depends(_get_current_user_optional),
+    db: Session = Depends(get_db),
+) -> ApiResponseChangeStats:
+    total, by_type = get_change_stats(db, days=days)
+    return _ok(ChangeStatsOut(days=days, total=total, by_type=by_type))
+
+
+@app.get('/api/changes', response_model=ApiResponseChangesList)
+def changes_list(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=50, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    change_type: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> ApiResponseChangesList:
+    effective_page_size = int(page_size or limit or 50)
+    rows, total = list_recent_changes(
+        db,
+        days=days,
+        limit=effective_page_size,
+        page=page,
+        page_size=effective_page_size,
+        change_type=change_type,
+        q=q,
+        company=company,
+        reg_no=reg_no,
+    )
+    items = []
+    for change, product in rows:
+        items.append(
+            ChangeListItemOut(
+                id=int(change.id),
+                change_type=str(getattr(change, 'change_type', '') or ''),
+                change_date=getattr(change, 'change_date', None),
+                changed_at=getattr(change, 'changed_at', None),
+                product=serialize_product(product),
+            )
+        )
+    return _ok(ChangesListOut(days=days, total=total, page=page, page_size=effective_page_size, items=items))
+
+
+@app.get('/api/changes/{change_id}', response_model=ApiResponseChangeDetail)
+def change_detail(
+    change_id: int,
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> ApiResponseChangeDetail:
+    change = get_change_detail(db, change_id=change_id)
+    if not change:
+        raise HTTPException(status_code=404, detail='Change not found')
+    out = ChangeDetailOut(
+        id=int(change.id),
+        change_type=str(getattr(change, 'change_type', '') or ''),
+        change_date=getattr(change, 'change_date', None),
+        changed_at=getattr(change, 'changed_at', None),
+        entity_type=str(getattr(change, 'entity_type', '') or ''),
+        entity_id=getattr(change, 'entity_id', None),
+        changed_fields=getattr(change, 'changed_fields', None) or {},
+        before_json=getattr(change, 'before_json', None),
+        after_json=getattr(change, 'after_json', None),
+    )
+    return _ok(out)
 
 
 def _spawn_sync_thread() -> None:
@@ -609,6 +1109,9 @@ def admin_source_runs(
             'added_count': int(getattr(r, 'added_count', 0) or 0),
             'updated_count': int(getattr(r, 'updated_count', 0) or 0),
             'removed_count': int(getattr(r, 'removed_count', 0) or 0),
+            'ivd_kept_count': int(getattr(r, 'ivd_kept_count', 0) or 0),
+            'non_ivd_skipped_count': int(getattr(r, 'non_ivd_skipped_count', 0) or 0),
+            'source_notes': getattr(r, 'source_notes', None),
             'started_at': r.started_at,
             'finished_at': getattr(r, 'finished_at', None),
         }
@@ -626,14 +1129,185 @@ def admin_sync_run(
     return _ok({'queued': True})
 
 
+@app.post('/api/admin/source-audit/run')
+def admin_run_source_audit(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    report = run_source_audit(db, _settings())
+    upsert_admin_config(db, 'source_audit_last', report)
+    return _ok({'report': report})
+
+
+@app.get('/api/admin/source-audit/last')
+def admin_get_last_source_audit(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    cfg = get_admin_config(db, 'source_audit_last')
+    return _ok({'report': (cfg.config_value if cfg else None)})
+
+
+@app.post('/api/admin/source-supplement/run')
+def admin_run_source_supplement(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    report = run_supplement_sync_now(db, reason='manual:admin')
+    return _ok({'report': report})
+
+
+@app.get('/api/admin/source-supplement/last')
+def admin_get_last_source_supplement(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    cfg = get_admin_config(db, 'source_supplement_last_run')
+    return _ok({'report': (cfg.config_value if cfg else None)})
+
+
+@app.post('/api/admin/source-nmpa-query/run')
+def admin_run_source_nmpa_query(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    report = run_nmpa_query_supplement_now(db, reason='manual:admin')
+    return _ok({'report': report})
+
+
+@app.get('/api/admin/source-nmpa-query/last')
+def admin_get_last_source_nmpa_query(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    cfg = get_admin_config(db, 'source_nmpa_query_last_run')
+    return _ok({'report': (cfg.config_value if cfg else None)})
+
+
+@app.post('/api/admin/data-quality/run')
+def admin_run_data_quality_audit(
+    sample_limit: int = Query(default=20, ge=1, le=100),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    report = run_data_quality_audit(db, sample_limit=sample_limit)
+    upsert_admin_config(db, 'data_quality_last', report)
+    return _ok({'report': report})
+
+
+@app.get('/api/admin/data-quality/last')
+def admin_get_last_data_quality_audit(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    cfg = get_admin_config(db, 'data_quality_last')
+    return _ok({'report': (cfg.config_value if cfg else None)})
+
+
 def _ds_preview(cfg: dict) -> dict:
     return {
+        'folder': cfg.get('folder') or '',
+        'ingest_new': bool(cfg.get('ingest_new', True)),
+        'ingest_chunk_size': int(cfg.get('ingest_chunk_size') or 2000),
         'host': cfg.get('host') or '',
         'port': int(cfg.get('port') or 5432),
         'database': cfg.get('database') or '',
         'username': cfg.get('username') or '',
         'sslmode': cfg.get('sslmode'),
+        'source_table': cfg.get('source_table') or 'public.products',
+        'source_query': cfg.get('source_query') or None,
     }
+
+
+def _normalize_data_source_config(type_: str, cfg: dict) -> dict:
+    if type_ == POSTGRES_SOURCE_TYPE:
+        return {
+            'host': str(cfg.get('host') or '').strip(),
+            'port': int(cfg.get('port') or 5432),
+            'database': str(cfg.get('database') or '').strip(),
+            'username': str(cfg.get('username') or '').strip(),
+            'password': cfg.get('password'),
+            'sslmode': (str(cfg.get('sslmode')).strip() if cfg.get('sslmode') not in {None, ''} else None),
+            'source_table': str(cfg.get('source_table') or 'public.products').strip() or 'public.products',
+            'source_query': (str(cfg.get('source_query')).strip() if cfg.get('source_query') not in {None, ''} else None),
+        }
+    if type_ == LOCAL_REGISTRY_SOURCE_TYPE:
+        folder = str(cfg.get('folder') or '').strip()
+        if not folder:
+            raise HTTPException(status_code=400, detail='config.folder is required for local_registry source')
+        ingest_chunk_size = max(100, min(10000, int(cfg.get('ingest_chunk_size') or 2000)))
+        return {
+            'folder': folder,
+            'ingest_new': bool(cfg.get('ingest_new', True)),
+            'ingest_chunk_size': ingest_chunk_size,
+        }
+    raise HTTPException(status_code=400, detail='Unsupported data source type')
+
+
+def _ds_out(ds, cfg: dict) -> dict:
+    return {
+        'id': ds.id,
+        'name': ds.name,
+        'type': ds.type,
+        'is_active': bool(ds.is_active),
+        'updated_at': ds.updated_at,
+        'config_preview': _ds_preview(cfg),
+    }
+
+
+def _test_postgres_connection(cfg: dict) -> tuple[bool, str]:
+    host = str(cfg.get('host') or '').strip()
+    database = str(cfg.get('database') or '').strip()
+    username = str(cfg.get('username') or '').strip()
+    password = cfg.get('password')
+    sslmode = cfg.get('sslmode')
+    try:
+        port = int(cfg.get('port') or 5432)
+    except Exception:
+        port = 5432
+
+    if not host or not database or not username:
+        return False, 'Missing required fields (host/database/username)'
+    if not password:
+        return False, 'Missing password'
+
+    query = {}
+    if sslmode:
+        query['sslmode'] = str(sslmode)
+
+    url = URL.create(
+        'postgresql+psycopg',
+        username=username,
+        password=str(password),
+        host=host,
+        port=port,
+        database=database,
+        query=query,
+    )
+
+    try:
+        engine = create_engine(url, poolclass=NullPool, pool_pre_ping=True)
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        return True, 'ok'
+    except Exception as e:
+        return False, str(e)
+
+
+def _test_local_registry_source(cfg: dict) -> tuple[bool, str]:
+    folder = str(cfg.get('folder') or '').strip()
+    if not folder:
+        return False, 'Missing required field (folder)'
+    if not os.path.isdir(folder):
+        return False, f'Folder not found: {folder}'
+    try:
+        names = os.listdir(folder)
+    except Exception as e:
+        return False, str(e)
+    has_candidate = any((name.lower().endswith('.xlsx') or name.lower().endswith('.zip')) for name in names)
+    if not has_candidate:
+        return False, 'No .xlsx/.zip files found in folder'
+    return True, 'ok'
 
 
 @app.get('/api/admin/data-sources')
@@ -644,16 +1318,7 @@ def admin_list_data_sources_api(
     items = []
     for ds in list_data_sources(db):
         cfg = decrypt_json(ds.config_encrypted)
-        items.append(
-            {
-                'id': ds.id,
-                'name': ds.name,
-                'type': ds.type,
-                'is_active': bool(ds.is_active),
-                'updated_at': ds.updated_at,
-                'config_preview': _ds_preview(cfg),
-            }
-        )
+        items.append(_ds_out(ds, cfg))
     return _ok({'items': items})
 
 
@@ -664,8 +1329,8 @@ def admin_create_data_source_api(
     db: Session = Depends(get_db),
 ) -> dict:
     type_ = (payload.get('type') or '').strip()
-    if type_ != 'postgres':
-        raise HTTPException(status_code=400, detail='Only postgres data sources are supported')
+    if type_ not in {POSTGRES_SOURCE_TYPE, LOCAL_REGISTRY_SOURCE_TYPE}:
+        raise HTTPException(status_code=400, detail='Only postgres/local_registry data sources are supported')
 
     name = (payload.get('name') or '').strip()
     if not name:
@@ -674,6 +1339,7 @@ def admin_create_data_source_api(
     cfg = payload.get('config') if isinstance(payload.get('config'), dict) else None
     if not cfg:
         raise HTTPException(status_code=400, detail='config is required')
+    cfg = _normalize_data_source_config(type_, cfg)
 
     token = encrypt_json(cfg)
     try:
@@ -682,16 +1348,92 @@ def admin_create_data_source_api(
         db.rollback()
         raise HTTPException(status_code=409, detail='Data source name already exists')
 
-    return _ok(
-        {
-            'id': ds.id,
-            'name': ds.name,
-            'type': ds.type,
-            'is_active': bool(ds.is_active),
-            'updated_at': ds.updated_at,
-            'config_preview': _ds_preview(cfg),
-        }
-    )
+    return _ok(_ds_out(ds, cfg))
+
+
+@app.put('/api/admin/data-sources/{data_source_id}')
+def admin_update_data_source_api(
+    data_source_id: int,
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    ds = get_data_source(db, data_source_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail='Data source not found')
+    type_ = (getattr(ds, 'type', None) or '').strip()
+    if type_ not in {POSTGRES_SOURCE_TYPE, LOCAL_REGISTRY_SOURCE_TYPE}:
+        raise HTTPException(status_code=400, detail='Unsupported data source type')
+
+    name = (payload.get('name') or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='name is required')
+
+    cfg_in = payload.get('config') if isinstance(payload.get('config'), dict) else None
+    if not cfg_in:
+        raise HTTPException(status_code=400, detail='config is required')
+
+    # Merge config with existing, keeping password unless explicitly provided.
+    old_cfg = decrypt_json(ds.config_encrypted)
+    if not isinstance(old_cfg, dict):
+        old_cfg = {}
+    new_cfg = {**old_cfg, **cfg_in}
+    if type_ == POSTGRES_SOURCE_TYPE:
+        if 'password' not in cfg_in:
+            # Keep existing password.
+            if 'password' in old_cfg:
+                new_cfg['password'] = old_cfg.get('password')
+        else:
+            # If provided but blank, still keep old one.
+            if not cfg_in.get('password') and 'password' in old_cfg:
+                new_cfg['password'] = old_cfg.get('password')
+    new_cfg = _normalize_data_source_config(type_, new_cfg)
+
+    token = encrypt_json(new_cfg)
+    try:
+        ds2 = update_data_source(db, data_source_id, name=name, config_encrypted=token)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='Data source name already exists')
+    if not ds2:
+        raise HTTPException(status_code=404, detail='Data source not found')
+    return _ok(_ds_out(ds2, new_cfg))
+
+
+@app.post('/api/admin/data-sources/{data_source_id}/activate')
+def admin_activate_data_source_api(
+    data_source_id: int,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    ds = activate_data_source(db, data_source_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail='Data source not found')
+    return _ok({'id': ds.id})
+
+
+@app.post('/api/admin/data-sources/{data_source_id}/test')
+def admin_test_data_source_api(
+    data_source_id: int,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    ds = get_data_source(db, data_source_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail='Data source not found')
+    type_ = (getattr(ds, 'type', None) or '').strip()
+    if type_ not in {POSTGRES_SOURCE_TYPE, LOCAL_REGISTRY_SOURCE_TYPE}:
+        raise HTTPException(status_code=400, detail='Unsupported data source type')
+
+    cfg = decrypt_json(ds.config_encrypted)
+    if not isinstance(cfg, dict):
+        raise HTTPException(status_code=400, detail='Invalid data source config')
+
+    if type_ == POSTGRES_SOURCE_TYPE:
+        ok, message = _test_postgres_connection(cfg)
+    else:
+        ok, message = _test_local_registry_source(cfg)
+    return _ok({'ok': bool(ok), 'message': message or ('ok' if ok else 'failed')})
 
 
 @app.delete('/api/admin/data-sources/{data_source_id}')
