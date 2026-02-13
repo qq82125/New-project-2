@@ -82,3 +82,12 @@ export function labelRunSource(value?: string | null) {
   return RUN_SOURCE_LABELS[v] || (value || '-');
 }
 
+export function formatUdiDiDisplay(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '-';
+  const m = raw.match(/^reg:\s*(.+)$/i);
+  if (m && m[1]) {
+    return `（未提供，使用注册证号关联）${m[1]}`;
+  }
+  return raw;
+}

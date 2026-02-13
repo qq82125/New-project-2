@@ -5,7 +5,7 @@ import { EmptyState, ErrorState } from '../../../components/States';
 import { apiGet } from '../../../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
-import { labelField, labelStatus } from '../../../lib/labelMap';
+import { formatUdiDiDisplay, labelField, labelStatus } from '../../../lib/labelMap';
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -62,7 +62,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               {labelField('reg_no')}：{res.data.reg_no || '-'}
             </Badge>
             <Badge variant="muted">
-              {labelField('udi_di')}：{res.data.udi_di}
+              {labelField('udi_di')}：{formatUdiDiDisplay(res.data.udi_di)}
             </Badge>
             <Badge
               variant={

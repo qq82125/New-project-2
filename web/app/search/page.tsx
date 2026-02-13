@@ -8,7 +8,7 @@ import { Input } from '../../components/ui/input';
 import { Select } from '../../components/ui/select';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
-import { labelField, labelSortBy, labelSortOrder, labelStatus } from '../../lib/labelMap';
+import { formatUdiDiDisplay, labelField, labelSortBy, labelSortOrder, labelStatus } from '../../lib/labelMap';
 
 const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
 
@@ -128,7 +128,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                       <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
                     </CardTitle>
                     <CardDescription>
-                      <span className="muted">{labelField('udi_di')}：</span> {item.product.udi_di}
+                      <span className="muted">{labelField('udi_di')}：</span> {formatUdiDiDisplay(item.product.udi_di)}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="grid">
