@@ -4,8 +4,8 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -59,6 +59,13 @@ class Product(Base):
     specification: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default='ACTIVE', index=True)
+    is_ivd: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=None, index=True)
+    ivd_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ivd_subtypes: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text), nullable=True)
+    ivd_reason: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    ivd_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    ivd_source: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    ivd_confidence: Mapped[Optional[float]] = mapped_column(Numeric(3, 2), nullable=True)
     company_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('companies.id'), nullable=True
     )
@@ -74,6 +81,107 @@ class Product(Base):
 
     company: Mapped[Optional[Company]] = relationship('Company', back_populates='products')
     registration: Mapped[Optional[Registration]] = relationship('Registration', back_populates='products')
+
+
+class ProductArchive(Base):
+    __tablename__ = 'products_archive'
+
+    archive_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    udi_di: Mapped[str] = mapped_column(String(128), index=True)
+    reg_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(500), index=True)
+    class_name: Mapped[Optional[str]] = mapped_column('class', String(120), nullable=True)
+    approved_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    specification: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='ACTIVE', index=True)
+    is_ivd: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, default=None, index=True)
+    ivd_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ivd_subtypes: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text), nullable=True)
+    ivd_reason: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    ivd_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    company_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    raw_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    raw: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    cleanup_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    archive_batch_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class RawDocument(Base):
+    __tablename__ = 'raw_documents'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    doc_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    run_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    parse_log: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ProductVariant(Base):
+    __tablename__ = 'product_variants'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    di: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    registry_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey('products.id'), nullable=True)
+    product_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model_spec: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    packaging: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    manufacturer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_ivd: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    ivd_category: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    ivd_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProductParam(Base):
+    __tablename__ = 'product_params'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    di: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    registry_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    param_code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    value_num: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    value_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    range_low: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    range_high: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    conditions: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    evidence_text: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.5)
+    extract_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProductRejected(Base):
+    __tablename__ = 'products_rejected'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True)
+    reason: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    ivd_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 
 class SourceRun(Base):
@@ -92,6 +200,9 @@ class SourceRun(Base):
     added_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_count: Mapped[int] = mapped_column(Integer, default=0)
     removed_count: Mapped[int] = mapped_column(Integer, default=0)
+    ivd_kept_count: Mapped[int] = mapped_column(Integer, default=0)
+    non_ivd_skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_notes: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -245,4 +356,16 @@ class MembershipEvent(Base):
     actor_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('users.id'), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(Text, index=True)
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DataCleanupRun(Base):
+    __tablename__ = 'data_cleanup_runs'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    archived_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deleted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

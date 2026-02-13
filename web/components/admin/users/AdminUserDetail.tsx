@@ -13,8 +13,7 @@ import { EmptyState, ErrorState } from '../../States';
 
 import MembershipActionModal, { ActionType } from './MembershipActionModal';
 import type { AdminMembershipGrant, AdminUserDetail as AdminUserDetailT, AdminUserItem, ApiResp } from './types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { PLAN_STATUS_ZH, PLAN_ZH, ROLE_ZH, labelFrom } from '../../../constants/display';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return '-';
@@ -58,7 +57,7 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${userId}?grants_limit=50`, {
+      const res = await fetch(`/api/admin/users/${userId}?grants_limit=50`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -117,7 +116,7 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <Badge variant="muted">#{user!.id}</Badge>
                   <Badge variant="muted">{user!.email}</Badge>
-                  <Badge variant={user!.role === 'admin' ? 'success' : 'muted'}>{user!.role}</Badge>
+                  <Badge variant={user!.role === 'admin' ? 'success' : 'muted'}>{labelFrom(ROLE_ZH, user!.role)}</Badge>
                 </div>
                 <div className="muted">创建时间：{fmtTs(user!.created_at)}</div>
                 <div className="muted">
@@ -128,14 +127,14 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
 
             <Card>
               <CardHeader>
-                <CardTitle>会员状态</CardTitle>
-                <CardDescription>plan/状态/到期日与剩余天数。</CardDescription>
-              </CardHeader>
-              <CardContent className="grid" style={{ gap: 10 }}>
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                  <Badge variant="muted">{user!.plan}</Badge>
-                  <Badge variant={statusVariant(user!.plan_status)}>{user!.plan_status}</Badge>
-                  <Badge variant="muted">expires: {fmtTs(user!.plan_expires_at)}</Badge>
+              <CardTitle>会员状态</CardTitle>
+              <CardDescription>当前计划、状态、到期日与剩余天数。</CardDescription>
+            </CardHeader>
+            <CardContent className="grid" style={{ gap: 10 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Badge variant="muted">{labelFrom(PLAN_ZH, user!.plan)}</Badge>
+                  <Badge variant={statusVariant(user!.plan_status)}>{labelFrom(PLAN_STATUS_ZH, user!.plan_status)}</Badge>
+                  <Badge variant="muted">到期时间: {fmtTs(user!.plan_expires_at)}</Badge>
                 </div>
                 <div className="muted">
                   剩余天数：
@@ -172,8 +171,8 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
 
           <Card>
             <CardHeader>
-              <CardTitle>Grant 历史</CardTitle>
-              <CardDescription>展示最近 50 条 membership_grants（start/end/reason/note）。</CardDescription>
+              <CardTitle>会员授予历史</CardTitle>
+              <CardDescription>展示最近 50 条 membership_grants（开始/结束/原因/备注）。</CardDescription>
             </CardHeader>
             <CardContent>
               {grants.length === 0 ? (
@@ -183,12 +182,12 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
                   <Table>
                     <thead>
                       <tr>
-                        <th style={{ width: 140 }}>Start</th>
-                        <th style={{ width: 140 }}>End</th>
-                        <th style={{ width: 120 }}>Plan</th>
-                        <th style={{ width: 160 }}>Created</th>
-                        <th>Reason</th>
-                        <th>Note</th>
+                        <th style={{ width: 140 }}>开始时间</th>
+                        <th style={{ width: 140 }}>结束时间</th>
+                        <th style={{ width: 120 }}>计划</th>
+                        <th style={{ width: 160 }}>创建时间</th>
+                        <th>原因</th>
+                        <th>备注</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -197,7 +196,7 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
                           <td className="muted">{fmtTs(g.start_at)}</td>
                           <td className="muted">{fmtTs(g.end_at)}</td>
                           <td>
-                            <Badge variant="muted">{g.plan}</Badge>
+                            <Badge variant="muted">{labelFrom(PLAN_ZH, g.plan)}</Badge>
                           </td>
                           <td className="muted">{fmtTs(g.created_at)}</td>
                           <td className="muted" style={{ maxWidth: 320 }}>
@@ -230,4 +229,3 @@ export default function AdminUserDetail({ userId }: { userId: number }) {
     </div>
   );
 }
-

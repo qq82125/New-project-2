@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import MembershipEvent, MembershipGrant, User
@@ -93,45 +93,53 @@ def admin_grant_membership(
     note: str | None,
 ) -> User | None:
     now = datetime.now(timezone.utc)
-    with db.begin():
-        user = db.get(User, user_id)
-        if not user:
-            return None
-        if is_active_pro_annual(user, now=now):
-            # Caller should use extend instead.
-            raise ValueError('already_active_pro')
+    # NOTE: Session may already be in a transaction (SQLAlchemy autobegin),
+    # e.g. if the request did a read before calling into this write path.
+    # Avoid `with db.begin()` which raises if a txn is already active.
+    user = db.get(User, user_id)
+    if not user:
+        return None
+    if is_active_pro_annual(user, now=now):
+        # Caller should use extend instead.
+        raise ValueError('already_active_pro')
 
-        win = compute_grant_window(months=months, start_at=start_at, now=now)
-        _create_grant(
-            db,
-            user_id=user_id,
-            granted_by_user_id=actor_user_id,
-            plan=plan,
-            start_at=win.start_at,
-            end_at=win.end_at,
-            reason=reason,
-            note=note,
-        )
-        _create_event(
-            db,
-            user_id=user_id,
-            actor_user_id=actor_user_id,
-            event_type='grant',
-            payload={
-                'plan': plan,
-                'months': months,
-                'start_at': win.start_at.isoformat(),
-                'end_at': win.end_at.isoformat(),
-                'reason': reason,
-                'note': note,
-            },
-        )
+    win = compute_grant_window(months=months, start_at=start_at, now=now)
+    _create_grant(
+        db,
+        user_id=user_id,
+        granted_by_user_id=actor_user_id,
+        plan=plan,
+        start_at=win.start_at,
+        end_at=win.end_at,
+        reason=reason,
+        note=note,
+    )
+    _create_event(
+        db,
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        event_type='grant',
+        payload={
+            'plan': plan,
+            'months': months,
+            'start_at': win.start_at.isoformat(),
+            'end_at': win.end_at.isoformat(),
+            'reason': reason,
+            'note': note,
+        },
+    )
 
-        user.plan = plan
-        user.plan_status = 'active'
-        user.plan_expires_at = win.end_at
-        db.add(user)
-    db.refresh(user)  # type: ignore[arg-type]
+    user.plan = plan
+    user.plan_status = 'active'
+    user.plan_expires_at = win.end_at
+    db.add(user)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(user)
     return user
 
 
@@ -145,41 +153,46 @@ def admin_extend_membership(
     note: str | None,
 ) -> User | None:
     now = datetime.now(timezone.utc)
-    with db.begin():
-        user = db.get(User, user_id)
-        if not user:
-            return None
-        win = compute_extend_window(months=months, current_expires_at=getattr(user, 'plan_expires_at', None), now=now)
+    user = db.get(User, user_id)
+    if not user:
+        return None
+    win = compute_extend_window(months=months, current_expires_at=getattr(user, 'plan_expires_at', None), now=now)
 
-        _create_grant(
-            db,
-            user_id=user_id,
-            granted_by_user_id=actor_user_id,
-            plan='pro_annual',
-            start_at=win.start_at,
-            end_at=win.end_at,
-            reason=reason,
-            note=note,
-        )
-        _create_event(
-            db,
-            user_id=user_id,
-            actor_user_id=actor_user_id,
-            event_type='extend',
-            payload={
-                'months': months,
-                'start_at': win.start_at.isoformat(),
-                'end_at': win.end_at.isoformat(),
-                'reason': reason,
-                'note': note,
-            },
-        )
+    _create_grant(
+        db,
+        user_id=user_id,
+        granted_by_user_id=actor_user_id,
+        plan='pro_annual',
+        start_at=win.start_at,
+        end_at=win.end_at,
+        reason=reason,
+        note=note,
+    )
+    _create_event(
+        db,
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        event_type='extend',
+        payload={
+            'months': months,
+            'start_at': win.start_at.isoformat(),
+            'end_at': win.end_at.isoformat(),
+            'reason': reason,
+            'note': note,
+        },
+    )
 
-        user.plan = 'pro_annual'
-        user.plan_status = 'active'
-        user.plan_expires_at = win.end_at
-        db.add(user)
-    db.refresh(user)  # type: ignore[arg-type]
+    user.plan = 'pro_annual'
+    user.plan_status = 'active'
+    user.plan_expires_at = win.end_at
+    db.add(user)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(user)
     return user
 
 
@@ -191,23 +204,39 @@ def admin_suspend_membership(
     reason: str | None,
     note: str | None,
 ) -> User | None:
-    with db.begin():
-        user = db.get(User, user_id)
-        if not user:
-            return None
-        prev = {'plan': user.plan, 'plan_status': user.plan_status, 'plan_expires_at': user.plan_expires_at}
+    now = datetime.now(timezone.utc)
+    user = db.get(User, user_id)
+    if not user:
+        return None
+    prev = {'plan': user.plan, 'plan_status': user.plan_status, 'plan_expires_at': user.plan_expires_at}
 
-        user.plan_status = 'suspended'
-        db.add(user)
-
-        _create_event(
-            db,
-            user_id=user_id,
-            actor_user_id=actor_user_id,
-            event_type='suspend',
-            payload={'prev': _jsonable(prev), 'reason': reason, 'note': note},
+    # Keep plan computation consistent: suspended users must not retain active grants.
+    db.execute(
+        update(MembershipGrant)
+        .where(
+            MembershipGrant.user_id == user_id,
+            MembershipGrant.end_at > now,
         )
-    db.refresh(user)  # type: ignore[arg-type]
+        .values(end_at=now)
+    )
+
+    user.plan_status = 'suspended'
+    db.add(user)
+
+    _create_event(
+        db,
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        event_type='suspend',
+        payload={'prev': _jsonable(prev), 'reason': reason, 'note': note},
+    )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(user)
     return user
 
 
@@ -219,25 +248,41 @@ def admin_revoke_membership(
     reason: str | None,
     note: str | None,
 ) -> User | None:
-    with db.begin():
-        user = db.get(User, user_id)
-        if not user:
-            return None
-        prev = {'plan': user.plan, 'plan_status': user.plan_status, 'plan_expires_at': user.plan_expires_at}
+    now = datetime.now(timezone.utc)
+    user = db.get(User, user_id)
+    if not user:
+        return None
+    prev = {'plan': user.plan, 'plan_status': user.plan_status, 'plan_expires_at': user.plan_expires_at}
 
-        user.plan = 'free'
-        user.plan_status = 'inactive'
-        user.plan_expires_at = None
-        db.add(user)
-
-        _create_event(
-            db,
-            user_id=user_id,
-            actor_user_id=actor_user_id,
-            event_type='revoke',
-            payload={'prev': _jsonable(prev), 'reason': reason, 'note': note},
+    # Keep plan computation consistent: revoked users must not retain active grants.
+    db.execute(
+        update(MembershipGrant)
+        .where(
+            MembershipGrant.user_id == user_id,
+            MembershipGrant.end_at > now,
         )
-    db.refresh(user)  # type: ignore[arg-type]
+        .values(end_at=now)
+    )
+
+    user.plan = 'free'
+    user.plan_status = 'inactive'
+    user.plan_expires_at = None
+    db.add(user)
+
+    _create_event(
+        db,
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        event_type='revoke',
+        payload={'prev': _jsonable(prev), 'reason': reason, 'note': note},
+    )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(user)
     return user
 
 
@@ -249,4 +294,3 @@ def _jsonable(v: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = val
     return out
-

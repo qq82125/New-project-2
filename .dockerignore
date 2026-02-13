@@ -1,0 +1,26 @@
+.git
+.gitignore
+.DS_Store
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.pyc
+
+# Node / Next
+**/node_modules/
+web/.next/
+npm-debug.log*
+
+# Runtime artifacts
+staging/
+pgdata/
+*.log
+
+# Local editor/temp
+.idea/
+.vscode/
+*.swp
+*.tmp

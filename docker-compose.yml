@@ -64,7 +64,7 @@ services:
       db:
         condition: service_healthy
     command: >
-      sh -c "python -m app.db.migrate && python -m app.workers.cli loop"
+      sh -c "python -m app.workers.cli loop"
     volumes:
       - ./staging:/app/staging
     restart: unless-stopped

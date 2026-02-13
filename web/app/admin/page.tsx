@@ -5,7 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../../lib/api-server';
 
 type AdminMe = { id: number; email: string; role: string };
 type AdminMeResp = { code: number; message: string; data: AdminMe };
@@ -13,6 +13,7 @@ type AdminMeResp = { code: number; message: string; data: AdminMe };
 export const dynamic = 'force-dynamic';
 
 async function getAdminMe(): Promise<AdminMe> {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const res = await fetch(`${API_BASE}/api/admin/me`, {
     method: 'GET',
@@ -53,6 +54,12 @@ export default async function AdminHomePage() {
           <CardDescription>用户与会员管理走 cookie 登录态，不需要额外的 BasicAuth 账号密码。</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Link className="ui-btn" href="/admin/data-sources">
+            数据源管理
+          </Link>
+          <Link className="ui-btn" href="/admin/contact">
+            联系信息
+          </Link>
           <Link className="ui-btn" href="/admin/users">
             用户与会员
           </Link>
@@ -61,4 +68,3 @@ export default async function AdminHomePage() {
     </div>
   );
 }
-

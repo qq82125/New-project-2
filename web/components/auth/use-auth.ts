@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { fetchWithProHandling } from '../../lib/fetch-client';
 
 export type MeData = {
   id: number;
@@ -23,8 +24,6 @@ type AuthState =
 
 type Listener = (state: AuthState) => void;
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-
 let memoryState: AuthState = { loading: true, user: null };
 const listeners = new Set<Listener>();
 
@@ -39,7 +38,7 @@ function setState(next: AuthState) {
 
 export async function refreshAuth() {
   try {
-    const res = await fetch(`${API_BASE}/api/auth/me`, {
+    const res = await fetchWithProHandling(`/api/auth/me`, {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',

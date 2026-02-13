@@ -6,7 +6,7 @@ import { apiGet } from '../../../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../../../lib/api-server';
 
 type CompanyData = {
   id: string;
@@ -15,6 +15,7 @@ type CompanyData = {
 };
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const meRes = await fetch(`${API_BASE}/api/auth/me`, {
     method: 'GET',

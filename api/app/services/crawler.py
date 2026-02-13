@@ -104,13 +104,35 @@ def verify_md5(file_path: Path, expected_md5: str | None) -> bool:
 
 def extract_to_staging(archive_path: Path, staging_dir: Path) -> Path:
     staging_dir.mkdir(parents=True, exist_ok=True)
-    if archive_path.suffix.lower() == '.zip':
-        with zipfile.ZipFile(archive_path, 'r') as zf:
-            zf.extractall(staging_dir)
-    elif archive_path.suffix.lower() in {'.gz', '.tgz'} or archive_path.name.endswith('.tar.gz'):
-        with tarfile.open(archive_path, 'r:*') as tf:
-            tf.extractall(staging_dir)
-    else:
+    def _extract_one(src: Path, dst: Path) -> bool:
+        # Prefer content-based detection because upstream attachments may carry
+        # non-canonical names (e.g. `download.html?path=...` while content is ZIP).
+        if zipfile.is_zipfile(src):
+            with zipfile.ZipFile(src, 'r') as zf:
+                zf.extractall(dst)
+            return True
+        if tarfile.is_tarfile(src) or src.suffix.lower() in {'.gz', '.tgz'} or src.name.endswith('.tar.gz'):
+            with tarfile.open(src, 'r:*') as tf:
+                tf.extractall(dst)
+            return True
+        return False
+
+    if not _extract_one(archive_path, staging_dir):
         target = staging_dir / archive_path.name
         target.write_bytes(archive_path.read_bytes())
+        return staging_dir
+
+    # Recursively extract nested archive files up to a safe depth.
+    for _ in range(4):
+        nested = [p for p in staging_dir.rglob('*') if p.is_file() and (zipfile.is_zipfile(p) or tarfile.is_tarfile(p))]
+        if not nested:
+            break
+        extracted_any = False
+        for nested_file in nested:
+            out_dir = nested_file.parent / nested_file.stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+            if _extract_one(nested_file, out_dir):
+                extracted_any = True
+        if not extracted_any:
+            break
     return staging_dir

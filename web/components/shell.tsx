@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import AuthNav from './AuthNav';
 import { cn } from './ui/cn';
 import { useAuth } from './auth/use-auth';
+import ProNavGroup from './plan/ProNavGroup';
 
 function AppHeader() {
   return (
@@ -54,6 +55,8 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
         })}
       </div>
 
+      <ProNavGroup />
+
       <div className="app-sidenav__footer">
         {isAdmin ? (
           <>
@@ -64,10 +67,25 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
               管理后台
             </Link>
             <Link
+              href="/admin/data-sources"
+              className={cn(
+                'app-sidenav__item',
+                pathname.startsWith('/admin/data-sources') ? 'is-active' : undefined
+              )}
+            >
+              数据源管理
+            </Link>
+            <Link
               href="/admin/users"
               className={cn('app-sidenav__item', pathname.startsWith('/admin/users') ? 'is-active' : undefined)}
             >
               用户与会员
+            </Link>
+            <Link
+              href="/admin/contact"
+              className={cn('app-sidenav__item', pathname.startsWith('/admin/contact') ? 'is-active' : undefined)}
+            >
+              联系信息
             </Link>
           </>
         ) : null}

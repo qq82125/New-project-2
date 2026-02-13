@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import csv
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from bs4 import BeautifulSoup
 
-from app.models import ChangeLog, Company, Product
+from app.models import ChangeLog, Company, Product, ProductRejected
+from app.services.ivd_classifier import classify_ivd
 from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 
 TRACKED_FIELDS = (
@@ -22,9 +25,54 @@ TRACKED_FIELDS = (
     'class',
 )
 
+_INVALID_NAME_LITERALS = {'na', 'n/a', 'null', 'none', 'unknown', 'test', 'demo', '-', '--', '/', '_'}
+
+
+def is_valid_product_name(name: str | None) -> bool:
+    text = (name or '').strip()
+    if not text:
+        return False
+    if text.lower() in _INVALID_NAME_LITERALS:
+        return False
+    # reject symbol-only names like "/" "..." "——"
+    if not any(ch.isalnum() or ('\u4e00' <= ch <= '\u9fff') for ch in text):
+        return False
+    return True
+
 
 def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+
+    def _load_xml_records(file_path: Path) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        try:
+            # Stream parse large XML files and only keep <device> records.
+            for _event, elem in ET.iterparse(file_path, events=('end',)):
+                if elem.tag != 'device':
+                    continue
+                row: dict[str, Any] = {}
+                for child in list(elem):
+                    # Keep flat scalar fields only; ignore nested lists/objects such as contactList.
+                    if len(child) == 0:
+                        row[child.tag] = (child.text or '').strip()
+                if row:
+                    out.append(row)
+                elem.clear()
+            return out
+        except ET.ParseError:
+            # Fallback for malformed XML tokens in upstream package.
+            text = file_path.read_text(encoding='utf-8', errors='ignore')
+            soup = BeautifulSoup(text, 'html.parser')
+            for dev in soup.find_all('device'):
+                row: dict[str, Any] = {}
+                for child in dev.find_all(recursive=False):
+                    if child.find(True, recursive=False) is not None:
+                        continue
+                    row[child.name] = child.get_text(strip=True)
+                if row:
+                    out.append(row)
+        return out
+
     for file_path in staging_dir.rglob('*'):
         if file_path.suffix.lower() == '.json':
             with file_path.open('r', encoding='utf-8') as f:
@@ -37,6 +85,8 @@ def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
             with file_path.open('r', encoding='utf-8-sig', newline='') as f:
                 reader = csv.DictReader(f)
                 records.extend([dict(row) for row in reader])
+        elif file_path.suffix.lower() == '.xml':
+            records.extend(_load_xml_records(file_path))
     return records
 
 
@@ -86,6 +136,8 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
     company = get_or_create_company(db, record)
     existing = find_existing_product(db, record)
 
+    ivd_meta = record.raw.get('_ivd') if isinstance(record.raw, dict) else None
+
     if not existing:
         product = Product(
             name=record.name,
@@ -95,6 +147,21 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
             approved_date=record.approved_date,
             expiry_date=record.expiry_date,
             class_name=record.class_name,
+            is_ivd=(bool(ivd_meta.get('is_ivd')) if isinstance(ivd_meta, dict) else None),
+            ivd_category=(str(ivd_meta.get('ivd_category')) if isinstance(ivd_meta, dict) and ivd_meta.get('ivd_category') is not None else None),
+            ivd_subtypes=(
+                [str(x) for x in (ivd_meta.get('ivd_subtypes') or []) if str(x).strip()]
+                if isinstance(ivd_meta, dict) and isinstance(ivd_meta.get('ivd_subtypes'), list)
+                else None
+            ),
+            ivd_reason=(ivd_meta.get('reason') if isinstance(ivd_meta, dict) and isinstance(ivd_meta.get('reason'), dict) else None),
+            ivd_version=(int(ivd_meta.get('version')) if isinstance(ivd_meta, dict) and ivd_meta.get('version') is not None else 1),
+            ivd_source=(str(ivd_meta.get('source')) if isinstance(ivd_meta, dict) and ivd_meta.get('source') is not None else None),
+            ivd_confidence=(
+                float(ivd_meta.get('confidence'))
+                if isinstance(ivd_meta, dict) and ivd_meta.get('confidence') is not None
+                else None
+            ),
             company_id=company.id if company else None,
             raw=dict(record.raw),
             raw_json=dict(record.raw),
@@ -127,7 +194,21 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
     existing.approved_date = record.approved_date
     existing.expiry_date = record.expiry_date
     existing.class_name = record.class_name
-    existing.company_id = company.id if company else None
+    if isinstance(ivd_meta, dict):
+        existing.is_ivd = bool(ivd_meta.get('is_ivd'))
+        existing.ivd_category = str(ivd_meta.get('ivd_category')) if ivd_meta.get('ivd_category') is not None else None
+        existing.ivd_subtypes = (
+            [str(x) for x in (ivd_meta.get('ivd_subtypes') or []) if str(x).strip()]
+            if isinstance(ivd_meta.get('ivd_subtypes'), list)
+            else None
+        )
+        existing.ivd_reason = ivd_meta.get('reason') if isinstance(ivd_meta.get('reason'), dict) else None
+        existing.ivd_version = int(ivd_meta.get('version') or 1)
+        existing.ivd_source = str(ivd_meta.get('source')) if ivd_meta.get('source') is not None else None
+        existing.ivd_confidence = float(ivd_meta.get('confidence')) if ivd_meta.get('confidence') is not None else None
+    if company:
+        # Never wipe an existing company link when incoming row has no company info.
+        existing.company_id = company.id
     existing.raw = dict(record.raw)
     existing.raw_json = dict(record.raw)
     after_state = _product_state(existing)
@@ -158,11 +239,49 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
 
 
 def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_run_id: int | None) -> dict[str, int]:
-    stats = {'total': len(records), 'success': 0, 'failed': 0, 'added': 0, 'updated': 0, 'removed': 0}
+    stats = {'total': len(records), 'success': 0, 'failed': 0, 'filtered': 0, 'added': 0, 'updated': 0, 'removed': 0}
+
+    def _extract_classification_code(raw: dict[str, Any], record: ProductRecord) -> str:
+        for key in ('classification_code', 'class_code', 'flbm', 'cplb', '类别', '管理类别', 'class', 'class_name'):
+            value = raw.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return str(record.class_name or '').strip()
 
     for raw in records:
         try:
             record = map_raw_record(raw)
+            if not is_valid_product_name(record.name):
+                stats['filtered'] += 1
+                continue
+            decision = classify_ivd(
+                {
+                    'name': record.name,
+                    'classification_code': _extract_classification_code(raw, record),
+                }
+            )
+            if not bool(decision.get('is_ivd')):
+                source_key = str(record.udi_di or record.reg_no or record.name or '').strip() or None
+                db.add(
+                    ProductRejected(
+                        source='NMPA_UDI',
+                        source_key=source_key,
+                        reason={'decision': decision},
+                        ivd_version=str(decision.get('version') or ''),
+                    )
+                )
+                stats['filtered'] += 1
+                continue
+            # Persist explainable IVD classification metadata with each accepted record.
+            record.raw['_ivd'] = {
+                'is_ivd': True,
+                'ivd_category': decision.get('ivd_category'),
+                'ivd_subtypes': decision.get('ivd_subtypes') or [],
+                'reason': decision.get('reason'),
+                'version': decision.get('version', 1),
+                'source': decision.get('source') or 'RULE',
+                'confidence': decision.get('confidence', 0.5),
+            }
             action, _ = upsert_product_record(db, record, source_run_id)
             stats['success'] += 1
             if action == 'added':
@@ -172,6 +291,8 @@ def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_ru
             elif action == 'removed':
                 stats['removed'] += 1
         except Exception:
+            # A failed flush leaves the transaction in failed state; rollback and continue.
+            db.rollback()
             stats['failed'] += 1
 
     db.commit()

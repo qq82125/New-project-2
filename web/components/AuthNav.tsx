@@ -4,15 +4,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from './ui/button';
 import { clearAuth, useAuth } from './auth/use-auth';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { fetchWithProHandling } from '../lib/fetch-client';
 
 export default function AuthNav() {
   const router = useRouter();
   const auth = useAuth();
 
   const onLogout = async () => {
-    await fetch(`${API_BASE}/api/auth/logout`, {
+    await fetchWithProHandling(`/api/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     }).catch(() => null);

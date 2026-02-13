@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from sqlalchemy import Select, asc, desc, func, or_, select
+from sqlalchemy import Select, String, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Company, Product
@@ -17,12 +17,17 @@ def build_search_query(
     company: str | None,
     reg_no: str | None,
     status: str | None,
+    ivd_filter: bool | None = True,
 ) -> Select[tuple[Product]]:
     stmt = (
         select(Product)
         .options(joinedload(Product.company))
         .outerjoin(Company, Product.company_id == Company.id)
     )
+    if ivd_filter is True:
+        stmt = stmt.where(Product.is_ivd.is_(True))
+    elif ivd_filter is False:
+        stmt = stmt.where(Product.is_ivd.is_(False))
     if query:
         like = f'%{query}%'
         stmt = stmt.where(
@@ -69,13 +74,79 @@ def search_products(
     return items, total
 
 
+def list_full_products(
+    db: Session,
+    *,
+    query: str | None,
+    company: str | None,
+    reg_no: str | None,
+    status: str | None,
+    class_prefix: str | None,
+    ivd_category: str | None,
+    page: int,
+    page_size: int,
+    sort_by: SortBy,
+    sort_order: SortOrder,
+) -> tuple[list[Product], int]:
+    stmt = build_search_query(query, company, reg_no, status)
+    if class_prefix:
+        stmt = stmt.where(Product.class_name.ilike(f'{class_prefix}%'))
+    if ivd_category:
+        stmt = stmt.where(Product.ivd_category == ivd_category)
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    sort_col = {
+        'updated_at': Product.updated_at,
+        'approved_date': Product.approved_date,
+        'expiry_date': Product.expiry_date,
+        'name': Product.name,
+    }[sort_by]
+    order_expr = asc(sort_col) if sort_order == 'asc' else desc(sort_col)
+    rows = db.scalars(stmt.order_by(order_expr, Product.id.desc()).offset((page - 1) * page_size).limit(page_size))
+    return list(rows.unique().all()), int(total)
+
+
 def get_product(db: Session, product_id: str) -> Product | None:
     try:
         normalized_id = uuid.UUID(str(product_id))
     except (ValueError, TypeError):
         return None
-    stmt = select(Product).options(joinedload(Product.company)).where(Product.id == normalized_id)
+    stmt = select(Product).options(joinedload(Product.company)).where(Product.id == normalized_id, Product.is_ivd.is_(True))
     return db.scalar(stmt)
+
+
+def admin_search_products(
+    db: Session,
+    *,
+    query: str | None,
+    company: str | None,
+    reg_no: str | None,
+    status: str | None,
+    is_ivd: bool | None,
+    ivd_category: str | None,
+    ivd_version: str | None,
+    page: int,
+    page_size: int,
+    sort_by: SortBy,
+    sort_order: SortOrder,
+) -> tuple[list[Product], int]:
+    base_stmt = build_search_query(query, company, reg_no, status, ivd_filter=is_ivd)
+    if ivd_category:
+        base_stmt = base_stmt.where(Product.ivd_category == ivd_category)
+    if ivd_version:
+        # ivd_version is numeric in current schema; compare as string for compatibility.
+        base_stmt = base_stmt.where(func.cast(Product.ivd_version, String) == str(ivd_version))
+    total = db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
+    sort_col = {
+        'updated_at': Product.updated_at,
+        'approved_date': Product.approved_date,
+        'expiry_date': Product.expiry_date,
+        'name': Product.name,
+    }[sort_by]
+    order_expr = asc(sort_col) if sort_order == 'asc' else desc(sort_col)
+    stmt = base_stmt.order_by(order_expr, Product.id.desc()).offset((page - 1) * page_size).limit(page_size)
+    items = list(db.scalars(stmt).unique().all())
+    return items, int(total)
 
 
 def get_company(db: Session, company_id: str) -> Company | None:

@@ -150,6 +150,53 @@ button {
   background: linear-gradient(90deg, #59a98e, #176b52);
 }
 
+.dashboard-compact {
+  padding-top: 10px;
+}
+
+.dashboard-spark .spark-row {
+  grid-template-columns: 68px 1fr 56px;
+  gap: 6px;
+}
+
+.dashboard-spark .spark-bar {
+  height: 6px;
+}
+
+.dashboard-compact-table .ui-table th,
+.dashboard-compact-table .ui-table td,
+.ui-table.dashboard-compact-table th,
+.ui-table.dashboard-compact-table td {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.dashboard-rankings-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-rankings-grid .ui-table-wrap {
+  overflow-x: hidden;
+}
+
+.dashboard-rankings-grid .ui-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.dashboard-rankings-grid .ui-table th,
+.dashboard-rankings-grid .ui-table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 880px) {
+  .dashboard-rankings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* App Shell */
 .app-shell {
   min-height: 100vh;

@@ -11,8 +11,6 @@ import { Modal } from '../../ui/modal';
 
 import type { AdminUserItem, ApiResp } from './types';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
-
 export type ActionType = 'grant' | 'extend' | 'suspend' | 'revoke';
 
 function actionTitle(type: ActionType) {
@@ -61,7 +59,7 @@ export default function MembershipActionModal({
       if (type === 'grant') body.plan = 'pro_annual';
       if (canMonths) body.months = months;
 
-      const res = await fetch(`${API_BASE}${endpoint}`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

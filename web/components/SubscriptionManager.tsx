@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { toast } from './ui/use-toast';
 import { useAuth } from './auth/use-auth';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { PRO_SALES_HREF } from '../constants/pro';
+import { fetchWithProHandling } from '../lib/fetch-client';
 
 type Subscription = {
   id: number;
@@ -45,7 +45,7 @@ export function SubscriptionManager({
   async function createSub() {
     if (!target.trim()) return;
     setLoading(true);
-    const res = await fetch(`${API}/api/subscriptions`, {
+    const res = await fetchWithProHandling(`/api/subscriptions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       credentials: 'include',
@@ -121,7 +121,7 @@ export function SubscriptionManager({
           </>
         ) : null}
         {' '}
-        · <Link href="/contact?intent=pro">联系开通/试用</Link>
+        · <Link href={PRO_SALES_HREF}>联系开通/试用</Link>
       </div>
 
       {subs.map((sub) => (

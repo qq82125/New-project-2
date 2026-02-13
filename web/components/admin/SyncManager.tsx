@@ -8,8 +8,7 @@ import { Badge } from '../ui/badge';
 import { Skeleton } from '../ui/skeleton';
 import { toast } from '../ui/use-toast';
 import { EmptyState, ErrorState } from '../States';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { RUN_STATUS_ZH, labelFrom } from '../../constants/display';
 
 type SourceRun = {
   id: number;
@@ -22,6 +21,12 @@ type SourceRun = {
   added_count: number;
   updated_count: number;
   removed_count: number;
+  ivd_kept_count?: number;
+  non_ivd_skipped_count?: number;
+  source_notes?: {
+    ivd_classifier_version?: number;
+    ingest_filtered_non_ivd?: number;
+  } | null;
   started_at: string;
   finished_at?: string | null;
 };
@@ -43,7 +48,7 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/source-runs?limit=50`, {
+      const res = await fetch(`/api/admin/source-runs?limit=50`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -69,7 +74,7 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/sync/run`, {
+      const res = await fetch(`/api/admin/sync/run`, {
         method: 'POST',
         credentials: 'include',
       });
@@ -141,6 +146,7 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
                   <th style={{ width: 180 }}>开始时间</th>
                   <th style={{ width: 180 }}>结束时间</th>
                   <th style={{ width: 220 }}>统计</th>
+                  <th style={{ width: 220 }}>IVD过滤</th>
                   <th>信息</th>
                 </tr>
               </thead>
@@ -150,12 +156,18 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
                     <td>#{r.id}</td>
                     <td>{r.source}</td>
                     <td>
-                      <Badge variant={badgeVariant(r.status)}>{r.status}</Badge>
+                      <Badge variant={badgeVariant(r.status)}>{labelFrom(RUN_STATUS_ZH, (r.status || '').toLowerCase())}</Badge>
                     </td>
                     <td>{new Date(r.started_at).toLocaleString()}</td>
                     <td>{r.finished_at ? new Date(r.finished_at).toLocaleString() : '-'}</td>
                     <td className="muted">
-                      {r.records_success}/{r.records_total} (fail {r.records_failed}) · +{r.added_count} ~{r.updated_count} -{r.removed_count}
+                      成功 {r.records_success}/{r.records_total}（失败 {r.records_failed}） · 新增 {r.added_count} / 更新 {r.updated_count} / 移除 {r.removed_count}
+                    </td>
+                    <td className="muted">
+                      保留 {r.ivd_kept_count ?? 0} / 跳过 {r.non_ivd_skipped_count ?? 0}
+                      <div style={{ fontSize: 12 }}>
+                        规则版本 v{r.source_notes?.ivd_classifier_version ?? '-'}
+                      </div>
                     </td>
                     <td className="muted" style={{ maxWidth: 360 }}>
                       {r.message || '-'}
@@ -170,4 +182,3 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
     </Card>
   );
 }
-

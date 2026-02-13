@@ -28,7 +28,8 @@ from app.repositories.data_sources import (
 )
 from app.repositories.company_tracking import get_company_tracking_detail, list_company_tracking
 from app.repositories.changes import get_change_detail, get_change_stats, list_recent_changes
-from app.repositories.products import get_company, get_product, list_full_products, search_products
+from app.repositories.products import admin_search_products, get_company, get_product, list_full_products, search_products
+from app.repositories.product_params import list_product_params
 from app.repositories.radar import get_admin_config, get_product_timeline, list_admin_configs, upsert_admin_config
 from app.repositories.radar import count_active_subscriptions_by_subscriber, create_subscription
 from app.repositories.source_runs import latest_runs, list_source_runs
@@ -52,6 +53,7 @@ from app.schemas.api import (
     ApiResponseAdminConfigs,
     ApiResponsePublicContactInfo,
     ApiResponseProduct,
+    ApiResponseProductParams,
     ApiResponseChangeStats,
     ApiResponseChangesList,
     ApiResponseChangeDetail,
@@ -71,6 +73,8 @@ from app.schemas.api import (
     DashboardTrendData,
     DashboardTrendItem,
     ProductOut,
+    ProductParamOut,
+    ProductParamsData,
     SearchData,
     SearchItem,
     StatusData,
@@ -733,6 +737,48 @@ def search(
     return _ok(data)
 
 
+@app.get('/api/admin/products', response_model=ApiResponseSearch)
+def admin_products(
+    q: str | None = Query(default=None),
+    company: str | None = Query(default=None),
+    reg_no: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    is_ivd: str = Query(default='true', pattern='^(true|false|all)$'),
+    ivd_category: str | None = Query(default=None),
+    ivd_version: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    sort_by: SortBy = Query(default='updated_at'),
+    sort_order: SortOrder = Query(default='desc'),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseSearch:
+    ivd_filter = None if is_ivd == 'all' else (is_ivd == 'true')
+    products, total = admin_search_products(
+        db,
+        query=q,
+        company=company,
+        reg_no=reg_no,
+        status=status,
+        is_ivd=ivd_filter,
+        ivd_category=ivd_category,
+        ivd_version=ivd_version,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    data = SearchData(
+        total=total,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        items=[SearchItem(product=serialize_product(item)) for item in products],
+    )
+    return _ok(data)
+
+
 @app.get('/api/products/full', response_model=ApiResponseSearch)
 def products_full(
     q: str | None = Query(default=None),
@@ -889,6 +935,46 @@ def product_detail(
     if effective_mode == 'limited' and not plan_is_pro:
         return _ok(serialize_product_limited(product))
     return _ok(serialize_product(product))
+
+
+@app.get('/api/products/{product_id}/params', response_model=ApiResponseProductParams)
+def product_params(
+    product_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    _pro: User = Depends(require_pro),
+    db: Session = Depends(get_db),
+) -> ApiResponseProductParams:
+    product = get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail='Product not found')
+
+    rows = list_product_params(db, product=product, limit=limit)
+    items = [
+        ProductParamOut(
+            id=param.id,
+            param_code=param.param_code,
+            value_num=(float(param.value_num) if param.value_num is not None else None),
+            value_text=param.value_text,
+            unit=param.unit,
+            range_low=(float(param.range_low) if param.range_low is not None else None),
+            range_high=(float(param.range_high) if param.range_high is not None else None),
+            conditions=param.conditions,
+            confidence=float(param.confidence),
+            evidence_text=param.evidence_text,
+            evidence_page=param.evidence_page,
+            source=(doc.source if doc else None),
+            source_url=(doc.source_url if doc else None),
+            extract_version=param.extract_version,
+        )
+        for param, doc in rows
+    ]
+    return _ok(
+        ProductParamsData(
+            product_id=product.id,
+            product_name=product.name,
+            items=items,
+        )
+    )
 
 
 @app.get('/api/products/{product_id}/timeline', response_model=ApiResponseProductTimeline)

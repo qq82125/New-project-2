@@ -9,7 +9,12 @@ import { Select } from '../../components/ui/select';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../../lib/api-server';
+import { getMe } from '../../lib/getMe';
+import ProUpgradeHint from '../../components/plan/ProUpgradeHint';
+import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
+import { SORT_BY_ZH, SORT_ORDER_ZH, STATUS_ZH, labelFrom } from '../../constants/display';
+import PaginationControls from '../../components/PaginationControls';
 
 type SearchParams = {
   q?: string;
@@ -42,6 +47,7 @@ type SearchData = {
 };
 
 export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const meRes = await fetch(`${API_BASE}/api/auth/me`, {
     method: 'GET',
@@ -49,6 +55,15 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     cache: 'no-store',
   });
   if (meRes.status === 401) redirect('/login');
+  const me = await getMe();
+  const isPro = Boolean(me?.plan?.is_pro || me?.plan?.is_admin);
+  let canExport = false;
+  try {
+    const body = (await meRes.json()) as any;
+    canExport = Boolean(body?.data?.entitlements?.can_export);
+  } catch {
+    canExport = false;
+  }
 
   const params = await searchParams;
   const page = Number(params.page || '1');
@@ -68,6 +83,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   });
 
   const res = await apiGet<SearchData>(`/api/search${query}`);
+  const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: params.reg_no })}`;
 
   return (
     <div className="grid">
@@ -77,25 +93,42 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           <CardDescription>按关键词、企业、注册证号等筛选产品。</CardDescription>
         </CardHeader>
         <CardContent>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+            {canExport ? (
+              <a className="ui-btn" href={exportHref}>
+                导出 CSV
+              </a>
+            ) : (
+              <>
+                <Button type="button" disabled title="Pro 才支持导出">
+                  导出 CSV
+                </Button>
+                <Badge variant="muted">Pro</Badge>
+                <Link href="/contact?intent=pro" className="muted">
+                  联系开通
+                </Link>
+              </>
+            )}
+          </div>
           <form className="controls" method="GET">
-            <Input name="q" defaultValue={params.q} placeholder="关键词（产品名/reg_no/udi_di）" />
+            <Input name="q" defaultValue={params.q} placeholder="关键词（产品名/注册证号/UDI-DI）" />
             <Input name="company" defaultValue={params.company} placeholder="企业名称" />
             <Input name="reg_no" defaultValue={params.reg_no} placeholder="注册证号" />
             <Select name="status" defaultValue={params.status || ''}>
-          <option value="">全部状态</option>
-          <option value="active">active</option>
-          <option value="cancelled">cancelled</option>
-          <option value="expired">expired</option>
+              <option value="">全部状态</option>
+              <option value="active">有效</option>
+              <option value="cancelled">已注销</option>
+              <option value="expired">已过期</option>
             </Select>
             <Select name="sort_by" defaultValue={sortBy}>
-          <option value="updated_at">updated_at</option>
-          <option value="approved_date">approved_date</option>
-          <option value="expiry_date">expiry_date</option>
-          <option value="name">name</option>
+              <option value="updated_at">最近更新</option>
+              <option value="approved_date">批准日期</option>
+              <option value="expiry_date">失效日期</option>
+              <option value="name">产品名称</option>
             </Select>
             <Select name="sort_order" defaultValue={sortOrder}>
-          <option value="desc">desc</option>
-          <option value="asc">asc</option>
+              <option value="desc">降序</option>
+              <option value="asc">升序</option>
             </Select>
             <Button type="submit">搜索</Button>
           </form>
@@ -108,19 +141,24 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
         <EmptyState text="暂无结果" />
       ) : (
         <>
+          {(() => {
+            const totalPages = Math.max(1, Math.ceil((res.data?.total || 0) / Math.max(1, pageSize)));
+            return (
           <Card>
             <CardContent style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <Badge variant="muted">共 {res.data.total} 条</Badge>
               <span className="muted">
-                page {res.data.page} / size {res.data.page_size} / sort {res.data.sort_by} {res.data.sort_order}
+                第 {res.data.page} / {totalPages} 页（每页 {res.data.page_size} 条） / 排序：{labelFrom(SORT_BY_ZH, res.data.sort_by)}（{labelFrom(SORT_ORDER_ZH, res.data.sort_order)}）
               </span>
             </CardContent>
           </Card>
+            );
+          })()}
           {res.data.items.length === 0 ? (
             <EmptyState text="暂无匹配结果" />
           ) : (
             <div className="list">
-              {res.data.items.map((item) => (
+              {(isPro ? res.data.items : res.data.items.slice(0, 10)).map((item) => (
                 <Card key={item.product.id}>
                   <CardHeader>
                     <CardTitle>
@@ -132,7 +170,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                   </CardHeader>
                   <CardContent className="grid">
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Badge variant="muted">reg_no: {item.product.reg_no || '-'}</Badge>
+                      <Badge variant="muted">注册证号: {item.product.reg_no || '-'}</Badge>
                       <Badge
                         variant={
                           item.product.status === 'active'
@@ -141,15 +179,15 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                               ? 'warning'
                               : item.product.status === 'cancelled'
                                 ? 'danger'
-                                : 'muted'
+                              : 'muted'
                         }
                       >
-                        status: {item.product.status}
+                        状态: {labelFrom(STATUS_ZH, item.product.status)}
                       </Badge>
-                      <Badge variant="muted">expiry: {item.product.expiry_date || '-'}</Badge>
+                      <Badge variant="muted">失效日期: {item.product.expiry_date || '-'}</Badge>
                     </div>
                     <div>
-                      <span className="muted">company:</span>{' '}
+                      <span className="muted">企业:</span>{' '}
                       {item.product.company ? (
                         <Link href={`/companies/${item.product.company.id}`}>{item.product.company.name}</Link>
                       ) : (
@@ -162,22 +200,29 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             </div>
           )}
 
+          {!isPro ? (
+            <ProUpgradeHint
+              text={PRO_COPY.search_free_hint}
+              ctaHref={PRO_TRIAL_HREF}
+            />
+          ) : null}
+
           <Card>
             <CardContent style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            {page > 1 ? (
-              <Link
-                href={`/search${qs({ ...params, page: page - 1, page_size: pageSize, sort_by: sortBy, sort_order: sortOrder })}`}
-              >
-                上一页
-              </Link>
-            ) : (
-              <span className="muted">上一页</span>
-            )}
-            <Link
-              href={`/search${qs({ ...params, page: page + 1, page_size: pageSize, sort_by: sortBy, sort_order: sortOrder })}`}
-            >
-              下一页
-            </Link>
+              <PaginationControls
+                basePath="/search"
+                params={{
+                  q: params.q,
+                  company: params.company,
+                  reg_no: params.reg_no,
+                  status: params.status,
+                  sort_by: sortBy,
+                  sort_order: sortOrder,
+                }}
+                page={page}
+                pageSize={pageSize}
+                total={res.data.total}
+              />
             </CardContent>
           </Card>
         </>

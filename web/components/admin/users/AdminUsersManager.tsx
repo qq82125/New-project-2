@@ -14,8 +14,7 @@ import { EmptyState, ErrorState } from '../../States';
 
 import MembershipActionModal, { ActionType } from './MembershipActionModal';
 import type { AdminUserItem, ApiResp } from './types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { PLAN_STATUS_ZH, PLAN_ZH, labelFrom } from '../../../constants/display';
 
 function fmtTs(ts?: string | null) {
   if (!ts) return '-';
@@ -55,7 +54,7 @@ export default function AdminUsersManager() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users?query=${encodeURIComponent(query.trim())}&limit=${limit}&offset=${offset}`, {
+      const res = await fetch(`/api/admin/users?query=${encodeURIComponent(query.trim())}&limit=${limit}&offset=${offset}`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -142,7 +141,7 @@ export default function AdminUsersManager() {
             下一页
           </Button>
           <span className="muted">
-            offset: {offset} · limit: {limit}
+            起始偏移：{offset} · 每页数量：{limit}
           </span>
         </div>
 
@@ -159,9 +158,9 @@ export default function AdminUsersManager() {
               <thead>
                 <tr>
                   <th>Email</th>
-                  <th style={{ width: 140 }}>Plan</th>
-                  <th style={{ width: 140 }}>Status</th>
-                  <th style={{ width: 200 }}>Expires</th>
+                  <th style={{ width: 140 }}>会员计划</th>
+                  <th style={{ width: 140 }}>会员状态</th>
+                  <th style={{ width: 200 }}>到期时间</th>
                   <th style={{ width: 360 }}>操作</th>
                 </tr>
               </thead>
@@ -171,14 +170,14 @@ export default function AdminUsersManager() {
                     <td>
                       <div style={{ display: 'grid', gap: 4 }}>
                         <Link href={`/admin/users/${u.id}`}>{u.email}</Link>
-                        <span className="muted">#{u.id} · created {fmtTs(u.created_at)}</span>
+                        <span className="muted">#{u.id} · 创建于 {fmtTs(u.created_at)}</span>
                       </div>
                     </td>
                     <td>
-                      <Badge variant="muted">{u.plan}</Badge>
+                      <Badge variant="muted">{labelFrom(PLAN_ZH, u.plan)}</Badge>
                     </td>
                     <td>
-                      <Badge variant={statusVariant(u.plan_status)}>{u.plan_status}</Badge>
+                      <Badge variant={statusVariant(u.plan_status)}>{labelFrom(PLAN_STATUS_ZH, u.plan_status)}</Badge>
                     </td>
                     <td className="muted">{fmtTs(u.plan_expires_at)}</td>
                     <td>
@@ -219,4 +218,3 @@ export default function AdminUsersManager() {
     </Card>
   );
 }
-

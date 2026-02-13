@@ -8,8 +8,7 @@ import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
 import { toast } from '../../components/ui/use-toast';
 import { refreshAuth } from '../../components/auth/use-auth';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { fetchWithProHandling } from '../../lib/fetch-client';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -23,7 +22,7 @@ export default function RegisterPage() {
     setError('');
     setSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE}/api/auth/register`, {
+      const res = await fetchWithProHandling(`/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

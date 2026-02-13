@@ -7,7 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Table, TableWrap } from '../components/ui/table';
 import { Badge } from '../components/ui/badge';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../lib/api-server';
+import PlanDebugServer from '../components/plan/PlanDebugServer';
+import PlanBanner from '../components/plan/PlanBanner';
+import RestrictedHint from '../components/plan/RestrictedHint';
+import { PRO_COPY } from '../constants/pro';
 
 type StatusData = {
   latest_runs: Array<{
@@ -84,7 +88,34 @@ function KpiCard({ label, value }: { label: string; value: number }) {
   );
 }
 
+const RADAR_METRIC_LABELS: Record<string, string> = {
+  new_products: '新增产品数',
+  updated_products: '更新产品数',
+  cancelled_products: '注销产品数',
+  expiring_in_90d: '90天内到期数',
+  active_subscriptions: '活跃订阅数',
+};
+
+function formatRadarMetric(metric: string): string {
+  return RADAR_METRIC_LABELS[metric] || metric;
+}
+
+function ProLockedState({ text }: { text: string }) {
+  return (
+    <div className="grid" style={{ gap: 10 }}>
+      <div className="muted">{text}</div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Badge variant="muted">Pro</Badge>
+        <Link className="ui-btn" href="/contact?intent=pro">
+          联系开通
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 export default async function DashboardPage() {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const meRes = await fetch(`${API_BASE}/api/auth/me`, {
     method: 'GET',
@@ -93,15 +124,28 @@ export default async function DashboardPage() {
   });
   if (meRes.status === 401) redirect('/login');
 
+  let isPro = false;
+  try {
+    const body = (await meRes.json()) as any;
+    const ent = body?.data?.entitlements || null;
+    isPro = Boolean(ent?.can_export) || Number(ent?.trend_range_days || 0) > 30;
+  } catch {
+    isPro = false;
+  }
+
   const [statusRes, summaryRes, trendRes, rankingsRes, radarRes, newProductRes, expiringRes] = await Promise.all([
     apiGet<StatusData>('/api/status'),
     apiGet<SummaryData>('/api/dashboard/summary?days=30'),
     apiGet<TrendData>('/api/dashboard/trend?days=30'),
-    apiGet<RankingsData>('/api/dashboard/rankings?days=30&limit=10'),
-    apiGet<RadarData>('/api/dashboard/radar'),
+    isPro ? apiGet<RankingsData>('/api/dashboard/rankings?days=30&limit=10') : Promise.resolve({ data: null, error: null }),
+    isPro ? apiGet<RadarData>('/api/dashboard/radar') : Promise.resolve({ data: null, error: null }),
     apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'approved_date', sort_order: 'desc' })}`),
-    apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`),
+    isPro
+      ? apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`)
+      : Promise.resolve({ data: null, error: null }),
   ]);
+  const trendWindow = trendRes.data?.items.slice(-10) ?? [];
+  const maxTrendValue = trendWindow.reduce((max, item) => Math.max(max, item.new_products), 0);
 
   return (
     <div className="grid">
@@ -110,6 +154,12 @@ export default async function DashboardPage() {
           <CardTitle>Dashboard</CardTitle>
           <CardDescription>聚合近 30 天关键指标、趋势与榜单。</CardDescription>
         </CardHeader>
+        <CardContent className="grid" style={{ gap: 10 }}>
+          <PlanBanner isPro={isPro} />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <PlanDebugServer />
+          </div>
+        </CardContent>
       </Card>
 
       <Card>
@@ -154,17 +204,20 @@ export default async function DashboardPage() {
           <CardTitle>新增趋势（30 天）</CardTitle>
           <CardDescription>最近 10 天新增产品变化（简易条形图）。</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="dashboard-compact">
         {trendRes.error ? (
           <ErrorState text={`趋势加载失败：${trendRes.error}`} />
         ) : !trendRes.data || trendRes.data.items.length === 0 ? (
           <EmptyState text="暂无趋势数据" />
         ) : (
-          <div className="spark">
-            {trendRes.data.items.slice(-10).map((item) => (
+          <div className="spark dashboard-spark">
+            {trendWindow.map((item) => (
               <div key={item.metric_date} className="spark-row">
                 <span>{item.metric_date.slice(5)}</span>
-                <div className="spark-bar" style={{ width: `${Math.max(6, item.new_products * 8)}px` }} />
+                <div
+                  className="spark-bar"
+                  style={{ width: `${Math.max(8, Math.round((item.new_products / Math.max(1, maxTrendValue)) * 100))}%` }}
+                />
                 <span>{item.new_products}</span>
               </div>
             ))}
@@ -177,68 +230,72 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>新增产品榜单</CardTitle>
-            <CardDescription>按批准日期排序（取前 10）。</CardDescription>
+            <CardDescription>按批准日期排序（取前 {isPro ? 10 : 5}）。</CardDescription>
           </CardHeader>
-          <CardContent>
-          {newProductRes.error ? (
-            <ErrorState text={`加载失败：${newProductRes.error}`} />
-          ) : !newProductRes.data || newProductRes.data.items.length === 0 ? (
-            <EmptyState text="暂无新增产品" />
-          ) : (
-            <TableWrap>
-              <Table>
-                <thead>
-                  <tr>
-                    <th>产品</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {newProductRes.data.items.slice(0, 10).map((item) => (
-                    <tr key={item.product.id}>
-                      <td>
-                        <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
-                      </td>
+          <CardContent className="grid">
+            {newProductRes.error ? (
+              <ErrorState text={`加载失败：${newProductRes.error}`} />
+            ) : !newProductRes.data || newProductRes.data.items.length === 0 ? (
+              <EmptyState text="暂无新增产品" />
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>产品</th>
                     </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-          )}
+                  </thead>
+                  <tbody>
+                    {newProductRes.data.items.slice(0, isPro ? 10 : 5).map((item) => (
+                      <tr key={item.product.id}>
+                        <td>
+                          <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+            {!isPro ? <RestrictedHint /> : null}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <CardTitle>企业榜单</CardTitle>
-            <CardDescription>基于新增产品前 20 条聚合（取前 10）。</CardDescription>
+            <CardDescription>基于新增产品前 20 条聚合（取前 {isPro ? 10 : 3}）。</CardDescription>
           </CardHeader>
-          <CardContent>
-          {newProductRes.error || !newProductRes.data ? (
-            <ErrorState text={`加载失败：${newProductRes.error || '未知错误'}`} />
-          ) : toCompanyRanking(newProductRes.data.items).length === 0 ? (
-            <EmptyState text="暂无企业数据" />
-          ) : (
-            <TableWrap>
-              <Table>
-                <thead>
-                  <tr>
-                    <th>企业</th>
-                    <th style={{ width: 90 }}>数量</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {toCompanyRanking(newProductRes.data.items).map((item) => (
-                    <tr key={item.name}>
-                      <td>
-                        <Link href={`/search${qs({ company: item.name })}`}>{item.name}</Link>
-                      </td>
-                      <td>{item.count}</td>
+          <CardContent className="grid">
+            {newProductRes.error || !newProductRes.data ? (
+              <ErrorState text={`加载失败：${newProductRes.error || '未知错误'}`} />
+            ) : toCompanyRanking(newProductRes.data.items).length === 0 ? (
+              <EmptyState text="暂无企业数据" />
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>企业</th>
+                      <th style={{ width: 90 }}>数量</th>
                     </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-          )}
+                  </thead>
+                  <tbody>
+                    {toCompanyRanking(newProductRes.data.items)
+                      .slice(0, isPro ? 10 : 3)
+                      .map((item) => (
+                        <tr key={item.name}>
+                          <td>
+                            <Link href={`/search${qs({ company: item.name })}`}>{item.name}</Link>
+                          </td>
+                          <td>{item.count}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+            {!isPro ? <RestrictedHint /> : null}
           </CardContent>
         </Card>
 
@@ -247,33 +304,41 @@ export default async function DashboardPage() {
             <CardTitle>即将到期榜单</CardTitle>
             <CardDescription>按到期日升序（取前 10）。</CardDescription>
           </CardHeader>
-          <CardContent>
-          {expiringRes.error ? (
-            <ErrorState text={`加载失败：${expiringRes.error}`} />
-          ) : !expiringRes.data || expiringRes.data.items.length === 0 ? (
-            <EmptyState text="暂无到期数据" />
-          ) : (
-            <TableWrap>
-              <Table>
-                <thead>
-                  <tr>
-                    <th>产品</th>
-                    <th style={{ width: 120 }}>到期日</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {expiringRes.data.items.slice(0, 10).map((item) => (
-                    <tr key={item.product.id}>
-                      <td>
-                        <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
-                      </td>
-                      <td className="muted">{item.product.expiry_date || '-'}</td>
+          <CardContent className="grid">
+            {!isPro ? (
+              <div className="grid" style={{ gap: 10 }}>
+                <div className="muted">即将到期数量：-</div>
+                <div className="muted" style={{ fontSize: 13 }}>
+                  {PRO_COPY.restricted_hint}
+                </div>
+              </div>
+            ) : expiringRes.error ? (
+              <ErrorState text={`加载失败：${expiringRes.error}`} />
+            ) : !expiringRes.data || expiringRes.data.items.length === 0 ? (
+              <EmptyState text="暂无到期数据" />
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>产品</th>
+                      <th style={{ width: 120 }}>到期日</th>
                     </tr>
-                  ))}
-                </tbody>
-              </Table>
-            </TableWrap>
-          )}
+                  </thead>
+                  <tbody>
+                    {expiringRes.data.items.slice(0, 10).map((item) => (
+                      <tr key={item.product.id}>
+                        <td>
+                          <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
+                        </td>
+                        <td className="muted">{item.product.expiry_date || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+            {!isPro ? <RestrictedHint /> : null}
           </CardContent>
         </Card>
       </section>
@@ -282,16 +347,18 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>变更雷达列表</CardTitle>
-            <CardDescription>按指标聚合的变更计数。</CardDescription>
+            <CardDescription>按指标聚合的变更计数（前端中文显示）。</CardDescription>
           </CardHeader>
-          <CardContent>
-          {radarRes.error ? (
+          <CardContent className="dashboard-compact">
+          {!isPro ? (
+            <ProLockedState text="雷达与到期风险等指标仅 Pro 可见。" />
+          ) : radarRes.error ? (
             <ErrorState text={`雷达加载失败：${radarRes.error}`} />
           ) : !radarRes.data || radarRes.data.items.length === 0 ? (
             <EmptyState text="暂无雷达数据" />
           ) : (
-            <TableWrap>
-              <Table>
+            <TableWrap className="dashboard-compact-table">
+              <Table className="dashboard-compact-table">
                 <thead>
                   <tr>
                     <th>指标</th>
@@ -301,7 +368,7 @@ export default async function DashboardPage() {
                 <tbody>
                   {radarRes.data.items.map((item) => (
                     <tr key={item.metric}>
-                      <td>{item.metric}</td>
+                      <td title={item.metric}>{formatRadarMetric(item.metric)}</td>
                       <td>{item.value}</td>
                     </tr>
                   ))}
@@ -317,20 +384,22 @@ export default async function DashboardPage() {
             <CardTitle>日榜（后端聚合）</CardTitle>
             <CardDescription>新增高峰日与移除高峰日。</CardDescription>
           </CardHeader>
-          <CardContent>
-          {rankingsRes.error ? (
+          <CardContent className="dashboard-compact">
+          {!isPro ? (
+            <ProLockedState text="日榜（聚合榜单）仅 Pro 可见。" />
+          ) : rankingsRes.error ? (
             <ErrorState text={`榜单加载失败：${rankingsRes.error}`} />
           ) : !rankingsRes.data ? (
             <EmptyState text="暂无榜单" />
           ) : (
-            <div className="columns-2">
+            <div className="dashboard-rankings-grid">
               <div>
                 <div className="muted">新增高峰日</div>
                 {rankingsRes.data.top_new_days.length === 0 ? (
                   <EmptyState text="暂无" />
                 ) : (
-                  <TableWrap>
-                    <Table>
+                  <TableWrap className="dashboard-compact-table">
+                    <Table className="dashboard-compact-table">
                       <thead>
                         <tr>
                           <th>日期</th>
@@ -356,8 +425,8 @@ export default async function DashboardPage() {
                 {rankingsRes.data.top_removed_days.length === 0 ? (
                   <EmptyState text="暂无" />
                 ) : (
-                  <TableWrap>
-                    <Table>
+                  <TableWrap className="dashboard-compact-table">
+                    <Table className="dashboard-compact-table">
                       <thead>
                         <tr>
                           <th>日期</th>

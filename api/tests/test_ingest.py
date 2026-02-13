@@ -24,6 +24,9 @@ class FakeDB:
     def commit(self) -> None:
         return None
 
+    def rollback(self) -> None:
+        return None
+
 
 def test_first_import_generates_new_change_log(monkeypatch) -> None:
     db = FakeDB()
@@ -71,3 +74,140 @@ def test_second_import_generates_update_change_log(monkeypatch) -> None:
     assert 'name' in logs[-1].changed_fields
     assert logs[-1].changed_fields['name']['old'] == 'A'
     assert logs[-1].changed_fields['name']['new'] == 'A-NEW'
+
+
+def test_ingest_filters_non_ivd_records(monkeypatch) -> None:
+    from app.services.ingest import ingest_staging_records
+
+    db = FakeDB()
+
+    monkeypatch.setattr(
+        'app.services.ingest.classify_ivd',
+        lambda raw: {
+            'is_ivd': bool(raw.get('classification_code') == '22'),
+            'ivd_category': 'reagent',
+            'reason': {'by': 'unit_test'},
+            'version': 1,
+        },
+    )
+    monkeypatch.setattr(
+        'app.services.ingest.map_raw_record',
+        lambda raw: SimpleNamespace(
+            name=raw.get('name') or 'x',
+            reg_no=raw.get('reg_no'),
+            udi_di=raw.get('udi_di') or 'U1',
+            status='active',
+            approved_date=None,
+            expiry_date=None,
+            class_name='22',
+            company_name=None,
+            company_country=None,
+            raw=raw,
+        ),
+    )
+    monkeypatch.setattr('app.services.ingest.upsert_product_record', lambda _db, _record, _run_id: ('added', None))
+
+    stats = ingest_staging_records(
+        db,
+        [
+            {'type': 'non-ivd', 'name': '骨科器械', 'udi_di': 'U-NON', 'classification_code': '07'},
+            {'type': 'ivd', 'name': '检测试剂', 'udi_di': 'U-IVD', 'classification_code': '22'},
+        ],
+        source_run_id=1,
+    )
+    assert stats['total'] == 2
+    assert stats['filtered'] == 1
+    assert stats['success'] == 1
+
+
+def test_ingest_writes_ivd_metadata_into_raw(monkeypatch) -> None:
+    from app.services.ingest import ingest_staging_records
+
+    db = FakeDB()
+
+    monkeypatch.setattr(
+        'app.services.ingest.classify_ivd',
+        lambda _raw: {
+            'is_ivd': True,
+            'ivd_category': 'reagent',
+            'reason': {'by': 'class_code', 'rule': 'startswith_22'},
+            'version': 1,
+        },
+    )
+    monkeypatch.setattr(
+        'app.services.ingest.map_raw_record',
+        lambda raw: SimpleNamespace(
+            name=raw.get('name') or 'x',
+            reg_no=raw.get('reg_no'),
+            udi_di=raw.get('udi_di') or 'U1',
+            status='active',
+            approved_date=None,
+            expiry_date=None,
+            class_name='22',
+            company_name=None,
+            company_country=None,
+            raw=dict(raw),
+        ),
+    )
+    captured = {}
+
+    def _upsert(_db, record, _run_id):
+        captured['raw'] = record.raw
+        return 'added', None
+
+    monkeypatch.setattr('app.services.ingest.upsert_product_record', _upsert)
+    stats = ingest_staging_records(db, [{'name': '体外诊断试剂盒', 'udi_di': 'U-IVD'}], source_run_id=1)
+    assert stats['success'] == 1
+    assert captured['raw']['_ivd']['reason'] == {'by': 'class_code', 'rule': 'startswith_22'}
+    assert captured['raw']['_ivd']['version'] == 1
+
+
+def test_ingest_filters_invalid_product_name(monkeypatch) -> None:
+    from app.services.ingest import ingest_staging_records
+
+    db = FakeDB()
+    called = {'upsert': 0}
+
+    monkeypatch.setattr(
+        'app.services.ingest.map_raw_record',
+        lambda raw: SimpleNamespace(
+            name=raw.get('name') or '',
+            reg_no=raw.get('reg_no'),
+            udi_di=raw.get('udi_di') or 'U1',
+            status='active',
+            approved_date=None,
+            expiry_date=None,
+            class_name='22',
+            company_name=None,
+            company_country=None,
+            raw=dict(raw),
+        ),
+    )
+    monkeypatch.setattr(
+        'app.services.ingest.classify_ivd',
+        lambda _raw: {
+            'is_ivd': True,
+            'ivd_category': 'reagent',
+            'reason': {'by': 'unit_test'},
+            'version': 1,
+        },
+    )
+
+    def _upsert(_db, _record, _run_id):
+        called['upsert'] += 1
+        return 'added', None
+
+    monkeypatch.setattr('app.services.ingest.upsert_product_record', _upsert)
+
+    stats = ingest_staging_records(
+        db,
+        [
+            {'name': '/', 'udi_di': 'U-BAD'},
+            {'name': '核酸检测试剂盒', 'udi_di': 'U-GOOD'},
+        ],
+        source_run_id=1,
+    )
+    assert stats['total'] == 2
+    assert stats['filtered'] == 1
+    assert stats['success'] == 1
+    assert called['upsert'] == 1

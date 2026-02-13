@@ -5,7 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import AdminUsersManager from '../../../components/admin/users/AdminUsersManager';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../../../lib/api-server';
 
 type AdminMe = { id: number; email: string; role: string };
 type AdminMeResp = { code: number; message: string; data: AdminMe };
@@ -13,6 +13,7 @@ type AdminMeResp = { code: number; message: string; data: AdminMe };
 export const dynamic = 'force-dynamic';
 
 async function getAdminMe(): Promise<AdminMe> {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const res = await fetch(`${API_BASE}/api/admin/me`, {
     method: 'GET',
@@ -53,4 +54,3 @@ export default async function AdminUsersPage() {
     </div>
   );
 }
-

@@ -10,12 +10,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { Table, TableWrap } from '../ui/table';
 import { toast } from '../ui/use-toast';
 import { useAuth, refreshAuth } from '../auth/use-auth';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { fetchWithProHandling } from '../../lib/fetch-client';
+import { PLAN_STATUS_ZH, PLAN_ZH, labelFrom } from '../../constants/display';
 
 async function markOnboardedBestEffort() {
   try {
-    await fetch(`${API_BASE}/api/users/onboarded`, { method: 'POST', credentials: 'include' });
+    await fetchWithProHandling(`/api/users/onboarded`, { method: 'POST', credentials: 'include' });
     await refreshAuth();
   } catch {
     // ignore
@@ -65,7 +65,7 @@ export default function WelcomeClient() {
             <>
               <Badge variant="muted">{auth.user.email}</Badge>
               <Badge variant="muted">
-                plan: {auth.user.plan || 'free'} / {auth.user.plan_status || 'inactive'}
+                当前计划：{labelFrom(PLAN_ZH, auth.user.plan || 'free')} / {labelFrom(PLAN_STATUS_ZH, auth.user.plan_status || 'inactive')}
               </Badge>
             </>
           ) : (
@@ -155,4 +155,3 @@ export default function WelcomeClient() {
     </div>
   );
 }
-

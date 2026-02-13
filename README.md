@@ -186,6 +186,65 @@ docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02
 - `daily_metrics` 按 `metric_date` upsert（同日重跑覆盖更新）
 - 摘要推送按 `(digest_date, subscriber_key, channel)` 去重，默认同日不重复发送
 
+## IVD 范围与规则版本
+
+### IVD 范围定义
+- `reagent`（试剂）
+- `instrument`（仪器/设备）
+- `software`（医疗软件）
+
+同步与查询默认仅保留 `is_ivd=true` 数据进入主分析视图。
+
+### 规则版本（当前 v1）
+- `class_code` 以 `22` 开头：`is_ivd=true`, `ivd_category=reagent`
+- `class_code` 以 `07` 开头，且名称命中 instrument 关键词并且不命中排除关键词：`instrument`
+- `class_code` 以 `21` 开头，且名称命中 software 关键词：`software`
+- 其他：`is_ivd=false`
+
+## IVD 一键命令
+
+### 1) 历史重打标（可重复执行）
+```bash
+# 安全预览（无副作用）
+docker compose exec api python -m app.workers.cli reclassify_ivd --dry-run
+
+# 真正执行
+docker compose exec api python -m app.workers.cli reclassify_ivd --execute
+```
+
+### 2) 非 IVD 清理（先归档再删除）
+```bash
+# 安全预览（无副作用）
+docker compose exec api python -m app.workers.cli cleanup_non_ivd --dry-run --recompute-days 365
+
+# 真正执行（会归档到 products_archive 后删除主表非 IVD）
+docker compose exec api python -m app.workers.cli cleanup_non_ivd --execute --recompute-days 365 --notes "manual cleanup"
+```
+
+## 清理与回滚步骤
+
+### 执行清理
+1. `reclassify_ivd --dry-run` 检查将更新数量  
+2. `reclassify_ivd --execute` 写入最新规则标记  
+3. `cleanup_non_ivd --dry-run` 查看将归档/删除数量  
+4. `cleanup_non_ivd --execute` 执行归档删除并重算 `daily_metrics`
+
+### 回滚（从归档恢复）
+```bash
+docker compose exec -T db psql -U "${POSTGRES_USER:-nmpa}" -d "${POSTGRES_DB:-nmpa}" < scripts/restore/restore_products_from_archive.sql
+```
+说明：可在 SQL 中增加 `cleanup_run_id` 条件恢复指定批次。
+
+## 冒烟测试（注册→同步→统计→清理→验证）
+
+```bash
+# 安全模式（默认，仅 dry-run）
+./scripts/smoke_ivd_pipeline.sh
+
+# 执行模式（会执行重打标与清理）
+./scripts/smoke_ivd_pipeline.sh execute
+```
+
 ## Dashboard 口径说明
 
 Dashboard 读取后端 `/api/dashboard/*`，核心口径如下：

@@ -22,7 +22,31 @@ class ProductOut(BaseModel):
     approved_date: date | None = None
     expiry_date: date | None = None
     class_name: str | None = None
+    ivd_category: str | None = None
     company: CompanyOut | None = None
+
+
+class ProductParamOut(BaseModel):
+    id: UUID
+    param_code: str
+    value_num: float | None = None
+    value_text: str | None = None
+    unit: str | None = None
+    range_low: float | None = None
+    range_high: float | None = None
+    conditions: dict | None = None
+    confidence: float
+    evidence_text: str
+    evidence_page: int | None = None
+    source: str | None = None
+    source_url: str | None = None
+    extract_version: str
+
+
+class ProductParamsData(BaseModel):
+    product_id: UUID
+    product_name: str
+    items: list[ProductParamOut]
 
 
 class SearchItem(BaseModel):
@@ -49,6 +73,8 @@ class StatusItem(BaseModel):
     added_count: int
     updated_count: int
     removed_count: int
+    ivd_kept_count: int = 0
+    non_ivd_skipped_count: int = 0
     started_at: datetime
     finished_at: datetime | None = None
 
@@ -147,10 +173,28 @@ class ApiResponseProduct(BaseModel):
     data: ProductOut
 
 
+class ApiResponseProductParams(BaseModel):
+    code: int
+    message: str
+    data: ProductParamsData
+
+
 class ApiResponseCompany(BaseModel):
     code: int
     message: str
     data: CompanyOut
+
+
+class ProductTimelineItemOut(BaseModel):
+    id: int
+    change_type: str
+    changed_fields: dict = Field(default_factory=dict)
+    changed_at: datetime | None = None
+
+
+class ProductTimelineOut(BaseModel):
+    product_id: UUID
+    items: list[ProductTimelineItemOut]
 
 
 class ApiResponseStatus(BaseModel):
@@ -169,6 +213,101 @@ class ApiResponseAdminConfig(BaseModel):
     code: int
     message: str
     data: AdminConfigItem
+
+
+class PublicContactInfo(BaseModel):
+    email: str | None = None
+    wecom: str | None = None
+    form_url: str | None = None
+
+
+class ApiResponsePublicContactInfo(BaseModel):
+    code: int
+    message: str
+    data: PublicContactInfo
+
+
+class MeUserOut(BaseModel):
+    id: int
+    email: str
+    role: str
+
+
+class MePlanOut(BaseModel):
+    plan: str
+    plan_status: str
+    plan_expires_at: datetime | None = None
+    is_pro: bool
+    is_admin: bool
+
+
+class MeOut(BaseModel):
+    user: MeUserOut
+    plan: MePlanOut
+
+
+class ApiResponseMe(BaseModel):
+    code: int
+    message: str
+    data: MeOut
+
+
+class ApiResponseProductTimeline(BaseModel):
+    code: int
+    message: str
+    data: ProductTimelineOut
+
+
+class ChangeStatsOut(BaseModel):
+    days: int = 30
+    total: int
+    by_type: dict[str, int] = Field(default_factory=dict)
+
+
+class ApiResponseChangeStats(BaseModel):
+    code: int
+    message: str
+    data: ChangeStatsOut
+
+
+class ChangeListItemOut(BaseModel):
+    id: int
+    change_type: str
+    change_date: datetime | None = None
+    changed_at: datetime | None = None
+    product: ProductOut
+
+
+class ChangesListOut(BaseModel):
+    days: int = 30
+    total: int = 0
+    page: int = 1
+    page_size: int = 50
+    items: list[ChangeListItemOut]
+
+
+class ApiResponseChangesList(BaseModel):
+    code: int
+    message: str
+    data: ChangesListOut
+
+
+class ChangeDetailOut(BaseModel):
+    id: int
+    change_type: str
+    change_date: datetime | None = None
+    changed_at: datetime | None = None
+    entity_type: str
+    entity_id: UUID
+    changed_fields: dict = Field(default_factory=dict)
+    before_json: dict | None = None
+    after_json: dict | None = None
+
+
+class ApiResponseChangeDetail(BaseModel):
+    code: int
+    message: str
+    data: ChangeDetailOut
 
 
 class AuthUserOut(BaseModel):

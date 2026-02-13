@@ -4,14 +4,25 @@ export type ApiEnvelope<T> = {
   data: T;
 };
 
-// Server components run inside the container, so they must call the API via
-// the internal service name (e.g. http://api:8000). Browser calls should use
-// NEXT_PUBLIC_API_BASE_URL (e.g. http://localhost:8000).
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import 'server-only';
+import { headers } from 'next/headers';
+import { apiBase } from './api-server';
 
 export async function apiGet<T>(path: string): Promise<{ data: T | null; error: string | null }> {
   try {
-    const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
+    // Forward cookies so API can apply per-user entitlements even for Server Components.
+    // Some routes are public, but exporting / pro-only endpoints rely on auth context.
+    let cookie = '';
+    try {
+      cookie = (await headers()).get('cookie') || '';
+    } catch {
+      cookie = '';
+    }
+
+    const res = await fetch(`${apiBase()}${path}`, {
+      cache: 'no-store',
+      headers: cookie ? { cookie } : undefined,
+    });
     if (!res.ok) {
       return { data: null, error: `请求失败 (${res.status})` };
     }

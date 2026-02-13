@@ -3,11 +3,12 @@ import { redirect } from 'next/navigation';
 
 import WelcomeClient from '../../components/welcome/WelcomeClient';
 
-const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+import { apiBase } from '../../lib/api-server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function WelcomePage() {
+  const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const res = await fetch(`${API_BASE}/api/auth/me`, {
     method: 'GET',
@@ -19,4 +20,3 @@ export default async function WelcomePage() {
 
   return <WelcomeClient />;
 }
-

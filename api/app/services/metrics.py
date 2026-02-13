@@ -10,10 +10,15 @@ from app.models import ChangeLog, DailyMetric, Product, SourceRun, Subscription
 
 
 def _count_change_type(db: Session, metric_date: date, change_type: str) -> int:
-    stmt = select(func.count(ChangeLog.id)).where(
-        ChangeLog.change_date >= metric_date,
-        ChangeLog.change_date < metric_date + timedelta(days=1),
-        ChangeLog.change_type == change_type,
+    stmt = (
+        select(func.count(ChangeLog.id))
+        .join(Product, Product.id == ChangeLog.product_id)
+        .where(
+            ChangeLog.change_date >= metric_date,
+            ChangeLog.change_date < metric_date + timedelta(days=1),
+            ChangeLog.change_type == change_type,
+            Product.is_ivd.is_(True),
+        )
     )
     return int(db.scalar(stmt) or 0)
 
@@ -25,6 +30,7 @@ def _count_expiring_in_90d(db: Session, metric_date: date) -> int:
         Product.expiry_date >= metric_date,
         Product.expiry_date <= upper,
         Product.status != 'cancelled',
+        Product.is_ivd.is_(True),
     )
     return int(db.scalar(stmt) or 0)
 
@@ -81,3 +87,17 @@ def generate_daily_metrics(db: Session, metric_date: date | None = None) -> Dail
     if row is None:
         raise RuntimeError('failed to upsert daily_metrics')
     return row
+
+
+def regenerate_daily_metrics(db: Session, *, days: int = 365, end_date: date | None = None) -> list[str]:
+    if days <= 0:
+        return []
+    end0 = end_date or date.today()
+    start0 = end0 - timedelta(days=days - 1)
+    out: list[str] = []
+    cur = start0
+    while cur <= end0:
+        row = generate_daily_metrics(db, cur)
+        out.append(row.metric_date.isoformat())
+        cur = cur + timedelta(days=1)
+    return out

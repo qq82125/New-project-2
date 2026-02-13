@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     sync_retry_attempts: int = 3
     sync_retry_backoff_seconds: int = 5
     sync_retry_backoff_multiplier: float = 2.0
+    raw_storage_dir: str = './data/raw'
+    supplement_sync_enabled: bool = False
+    supplement_sync_interval_hours: int = 24
+    supplement_sync_batch_size: int = 1000
+    supplement_sync_recent_hours: int = 72
     webhook_url: Optional[str] = None
     smtp_host: Optional[str] = None
     smtp_port: int = 587
