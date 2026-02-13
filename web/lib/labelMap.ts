@@ -84,7 +84,7 @@ export function labelRunSource(value?: string | null) {
 
 export function formatUdiDiDisplay(value?: string | null) {
   const raw = String(value || '').trim();
-  if (!raw) return '-';
+  if (!raw) return '未提供';
   const m = raw.match(/^reg:\s*(.+)$/i);
   if (m && m[1]) {
     return `（未提供，使用注册证号关联）${m[1]}`;

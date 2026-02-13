@@ -55,7 +55,14 @@ def get_or_create_company(db: Session, record: ProductRecord) -> Company | None:
 
 
 def find_existing_product(db: Session, record: ProductRecord) -> Product | None:
-    stmt = select(Product).where(or_(Product.udi_di == record.udi_di, Product.reg_no == record.reg_no))
+    conditions = []
+    if record.udi_di:
+        conditions.append(Product.udi_di == record.udi_di)
+    if record.reg_no:
+        conditions.append(Product.reg_no == record.reg_no)
+    if not conditions:
+        return None
+    stmt = select(Product).where(or_(*conditions) if len(conditions) > 1 else conditions[0])
     return db.scalar(stmt)
 
 
@@ -122,7 +129,9 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
     before_state = _product_state(existing)
     existing.name = record.name
     existing.reg_no = record.reg_no
-    existing.udi_di = record.udi_di
+    # Do not clear an existing real UDI-DI with NULL.
+    if record.udi_di:
+        existing.udi_di = record.udi_di
     existing.status = record.status
     existing.approved_date = record.approved_date
     existing.expiry_date = record.expiry_date

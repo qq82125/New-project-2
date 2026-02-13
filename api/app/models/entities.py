@@ -49,7 +49,8 @@ class Product(Base):
     __tablename__ = 'products'
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    udi_di: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # Real UDI-DI can be missing for some registry-only records.
+    udi_di: Mapped[Optional[str]] = mapped_column(String(128), unique=True, index=True, nullable=True)
     reg_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(500), index=True)
     class_name: Mapped[Optional[str]] = mapped_column('class', String(120), nullable=True)

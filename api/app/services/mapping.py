@@ -9,7 +9,7 @@ from typing import Any
 class ProductRecord:
     name: str
     reg_no: str | None
-    udi_di: str
+    udi_di: str | None
     status: str
     approved_date: date | None
     expiry_date: date | None
@@ -82,7 +82,7 @@ def map_raw_record(raw: dict[str, Any]) -> ProductRecord:
     return ProductRecord(
         name=name,
         reg_no=reg_no,
-        udi_di=udi_di or f'reg:{reg_no}',
+        udi_di=udi_di,
         status=status,
         approved_date=approved_date,
         expiry_date=expiry_date,

@@ -15,7 +15,7 @@ class CompanyOut(BaseModel):
 
 class ProductOut(BaseModel):
     id: UUID
-    udi_di: str
+    udi_di: str | None = None
     reg_no: str | None = None
     name: str
     status: str

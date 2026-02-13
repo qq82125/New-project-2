@@ -34,7 +34,7 @@ type SearchData = {
       id: string;
       name: string;
       reg_no?: string | null;
-      udi_di: string;
+      udi_di?: string | null;
       status: string;
       company?: { id: string; name: string } | null;
       expiry_date?: string | null;

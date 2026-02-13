@@ -51,7 +51,7 @@ def export_search_to_csv(
         writer.writerow(
             [
                 str(item.id),
-                item.udi_di,
+                item.udi_di or '',
                 item.name,
                 item.model or '',
                 item.specification or '',
