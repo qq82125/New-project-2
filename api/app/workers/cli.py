@@ -4,6 +4,10 @@ import argparse
 import json
 from datetime import date
 
+from pathlib import Path
+from datetime import datetime, timezone
+from uuid import UUID
+
 from app.db.session import SessionLocal
 from app.repositories.users import get_user_by_email
 from app.repositories.admin_membership import admin_grant_membership
@@ -11,10 +15,12 @@ from app.repositories.source_runs import finish_source_run, start_source_run
 from app.services.data_cleanup import rollback_non_ivd_cleanup, run_non_ivd_cleanup
 from app.services.local_registry_supplement import run_local_registry_supplement
 from app.services.metrics import generate_daily_metrics
+from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
 from app.services.reclassify_ivd import run_reclassify_ivd
 from app.services.subscriptions import dispatch_daily_subscription_digest
 from app.workers.loop import main as loop_main
 from app.workers.sync import sync_nmpa_ivd
+from app.pipeline.ingest import save_raw_document_from_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
         cleanup_mode.add_argument('--execute', action='store_true', help='Archive and delete non-IVD rows')
         cleanup_parser.add_argument('--recompute-days', type=int, default=365, help='Days of daily_metrics to recompute')
         cleanup_parser.add_argument('--notes', default=None, help='optional notes for data_cleanup_runs')
+        cleanup_parser.add_argument('--archive-batch-id', default=None, help='Optional batch id for archive/rollback traceability')
 
     _add_cleanup_parser('cleanup_non_ivd')
     _add_cleanup_parser('cleanup-non-ivd')  # backward-compatible alias
@@ -84,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     ivd_rollback_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     ivd_rollback_mode.add_argument('--execute', action='store_true', help='Execute rollback')
     ivd_rollback_parser.add_argument('--archive-batch-id', required=True)
+    ivd_rollback_parser.add_argument('--recompute-days', type=int, default=365, help='Days of daily_metrics to recompute')
 
     metrics_recompute_parser = sub.add_parser('metrics:recompute', help='Recompute metrics alias')
     metrics_recompute_parser.add_argument('--scope', default='ivd', choices=['ivd'])
@@ -98,6 +106,25 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument('--execute', action='store_true', help='Write updates to DB')
 
     sub.add_parser('loop', help='Run sync loop')
+
+    params_extract_parser = sub.add_parser('params:extract', help='Extract structured params from a raw document/manual')
+    params_extract_mode = params_extract_parser.add_mutually_exclusive_group()
+    params_extract_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    params_extract_mode.add_argument('--execute', action='store_true', help='Write extracted params to DB')
+    params_extract_parser.add_argument('--raw-document-id', default=None, help='Existing raw_documents.id UUID')
+    params_extract_parser.add_argument('--file', default=None, help='Local file path to upload as raw document')
+    params_extract_parser.add_argument('--source-url', default=None, help='Optional original source URL')
+    params_extract_parser.add_argument('--doc-type', default=None, help='Optional doc type hint: pdf/text/html')
+    params_extract_parser.add_argument('--run-id', default=None, help='Optional logical run id for traceability')
+    params_extract_parser.add_argument('--di', default=None, help='UDI-DI to bind params')
+    params_extract_parser.add_argument('--registry-no', default=None, help='Registration number to bind params')
+    params_extract_parser.add_argument('--extract-version', default='param_v1_20260213')
+
+    params_rb_parser = sub.add_parser('params:rollback', help='Rollback (delete) params extracted from a raw document')
+    params_rb_mode = params_rb_parser.add_mutually_exclusive_group()
+    params_rb_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    params_rb_mode.add_argument('--execute', action='store_true', help='Delete product_params rows for this raw document')
+    params_rb_parser.add_argument('--raw-document-id', required=True, help='raw_documents.id UUID')
     return parser
 
 
@@ -193,6 +220,7 @@ def _run_grant(email: str, months: int, reason: str | None, note: str | None, ac
 def _run_cleanup_non_ivd(*, dry_run: bool, recompute_days: int, notes: str | None) -> int:
     db = SessionLocal()
     try:
+        # Backward-compat call signature; archive_batch_id is passed by newer commands (ivd:cleanup, cleanup_non_ivd).
         result = run_non_ivd_cleanup(db, dry_run=dry_run, recompute_days=recompute_days, notes=notes)
         print(
             json.dumps(
@@ -214,13 +242,44 @@ def _run_cleanup_non_ivd(*, dry_run: bool, recompute_days: int, notes: str | Non
         db.close()
 
 
-def _run_ivd_rollback(*, archive_batch_id: str, dry_run: bool) -> int:
+def _run_cleanup_non_ivd_v2(*, dry_run: bool, recompute_days: int, notes: str | None, archive_batch_id: str | None) -> int:
+    db = SessionLocal()
+    try:
+        result = run_non_ivd_cleanup(
+            db,
+            dry_run=dry_run,
+            recompute_days=recompute_days,
+            notes=notes,
+            archive_batch_id=archive_batch_id,
+        )
+        print(
+            json.dumps(
+                {
+                    'ok': True,
+                    'run_id': result.run_id,
+                    'dry_run': result.dry_run,
+                    'target_count': result.target_count,
+                    'archived_count': result.archived_count,
+                    'deleted_count': result.deleted_count,
+                    'recomputed_days': result.recomputed_days,
+                    'notes': result.notes,
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
+def _run_ivd_rollback(*, archive_batch_id: str, dry_run: bool, recompute_days: int = 365) -> int:
     db = SessionLocal()
     try:
         result = rollback_non_ivd_cleanup(
             db,
             archive_batch_id=archive_batch_id,
             dry_run=dry_run,
+            recompute_days=int(recompute_days),
         )
         print(
             json.dumps(
@@ -231,6 +290,7 @@ def _run_ivd_rollback(*, archive_batch_id: str, dry_run: bool) -> int:
                     'target_count': result.target_count,
                     'restored_count': result.restored_count,
                     'skipped_existing': result.skipped_existing,
+                    'recomputed_days': (int(recompute_days) if not bool(dry_run) else 0),
                 },
                 ensure_ascii=True,
             )
@@ -243,7 +303,9 @@ def _run_ivd_rollback(*, archive_batch_id: str, dry_run: bool) -> int:
 def _run_metrics_recompute(*, scope: str, since: str | None) -> int:
     if scope != 'ivd':
         raise SystemExit('only --scope ivd is supported')
-    target_since = date.fromisoformat(since) if since else (date.today() - date.resolution * 365)
+    from datetime import timedelta
+
+    target_since = date.fromisoformat(since) if since else (date.today() - timedelta(days=365))
     days = max(1, (date.today() - target_since).days + 1)
     db = SessionLocal()
     try:
@@ -388,6 +450,90 @@ def _run_local_registry_supplement(*, folder: str, dry_run: bool, ingest_new: bo
         db.close()
 
 
+def _infer_doc_type(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == '.pdf':
+        return 'pdf'
+    if ext in {'.htm', '.html'}:
+        return 'html'
+    return 'text'
+
+
+def _run_params_extract(
+    *,
+    dry_run: bool,
+    raw_document_id: str | None,
+    file_path: str | None,
+    source_url: str | None,
+    doc_type: str | None,
+    run_id: str | None,
+    di: str | None,
+    registry_no: str | None,
+    extract_version: str,
+) -> int:
+    db = SessionLocal()
+    try:
+        rid: UUID | None = None
+        if raw_document_id:
+            rid = UUID(str(raw_document_id))
+        elif file_path:
+            p = Path(str(file_path))
+            if not p.exists() or not p.is_file():
+                raise SystemExit(f'file not found: {file_path}')
+            dtype = (doc_type or _infer_doc_type(p)).strip().lower()
+            rid = save_raw_document_from_path(
+                db,
+                source='MANUAL',
+                url=source_url,
+                file_path=p,
+                doc_type=dtype,
+                run_id=(run_id or f'manual_params:{datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")}'),
+            )
+        else:
+            raise SystemExit('either --raw-document-id or --file is required')
+
+        res = extract_params_for_raw_document(
+            db,
+            raw_document_id=rid,
+            di=(str(di).strip() or None) if di else None,
+            registry_no=(str(registry_no).strip() or None) if registry_no else None,
+            extract_version=str(extract_version),
+            dry_run=bool(dry_run),
+        )
+        print(
+            json.dumps(
+                {
+                    'ok': True,
+                    'dry_run': res.dry_run,
+                    'raw_document_id': str(res.raw_document_id),
+                    'di': res.di,
+                    'registry_no': res.registry_no,
+                    'bound_product_id': res.bound_product_id,
+                    'pages': res.pages,
+                    'deleted_existing': res.deleted_existing,
+                    'extracted': res.extracted,
+                    'extract_version': res.extract_version,
+                    'parse_log': res.parse_log,
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
+def _run_params_rollback(*, dry_run: bool, raw_document_id: str) -> int:
+    db = SessionLocal()
+    try:
+        rid = UUID(str(raw_document_id))
+        res = rollback_params_for_raw_document(db, raw_document_id=rid, dry_run=bool(dry_run))
+        print(json.dumps({'ok': True, 'dry_run': res.dry_run, 'raw_document_id': str(res.raw_document_id), 'deleted': res.deleted}, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -406,18 +552,20 @@ def main() -> None:
         raise SystemExit(_run_reclassify_ivd(dry_run=(not bool(args.execute))))
     if args.cmd in {'cleanup_non_ivd', 'cleanup-non-ivd'}:
         raise SystemExit(
-            _run_cleanup_non_ivd(
+            _run_cleanup_non_ivd_v2(
                 dry_run=(not bool(args.execute)),
                 recompute_days=int(args.recompute_days),
                 notes=args.notes,
+                archive_batch_id=getattr(args, 'archive_batch_id', None),
             )
         )
     if args.cmd == 'ivd:cleanup':
         raise SystemExit(
-            _run_cleanup_non_ivd(
+            _run_cleanup_non_ivd_v2(
                 dry_run=(not bool(args.execute)),
                 recompute_days=365,
                 notes=(f"archive_batch_id={args.archive_batch_id}" if args.archive_batch_id else None),
+                archive_batch_id=(str(args.archive_batch_id).strip() if args.archive_batch_id else None),
             )
         )
     if args.cmd == 'ivd:rollback':
@@ -425,6 +573,7 @@ def main() -> None:
             _run_ivd_rollback(
                 archive_batch_id=str(args.archive_batch_id),
                 dry_run=(not bool(args.execute)),
+                recompute_days=int(getattr(args, 'recompute_days', 365)),
             )
         )
     if args.cmd == 'metrics:recompute':
@@ -440,6 +589,22 @@ def main() -> None:
                 ingest_chunk_size=int(args.ingest_chunk_size),
             )
         )
+    if args.cmd == 'params:extract':
+        raise SystemExit(
+            _run_params_extract(
+                dry_run=(not bool(args.execute)),
+                raw_document_id=getattr(args, 'raw_document_id', None),
+                file_path=getattr(args, 'file', None),
+                source_url=getattr(args, 'source_url', None),
+                doc_type=getattr(args, 'doc_type', None),
+                run_id=getattr(args, 'run_id', None),
+                di=getattr(args, 'di', None),
+                registry_no=getattr(args, 'registry_no', None),
+                extract_version=str(getattr(args, 'extract_version', 'param_v1_20260213')),
+            )
+        )
+    if args.cmd == 'params:rollback':
+        raise SystemExit(_run_params_rollback(dry_run=(not bool(args.execute)), raw_document_id=str(args.raw_document_id)))
     if args.cmd == 'loop':
         loop_main()
         return

@@ -11,3 +11,4 @@ def test_ivd_classifier_contract_fields() -> None:
     assert out['source'] == 'RULE'
     assert isinstance(out['reason'], dict)
     assert out['version'] == 'ivd_v1_20260213'
+    assert isinstance(out['rule_version'], int)

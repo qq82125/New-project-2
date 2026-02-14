@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import os
 from typing import Literal
+from uuid import UUID
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from secrets import compare_digest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, desc, func, select, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
-from app.models import User
+from app.models import ProductRejected, RawDocument, User
 from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
 from app.repositories.data_sources import (
     activate_data_source,
@@ -107,6 +108,13 @@ from app.schemas.api import (
     ChangeListItemOut,
     ChangesListOut,
     ChangeDetailOut,
+    AdminRejectedProductsData,
+    ApiResponseAdminRejectedProducts,
+    ApiResponseParamsExtract,
+    ApiResponseParamsRollback,
+    ParamsExtractResultOut,
+    ParamsRollbackResultOut,
+    ProductRejectedOut,
 )
 from app.services.auth import (
     create_session_token,
@@ -121,6 +129,8 @@ from app.services.crypto import decrypt_json, encrypt_json
 from app.services.plan import compute_plan
 from app.services.source_audit import run_source_audit
 from app.services.data_quality import run_data_quality_audit
+from app.pipeline.ingest import save_raw_document
+from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
 from app.services.supplement_sync import (
     DEFAULT_SUPPLEMENT_SOURCE_NAME,
     run_nmpa_query_supplement_now,
@@ -753,7 +763,10 @@ def admin_products(
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseSearch:
-    ivd_filter = None if is_ivd == 'all' else (is_ivd == 'true')
+    # Strict scope: admin UI only lists IVD products. Non-IVD records are audited in products_rejected.
+    if is_ivd != 'true':
+        raise HTTPException(status_code=400, detail='Only is_ivd=true is supported. Use /api/admin/rejected-products for audit.')
+    ivd_filter = True
     products, total = admin_search_products(
         db,
         query=q,
@@ -777,6 +790,119 @@ def admin_products(
         items=[SearchItem(product=serialize_product(item)) for item in products],
     )
     return _ok(data)
+
+
+@app.get('/api/admin/rejected-products', response_model=ApiResponseAdminRejectedProducts)
+def admin_rejected_products(
+    q: str | None = Query(default=None, description='substring match on source_key'),
+    source: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminRejectedProducts:
+    stmt = select(ProductRejected)
+    if source:
+        stmt = stmt.where(ProductRejected.source == str(source))
+    if q:
+        stmt = stmt.where(ProductRejected.source_key.ilike(f'%{q}%'))
+
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    rows = list(
+        db.scalars(
+            stmt.order_by(desc(ProductRejected.rejected_at)).offset((page - 1) * page_size).limit(page_size)
+        ).all()
+    )
+    items = [
+        ProductRejectedOut(
+            id=x.id,
+            source=x.source,
+            source_key=x.source_key,
+            raw_document_id=x.raw_document_id,
+            reason=x.reason,
+            ivd_version=x.ivd_version,
+            rejected_at=x.rejected_at,
+        )
+        for x in rows
+    ]
+    return _ok(AdminRejectedProductsData(total=total, page=page, page_size=page_size, items=items))
+
+
+def _infer_doc_type_from_filename(name: str) -> str:
+    n = (name or '').lower()
+    if n.endswith('.pdf'):
+        return 'pdf'
+    if n.endswith('.html') or n.endswith('.htm'):
+        return 'html'
+    return 'text'
+
+
+@app.post('/api/admin/params/extract', response_model=ApiResponseParamsExtract)
+async def admin_params_extract(
+    mode: str = Query(default='dry-run', pattern='^(dry-run|execute)$'),
+    raw_document_id: str | None = Form(default=None),
+    di: str | None = Form(default=None),
+    registry_no: str | None = Form(default=None),
+    extract_version: str = Form(default='param_v1_20260213'),
+    doc_type: str | None = Form(default=None),
+    source_url: str | None = Form(default=None),
+    file: UploadFile | None = File(default=None),
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseParamsExtract:
+    rid: UUID | None = None
+    if raw_document_id:
+        rid = UUID(str(raw_document_id))
+    else:
+        if file is None:
+            raise HTTPException(status_code=400, detail='either raw_document_id or file is required')
+        content = await file.read()
+        dtype = (doc_type or _infer_doc_type_from_filename(file.filename or '')).strip().lower()
+        run_id = f'admin_params:{admin.id}'
+        rid = save_raw_document(
+            db,
+            source='MANUAL',
+            url=source_url,
+            content=content,
+            doc_type=dtype,
+            run_id=run_id,
+        )
+
+    dry_run = mode != 'execute'
+    res = extract_params_for_raw_document(
+        db,
+        raw_document_id=rid,
+        di=(str(di).strip() or None) if di else None,
+        registry_no=(str(registry_no).strip() or None) if registry_no else None,
+        extract_version=str(extract_version),
+        dry_run=bool(dry_run),
+    )
+    out = ParamsExtractResultOut(
+        dry_run=res.dry_run,
+        raw_document_id=res.raw_document_id,
+        di=res.di,
+        registry_no=res.registry_no,
+        bound_product_id=res.bound_product_id,
+        pages=res.pages,
+        deleted_existing=res.deleted_existing,
+        extracted=res.extracted,
+        extract_version=res.extract_version,
+        parse_log=res.parse_log,
+    )
+    return _ok(out)
+
+
+@app.post('/api/admin/params/rollback', response_model=ApiResponseParamsRollback)
+def admin_params_rollback(
+    mode: str = Query(default='dry-run', pattern='^(dry-run|execute)$'),
+    raw_document_id: str = Form(...),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseParamsRollback:
+    rid = UUID(str(raw_document_id))
+    dry_run = mode != 'execute'
+    res = rollback_params_for_raw_document(db, raw_document_id=rid, dry_run=bool(dry_run))
+    return _ok(ParamsRollbackResultOut(dry_run=res.dry_run, raw_document_id=res.raw_document_id, deleted=res.deleted))
 
 
 @app.get('/api/products/full', response_model=ApiResponseSearch)
@@ -1117,7 +1243,7 @@ def changes_list(
     db: Session = Depends(get_db),
 ) -> ApiResponseChangesList:
     effective_page_size = int(page_size or limit or 50)
-    rows, total = list_recent_changes(
+    result = list_recent_changes(
         db,
         days=days,
         limit=effective_page_size,
@@ -1128,6 +1254,13 @@ def changes_list(
         company=company,
         reg_no=reg_no,
     )
+    # Backwards-compatible: older implementations (and some unit tests) expect
+    # list_recent_changes() to return just the rows. Newer code returns (rows, total).
+    if isinstance(result, tuple) and len(result) == 2:
+        rows, total = result
+    else:
+        rows = result
+        total = len(rows)
     items = []
     for change, product in rows:
         items.append(

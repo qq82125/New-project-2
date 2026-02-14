@@ -23,11 +23,15 @@ python -m app.cli ivd:cleanup --dry-run
 python -m app.cli ivd:cleanup --execute
 ```
 
-- `execute` 输出中会包含归档批次标识（`archive_batch_id=...`）并写入 `data_cleanup_runs.notes`。
+- `execute` 输出中会包含归档批次标识（`archive_batch_id=...`）并写入 `data_cleanup_runs.notes`，同时也会写入 `products_archive.archive_batch_id` 与 `change_log_archive.archive_batch_id`。
 
 ## 4) 回滚
 ```bash
 python -m app.cli ivd:rollback --execute --archive-batch-id <batch_id>
+```
+可选：回滚后重算多少天指标（默认 365 天）：
+```bash
+python -m app.cli ivd:rollback --execute --archive-batch-id <batch_id> --recompute-days 365
 ```
 
 ## 5) 指标重算

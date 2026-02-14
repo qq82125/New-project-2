@@ -259,6 +259,76 @@ class ApiResponseProductTimeline(BaseModel):
     data: ProductTimelineOut
 
 
+class RawDocumentOut(BaseModel):
+    id: UUID
+    source: str
+    source_url: str | None = None
+    doc_type: str | None = None
+    storage_uri: str
+    sha256: str
+    fetched_at: datetime
+    run_id: str
+    parse_status: str | None = None
+    parse_log: dict | None = None
+    error: str | None = None
+
+
+class ProductRejectedOut(BaseModel):
+    id: UUID
+    source: str | None = None
+    source_key: str | None = None
+    raw_document_id: UUID | None = None
+    reason: dict | None = None
+    ivd_version: str | None = None
+    rejected_at: datetime
+
+
+class AdminRejectedProductsData(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[ProductRejectedOut]
+
+
+class ApiResponseAdminRejectedProducts(BaseModel):
+    code: int
+    message: str
+    data: AdminRejectedProductsData
+
+
+class ParamsExtractResultOut(BaseModel):
+    ok: bool = True
+    dry_run: bool
+    raw_document_id: UUID
+    di: str | None = None
+    registry_no: str | None = None
+    bound_product_id: str | None = None
+    pages: int
+    deleted_existing: int
+    extracted: int
+    extract_version: str
+    parse_log: dict | None = None
+
+
+class ApiResponseParamsExtract(BaseModel):
+    code: int
+    message: str
+    data: ParamsExtractResultOut
+
+
+class ParamsRollbackResultOut(BaseModel):
+    ok: bool = True
+    dry_run: bool
+    raw_document_id: UUID
+    deleted: int
+
+
+class ApiResponseParamsRollback(BaseModel):
+    code: int
+    message: str
+    data: ParamsRollbackResultOut
+
+
 class ChangeStatsOut(BaseModel):
     days: int = 30
     total: int

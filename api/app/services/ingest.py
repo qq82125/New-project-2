@@ -5,13 +5,14 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from bs4 import BeautifulSoup
 
 from app.models import ChangeLog, Company, Product, ProductRejected
-from app.services.ivd_classifier import classify_ivd
+from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 
 TRACKED_FIELDS = (
@@ -155,7 +156,11 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
                 else None
             ),
             ivd_reason=(ivd_meta.get('reason') if isinstance(ivd_meta, dict) and isinstance(ivd_meta.get('reason'), dict) else None),
-            ivd_version=(int(ivd_meta.get('version')) if isinstance(ivd_meta, dict) and ivd_meta.get('version') is not None else 1),
+            ivd_version=(
+                int(ivd_meta.get('rule_version') or ivd_meta.get('version') or 1)
+                if isinstance(ivd_meta, dict)
+                else 1
+            ),
             ivd_source=(str(ivd_meta.get('source')) if isinstance(ivd_meta, dict) and ivd_meta.get('source') is not None else None),
             ivd_confidence=(
                 float(ivd_meta.get('confidence'))
@@ -203,7 +208,7 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
             else None
         )
         existing.ivd_reason = ivd_meta.get('reason') if isinstance(ivd_meta.get('reason'), dict) else None
-        existing.ivd_version = int(ivd_meta.get('version') or 1)
+        existing.ivd_version = int(ivd_meta.get('rule_version') or ivd_meta.get('version') or 1)
         existing.ivd_source = str(ivd_meta.get('source')) if ivd_meta.get('source') is not None else None
         existing.ivd_confidence = float(ivd_meta.get('confidence')) if ivd_meta.get('confidence') is not None else None
     if company:
@@ -238,7 +243,13 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
     return 'updated', existing
 
 
-def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_run_id: int | None) -> dict[str, int]:
+def ingest_staging_records(
+    db: Session,
+    records: list[dict[str, Any]],
+    source_run_id: int | None,
+    *,
+    raw_document_id: UUID | None = None,
+) -> dict[str, int]:
     stats = {'total': len(records), 'success': 0, 'failed': 0, 'filtered': 0, 'added': 0, 'updated': 0, 'removed': 0}
 
     def _extract_classification_code(raw: dict[str, Any], record: ProductRecord) -> str:
@@ -254,11 +265,12 @@ def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_ru
             if not is_valid_product_name(record.name):
                 stats['filtered'] += 1
                 continue
-            decision = classify_ivd(
+            decision = classify(
                 {
                     'name': record.name,
                     'classification_code': _extract_classification_code(raw, record),
-                }
+                },
+                version=IVD_CLASSIFIER_VERSION,
             )
             if not bool(decision.get('is_ivd')):
                 source_key = str(record.udi_di or record.reg_no or record.name or '').strip() or None
@@ -266,6 +278,7 @@ def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_ru
                     ProductRejected(
                         source='NMPA_UDI',
                         source_key=source_key,
+                        raw_document_id=raw_document_id,
                         reason={'decision': decision},
                         ivd_version=str(decision.get('version') or ''),
                     )
@@ -278,7 +291,10 @@ def ingest_staging_records(db: Session, records: list[dict[str, Any]], source_ru
                 'ivd_category': decision.get('ivd_category'),
                 'ivd_subtypes': decision.get('ivd_subtypes') or [],
                 'reason': decision.get('reason'),
-                'version': decision.get('version', 1),
+                # Back-compat: keep numeric `version` for DB mapping (products.ivd_version is INTEGER).
+                'version': int(decision.get('rule_version') or 1),
+                # Human-readable classifier version string for audit/debug.
+                'version_label': decision.get('version', IVD_CLASSIFIER_VERSION),
                 'source': decision.get('source') or 'RULE',
                 'confidence': decision.get('confidence', 0.5),
             }

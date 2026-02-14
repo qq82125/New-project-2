@@ -225,6 +225,29 @@ class ChangeLog(Base):
     change_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ChangeLogArchive(Base):
+    __tablename__ = 'change_log_archive'
+
+    archive_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    entity_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    change_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    changed_fields: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    before_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    after_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    before_raw: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    after_raw: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    change_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    cleanup_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    archive_batch_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 class Subscription(Base):
     __tablename__ = 'subscriptions'
 

@@ -1,6 +1,7 @@
 from app.models.entities import (
     AdminConfig,
     ChangeLog,
+    ChangeLogArchive,
     Company,
     DataCleanupRun,
     DataSource,
@@ -34,6 +35,7 @@ __all__ = [
     'Registration',
     'SourceRun',
     'ChangeLog',
+    'ChangeLogArchive',
     'DailyDigestRun',
     'DailyMetric',
     'Subscription',

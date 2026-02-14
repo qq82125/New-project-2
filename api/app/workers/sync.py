@@ -37,6 +37,10 @@ from app.services.ivd_classifier import VERSION as IVD_CLASSIFIER_VERSION
 from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 from app.services.metrics import generate_daily_metrics
 from app.services.subscriptions import dispatch_daily_subscription_digest
+from app.pipeline.ingest import save_raw_document_from_path
+from app.models import RawDocument
+from app.sources.nmpa_udi.parser import parse_udi_zip_bytes
+from app.services.udi_variants import upsert_product_variants
 
 logger = logging.getLogger(__name__)
 
@@ -299,9 +303,67 @@ def sync_nmpa_ivd(
         if not verify_checksum(archive_path, checksum or package.md5, algorithm=checksum_algorithm):
             raise ValueError(f'{checksum_algorithm.upper()} mismatch for {archive_path.name}')
 
+        raw_doc_id = save_raw_document_from_path(
+            db,
+            source='NMPA_UDI',
+            url=package.download_url,
+            file_path=archive_path,
+            doc_type='archive',
+            run_id=f'source_run:{int(run.id)}',
+        )
+
+        # Best-effort: parse DI-level variants for packaging/manufacturer enrichment.
+        variant_report = None
+        try:
+            variant_rows = parse_udi_zip_bytes(archive_path.read_bytes())
+            variant_result = upsert_product_variants(
+                db,
+                rows=variant_rows,
+                raw_document_id=raw_doc_id,
+                source_run_id=int(run.id),
+                dry_run=False,
+            )
+            variant_report = {
+                'total': variant_result.total,
+                'skipped': variant_result.skipped,
+                'upserted': variant_result.upserted,
+                'ivd_true': variant_result.ivd_true,
+                'ivd_false': variant_result.ivd_false,
+                'linked_products': variant_result.linked_products,
+            }
+        except Exception as exc:
+            variant_report = {'error': str(exc)}
+
         extract_to_staging(archive_path, extract_dir)
         records = load_staging_records(extract_dir)
-        stats = ingest_staging_records(db, records, run.id)
+        try:
+            stats = ingest_staging_records(db, records, run.id, raw_document_id=raw_doc_id)
+        except TypeError:
+            # Backward-compat for older stubs/mocks that don't accept raw_document_id.
+            stats = ingest_staging_records(db, records, run.id)
+
+        # Update evidence chain parse status for this package.
+        try:
+            doc = db.get(RawDocument, raw_doc_id)
+            if doc is not None:
+                doc.parse_status = 'PARSED'
+                doc.parse_log = {
+                    'kind': 'nmpa_udi_package',
+                    'source_run_id': int(run.id),
+                    'package_name': package.filename,
+                    'checksum_algorithm': checksum_algorithm,
+                    'md5': (checksum or package.md5),
+                    'ingest_stats': dict(stats),
+                    'variant_report': variant_report,
+                }
+                db.add(doc)
+                db.commit()
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
         finish_source_run(
             db,
             run,
@@ -317,8 +379,10 @@ def sync_nmpa_ivd(
             non_ivd_skipped_count=stats['filtered'],
             source_notes={
                 'ingest_filtered_non_ivd': int(stats['filtered']),
+                'raw_document_id': str(raw_doc_id),
                 'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
                 'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
+                'variant_report': variant_report,
             },
         )
         generate_daily_metrics(db)

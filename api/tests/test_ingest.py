@@ -82,12 +82,16 @@ def test_ingest_filters_non_ivd_records(monkeypatch) -> None:
     db = FakeDB()
 
     monkeypatch.setattr(
-        'app.services.ingest.classify_ivd',
-        lambda raw: {
+        'app.services.ingest.classify',
+        lambda raw, version=None: {
             'is_ivd': bool(raw.get('classification_code') == '22'),
             'ivd_category': 'reagent',
-            'reason': {'by': 'unit_test'},
-            'version': 1,
+            'ivd_subtypes': [],
+            'reason': {'by': 'unit_test', 'needs_review': False},
+            'version': 'ivd_v1_20260213',
+            'rule_version': 1,
+            'source': 'RULE',
+            'confidence': 0.9,
         },
     )
     monkeypatch.setattr(
@@ -126,12 +130,16 @@ def test_ingest_writes_ivd_metadata_into_raw(monkeypatch) -> None:
     db = FakeDB()
 
     monkeypatch.setattr(
-        'app.services.ingest.classify_ivd',
-        lambda _raw: {
+        'app.services.ingest.classify',
+        lambda _raw, version=None: {
             'is_ivd': True,
             'ivd_category': 'reagent',
-            'reason': {'by': 'class_code', 'rule': 'startswith_22'},
-            'version': 1,
+            'ivd_subtypes': [],
+            'reason': {'by': 'class_code', 'rule': 'startswith_22', 'needs_review': False},
+            'version': 'ivd_v1_20260213',
+            'rule_version': 1,
+            'source': 'RULE',
+            'confidence': 0.9,
         },
     )
     monkeypatch.setattr(
@@ -158,7 +166,8 @@ def test_ingest_writes_ivd_metadata_into_raw(monkeypatch) -> None:
     monkeypatch.setattr('app.services.ingest.upsert_product_record', _upsert)
     stats = ingest_staging_records(db, [{'name': '体外诊断试剂盒', 'udi_di': 'U-IVD'}], source_run_id=1)
     assert stats['success'] == 1
-    assert captured['raw']['_ivd']['reason'] == {'by': 'class_code', 'rule': 'startswith_22'}
+    assert captured['raw']['_ivd']['reason']['by'] == 'class_code'
+    assert captured['raw']['_ivd']['reason']['rule'] == 'startswith_22'
     assert captured['raw']['_ivd']['version'] == 1
 
 
@@ -184,12 +193,16 @@ def test_ingest_filters_invalid_product_name(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        'app.services.ingest.classify_ivd',
-        lambda _raw: {
+        'app.services.ingest.classify',
+        lambda _raw, version=None: {
             'is_ivd': True,
             'ivd_category': 'reagent',
-            'reason': {'by': 'unit_test'},
-            'version': 1,
+            'ivd_subtypes': [],
+            'reason': {'by': 'unit_test', 'needs_review': False},
+            'version': 'ivd_v1_20260213',
+            'rule_version': 1,
+            'source': 'RULE',
+            'confidence': 0.9,
         },
     )
 

@@ -42,14 +42,15 @@ def run_non_ivd_cleanup(
     dry_run: bool,
     recompute_days: int = 365,
     notes: str | None = None,
+    archive_batch_id: str | None = None,
 ) -> CleanupResult:
     target_count = _count_targets(db)
-    archive_batch_id = f"non_ivd_cleanup_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    batch_id = str(archive_batch_id or '').strip() or f"non_ivd_cleanup_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     run = DataCleanupRun(
         dry_run=bool(dry_run),
         archived_count=(target_count if dry_run else 0),
         deleted_count=0,
-        notes=(f"{notes or ''} archive_batch_id={archive_batch_id}".strip()),
+        notes=(f"{notes or ''} archive_batch_id={batch_id}".strip()),
     )
     db.add(run)
     db.commit()
@@ -91,17 +92,33 @@ def run_non_ivd_cleanup(
                     WHERE p.is_ivd IS FALSE
                     """
                 ),
-                {'cleanup_run_id': int(run.id), 'archive_batch_id': archive_batch_id},
+                {'cleanup_run_id': int(run.id), 'archive_batch_id': batch_id},
             ).rowcount
             or 0
         )
 
-        # 2) delete related change logs to satisfy FK and keep data scope clean
+        # 2) archive then delete related change logs (evidence chain)
         db.execute(
-            delete(ChangeLog).where(
-                ChangeLog.product_id.in_(select(Product.id).where(Product.is_ivd.is_(False)))
-            )
+            text(
+                """
+                INSERT INTO change_log_archive (
+                    id, product_id, entity_type, entity_id, change_type,
+                    changed_fields, before_json, after_json, before_raw, after_raw,
+                    source_run_id, changed_at, change_date,
+                    cleanup_run_id, archive_batch_id, archive_reason
+                )
+                SELECT
+                    c.id, c.product_id, c.entity_type, c.entity_id, c.change_type,
+                    c.changed_fields, c.before_json, c.after_json, c.before_raw, c.after_raw,
+                    c.source_run_id, c.changed_at, c.change_date,
+                    :cleanup_run_id, :archive_batch_id, 'non_ivd_cleanup'
+                FROM change_log c
+                WHERE c.product_id IN (SELECT p.id FROM products p WHERE p.is_ivd IS FALSE)
+                """
+            ),
+            {'cleanup_run_id': int(run.id), 'archive_batch_id': batch_id},
         )
+        db.execute(delete(ChangeLog).where(ChangeLog.product_id.in_(select(Product.id).where(Product.is_ivd.is_(False)))))
 
         # 3) delete target products
         deleted_count = int(db.execute(delete(Product).where(Product.is_ivd.is_(False))).rowcount or 0)
@@ -113,7 +130,7 @@ def run_non_ivd_cleanup(
 
         run.archived_count = archived_count
         run.deleted_count = deleted_count
-        run.notes = (f"{notes or ''} archive_batch_id={archive_batch_id}".strip())
+        run.notes = (f"{notes or ''} archive_batch_id={batch_id}".strip())
         db.add(run)
         db.commit()
 
@@ -138,6 +155,7 @@ def rollback_non_ivd_cleanup(
     *,
     archive_batch_id: str,
     dry_run: bool,
+    recompute_days: int = 365,
 ) -> RollbackResult:
     batch_id = str(archive_batch_id or '').strip()
     if not batch_id:
@@ -186,7 +204,62 @@ def rollback_non_ivd_cleanup(
         ).rowcount
         or 0
     )
+
+    # Restore change_log evidence for this batch (best-effort, idempotent).
+    db.execute(
+        text(
+            """
+            INSERT INTO change_log (
+                id, product_id, entity_type, entity_id, change_type,
+                changed_fields, before_json, after_json, before_raw, after_raw,
+                source_run_id, changed_at, change_date
+            )
+            SELECT
+                a.id, a.product_id, a.entity_type, a.entity_id, a.change_type,
+                COALESCE(a.changed_fields, '{}'::jsonb), a.before_json, a.after_json, a.before_raw, a.after_raw,
+                a.source_run_id,
+                COALESCE(a.changed_at, a.change_date, now()),
+                COALESCE(a.change_date, a.changed_at, now())
+            FROM change_log_archive a
+            WHERE a.archive_batch_id = :bid
+              AND a.id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM change_log c
+                WHERE c.id = a.id
+              )
+            """
+        ),
+        {'bid': batch_id},
+    )
+
+    # Ensure change_log id sequence is ahead of restored ids.
+    db.execute(
+        text(
+            """
+            DO $$
+            DECLARE
+              seq text;
+              mx bigint;
+            BEGIN
+              seq := pg_get_serial_sequence('change_log', 'id');
+              IF seq IS NULL THEN
+                RETURN;
+              END IF;
+              SELECT COALESCE(MAX(id), 0) INTO mx FROM change_log;
+              PERFORM setval(seq, GREATEST(mx, 1), true);
+            END $$;
+            """
+        )
+    )
     db.commit()
+    # Keep dashboard scope consistent after rollback.
+    try:
+        regenerate_daily_metrics(db, days=max(1, int(recompute_days)))
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
     skipped = max(0, target_count - restored)
     return RollbackResult(
         archive_batch_id=batch_id,

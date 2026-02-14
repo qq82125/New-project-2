@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Product
-from app.services.ivd_classifier import VERSION as IVD_RULE_VERSION, classify_ivd
+from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
+from app.services.ivd_classifier import VERSION as INTERNAL_RULE_VERSION
 
 
 @dataclass
@@ -35,7 +36,7 @@ def _normalize_result(decision: dict[str, Any]) -> tuple[bool, str | None, list[
     ivd_category = str(decision.get('ivd_category')) if decision.get('ivd_category') is not None else None
     ivd_subtypes = [str(x) for x in (decision.get('ivd_subtypes') or []) if str(x).strip()]
     reason = decision.get('reason') if isinstance(decision.get('reason'), dict) else None
-    version = int(decision.get('version') or IVD_RULE_VERSION)
+    version = int(decision.get('rule_version') or 1)
     return is_ivd, ivd_category, ivd_subtypes, reason, version
 
 
@@ -69,11 +70,12 @@ def run_reclassify_ivd(db: Session, *, dry_run: bool) -> ReclassifyResult:
 
         for p in rows:
             scanned += 1
-            decision = classify_ivd(
+            decision = classify(
                 {
                     'name': str(getattr(p, 'name', '') or ''),
                     'classification_code': _extract_class_code_from_values(getattr(p, 'raw_json', None), getattr(p, 'class_name', None)),
-                }
+                },
+                version=IVD_CLASSIFIER_VERSION,
             )
             is_ivd, ivd_category, ivd_subtypes, reason, version = _normalize_result(decision)
             if is_ivd:
@@ -122,5 +124,5 @@ def run_reclassify_ivd(db: Session, *, dry_run: bool) -> ReclassifyResult:
         updated=updated,
         ivd_true=ivd_true,
         ivd_false=ivd_false,
-        ivd_version=int(IVD_RULE_VERSION),
+        ivd_version=int(INTERNAL_RULE_VERSION),
     )
