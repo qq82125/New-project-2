@@ -11,6 +11,7 @@ import ProUpgradeHint from '../../components/plan/ProUpgradeHint';
 import Link from 'next/link';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
 import { CHANGE_TYPE_ZH, FIELD_ZH, RUN_STATUS_ZH, labelFrom } from '../../constants/display';
+import PaginationControls from '../../components/PaginationControls';
 
 type StatusData = {
   latest_runs: Array<{
@@ -37,6 +38,9 @@ type ChangeStatsData = {
 
 type ChangesListData = {
   days: number;
+  total: number;
+  page: number;
+  page_size: number;
   items: Array<{
     id: number;
     change_type: string;
@@ -53,7 +57,12 @@ type ChangesListData = {
   }>;
 };
 
-export default async function StatusPage() {
+type PageParams = {
+  page?: string;
+  page_size?: string;
+};
+
+export default async function StatusPage({ searchParams }: { searchParams: Promise<PageParams> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const meRes = await fetch(`${API_BASE}/api/auth/me`, {
@@ -66,10 +75,16 @@ export default async function StatusPage() {
   const me = await getMe();
   const isPro = Boolean(me?.plan?.is_pro || me?.plan?.is_admin);
 
+  const params = await searchParams;
+  const page = Math.max(1, Number(params.page || '1'));
+  const pageSize = Math.max(1, Number(params.page_size || '20'));
+
   const [res, statsRes, changesRes] = await Promise.all([
     apiGet<StatusData>('/api/status'),
     apiGet<ChangeStatsData>('/api/changes/stats?days=30'),
-    isPro ? apiGet<ChangesListData>('/api/changes?days=30&limit=50') : Promise.resolve({ data: null, error: null }),
+    isPro
+      ? apiGet<ChangesListData>(`/api/changes?days=30&page=${encodeURIComponent(String(page))}&page_size=${encodeURIComponent(String(pageSize))}`)
+      : Promise.resolve({ data: null, error: null }),
   ]);
 
   if (res.error) {
@@ -124,44 +139,69 @@ export default async function StatusPage() {
             ) : !changesRes.data || changesRes.data.items.length === 0 ? (
               <EmptyState text="暂无变化记录" />
             ) : (
-              <div className="list">
-                {changesRes.data.items.map((x) => (
-                  <Card key={x.id}>
-                    <CardHeader>
-                      <CardTitle>
-                        <Link href={`/products/${x.product.id}`}>{x.product.name}</Link>
-                      </CardTitle>
-                      <CardDescription>
-                        <span className="muted">{labelFrom(FIELD_ZH, 'change_type')}:</span> {labelFrom(CHANGE_TYPE_ZH, x.change_type)}
-                        {' · '}
-                        <span className="muted">时间:</span>{' '}
-                        {x.change_date ? new Date(x.change_date).toLocaleString() : x.changed_at ? new Date(x.changed_at).toLocaleString() : '-'}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="grid">
-                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <Badge variant="muted">
-                          {labelFrom(FIELD_ZH, 'reg_no')}: {x.product.reg_no || '-'}
-                        </Badge>
-                        <Badge variant="muted">
-                          {labelFrom(FIELD_ZH, 'udi_di')}: {x.product.udi_di || '-'}
-                        </Badge>
-                        <Link className="muted" href={`/changes/${x.id}`}>
-                          查看详情
-                        </Link>
-                      </div>
-                      <div>
-                        <span className="muted">企业：</span>
-                        {x.product.company?.id ? (
-                          <Link href={`/companies/${x.product.company.id}`}>{x.product.company.name}</Link>
-                        ) : (
-                          '-'
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+              <>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Badge variant="muted">共 {changesRes.data.total} 条</Badge>
+                  <span className="muted">
+                    第 {changesRes.data.page} / {Math.max(1, Math.ceil(changesRes.data.total / Math.max(1, changesRes.data.page_size)))} 页（每页{' '}
+                    {changesRes.data.page_size} 条）
+                  </span>
+                  <Link className="muted" href="/changes/export">
+                    历史变化导出
+                  </Link>
+                </div>
+
+                <div className="list">
+                  {changesRes.data.items.map((x) => (
+                    <Card key={x.id}>
+                      <CardHeader>
+                        <CardTitle>
+                          <Link href={`/products/${x.product.id}`}>{x.product.name}</Link>
+                        </CardTitle>
+                        <CardDescription>
+                          <span className="muted">{labelFrom(FIELD_ZH, 'change_type')}:</span> {labelFrom(CHANGE_TYPE_ZH, x.change_type)}
+                          {' · '}
+                          <span className="muted">时间:</span>{' '}
+                          {x.change_date ? new Date(x.change_date).toLocaleString() : x.changed_at ? new Date(x.changed_at).toLocaleString() : '-'}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="grid">
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <Badge variant="muted">
+                            {labelFrom(FIELD_ZH, 'reg_no')}: {x.product.reg_no || '-'}
+                          </Badge>
+                          <Badge variant="muted">
+                            {labelFrom(FIELD_ZH, 'udi_di')}: {x.product.udi_di || '-'}
+                          </Badge>
+                          <Link className="muted" href={`/changes/${x.id}`}>
+                            查看详情
+                          </Link>
+                        </div>
+                        <div>
+                          <span className="muted">企业：</span>
+                          {x.product.company?.id ? (
+                            <Link href={`/companies/${x.product.company.id}`}>{x.product.company.name}</Link>
+                          ) : (
+                            '-'
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                <Card>
+                  <CardContent style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <PaginationControls
+                      basePath="/status"
+                      params={{}}
+                      page={changesRes.data.page}
+                      pageSize={changesRes.data.page_size}
+                      total={changesRes.data.total}
+                    />
+                  </CardContent>
+                </Card>
+              </>
             )}
           </CardContent>
         </Card>
