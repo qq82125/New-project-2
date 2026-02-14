@@ -10,6 +10,7 @@ import { getMe } from '../../lib/getMe';
 import ProUpgradeHint from '../../components/plan/ProUpgradeHint';
 import Link from 'next/link';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
+import { CHANGE_TYPE_ZH, FIELD_ZH, RUN_STATUS_ZH, labelFrom } from '../../constants/display';
 
 type StatusData = {
   latest_runs: Array<{
@@ -45,7 +46,7 @@ type ChangesListData = {
       id: string;
       name: string;
       reg_no?: string | null;
-      udi_di: string;
+      udi_di?: string | null;
       status: string;
       company?: { id: string; name: string } | null;
     };
@@ -96,7 +97,7 @@ export default async function StatusPage() {
                 <Badge variant="muted">总变化：{statsRes.data.total}</Badge>
                 {Object.entries(statsRes.data.by_type || {}).map(([k, v]) => (
                   <Badge key={k} variant="muted">
-                    {k}: {v}
+                    {labelFrom(CHANGE_TYPE_ZH, k)}: {v}
                   </Badge>
                 ))}
               </div>
@@ -131,15 +132,19 @@ export default async function StatusPage() {
                         <Link href={`/products/${x.product.id}`}>{x.product.name}</Link>
                       </CardTitle>
                       <CardDescription>
-                        <span className="muted">type:</span> {x.change_type}
+                        <span className="muted">{labelFrom(FIELD_ZH, 'change_type')}:</span> {labelFrom(CHANGE_TYPE_ZH, x.change_type)}
                         {' · '}
-                        <span className="muted">at:</span>{' '}
+                        <span className="muted">时间:</span>{' '}
                         {x.change_date ? new Date(x.change_date).toLocaleString() : x.changed_at ? new Date(x.changed_at).toLocaleString() : '-'}
                       </CardDescription>
                     </CardHeader>
                     <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Badge variant="muted">reg_no: {x.product.reg_no || '-'}</Badge>
-                      <Badge variant="muted">udi_di: {x.product.udi_di}</Badge>
+                      <Badge variant="muted">
+                        {labelFrom(FIELD_ZH, 'reg_no')}: {x.product.reg_no || '-'}
+                      </Badge>
+                      <Badge variant="muted">
+                        {labelFrom(FIELD_ZH, 'udi_di')}: {x.product.udi_di || '-'}
+                      </Badge>
                       <Link className="muted" href={`/changes/${x.id}`}>
                         查看详情
                       </Link>
@@ -167,13 +172,13 @@ export default async function StatusPage() {
           <CardContent className="grid">
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <Badge variant={run.status === 'success' ? 'success' : run.status === 'failed' ? 'danger' : 'muted'}>
-                status: {run.status}
+                状态: {labelFrom(RUN_STATUS_ZH, (run.status || '').toLowerCase())}
               </Badge>
               <Badge variant="muted">
-                records: {run.records_success}/{run.records_total} (failed {run.records_failed})
+                处理: {run.records_success}/{run.records_total} (失败 {run.records_failed})
               </Badge>
               <Badge variant="muted">
-                added/updated/removed: {run.added_count}/{run.updated_count}/{run.removed_count}
+                新增/变更/移除: {run.added_count}/{run.updated_count}/{run.removed_count}
               </Badge>
             </div>
             <div className="muted">message: {run.message || '-'}</div>

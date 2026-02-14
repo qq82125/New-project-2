@@ -29,7 +29,14 @@ type DetailData = {
     id: number;
     change_type: string;
     change_date?: string | null;
-    product: { id: string; name: string; udi_di: string; reg_no?: string | null; status: string; ivd_category?: string | null };
+    product: {
+      id: string;
+      name: string;
+      udi_di?: string | null;
+      reg_no?: string | null;
+      status: string;
+      ivd_category?: string | null;
+    };
   }>;
   recent_changes_total: number;
   page: number;
@@ -123,10 +130,10 @@ export default async function CompanyTrackingDetailPage({
                         </CardDescription>
                       </CardHeader>
                       <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                        <Badge variant="muted">UDI-DI: {x.product.udi_di}</Badge>
+                        <Badge variant="muted">UDI-DI: {x.product.udi_di || '-'}</Badge>
                         <Badge variant="muted">注册证号: {x.product.reg_no || '-'}</Badge>
                         <Badge variant="muted">状态: {labelFrom(STATUS_ZH, x.product.status)}</Badge>
-                        <Badge variant="muted">IVD类别: {labelFrom(IVD_CATEGORY_ZH, x.product.ivd_category)}</Badge>
+                        <Badge variant="muted">IVD分类: {labelFrom(IVD_CATEGORY_ZH, x.product.ivd_category)}</Badge>
                       </CardContent>
                     </Card>
                   ))}

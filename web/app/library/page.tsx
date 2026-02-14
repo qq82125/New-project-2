@@ -40,7 +40,7 @@ type ProductListData = {
       id: string;
       name: string;
       reg_no?: string | null;
-      udi_di: string;
+      udi_di?: string | null;
       status: string;
       class_name?: string | null;
       ivd_category?: string | null;
@@ -184,14 +184,14 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
                       <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
                     </CardTitle>
                     <CardDescription>
-                      <span className="muted">UDI-DI:</span> {item.product.udi_di}
+                      <span className="muted">UDI-DI:</span> {item.product.udi_di || '-'}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="grid">
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                       <Badge variant="muted">注册证号: {item.product.reg_no || '-'}</Badge>
                       <Badge variant="muted">分类码: {item.product.class_name || '-'}</Badge>
-                      <Badge variant="muted">IVD类别: {labelFrom(IVD_CATEGORY_ZH, item.product.ivd_category)}</Badge>
+                      <Badge variant="muted">IVD分类: {labelFrom(IVD_CATEGORY_ZH, item.product.ivd_category)}</Badge>
                       <Badge variant="muted">批准日期: {item.product.approved_date || '-'}</Badge>
                       <Badge variant="muted">失效日期: {item.product.expiry_date || '-'}</Badge>
                     </div>

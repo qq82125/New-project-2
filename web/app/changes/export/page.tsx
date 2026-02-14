@@ -37,7 +37,7 @@ type ChangesListData = {
       id: string;
       name: string;
       reg_no?: string | null;
-      udi_di: string;
+      udi_di?: string | null;
       ivd_category?: string | null;
       company?: { id: string; name: string } | null;
     };
@@ -92,7 +92,7 @@ export default async function ChangesExportPage({ searchParams }: { searchParams
             <Badge variant="success">Pro</Badge>
           </div>
           <div className="muted" style={{ marginBottom: 12 }}>
-            导出字段：变化ID、变化类型、变化时间、产品ID、产品名称、注册证号、UDI-DI、IVD类别、企业名称。
+            导出字段：变化ID、变化类型、变化时间、产品ID、产品名称、注册证号、UDI-DI、IVD分类、企业名称。
           </div>
           <form className="controls" method="GET">
             <Select name="days" defaultValue={String(days)}>
@@ -105,8 +105,8 @@ export default async function ChangesExportPage({ searchParams }: { searchParams
             <Select name="change_type" defaultValue={params.change_type || ''}>
               <option value="">全部变化类型</option>
               <option value="new">新增</option>
-              <option value="update">更新</option>
-              <option value="expire">过期</option>
+              <option value="update">变更</option>
+              <option value="expire">失效</option>
               <option value="cancel">注销</option>
             </Select>
             <Input name="q" defaultValue={params.q} placeholder="产品名称关键词" />
@@ -154,8 +154,8 @@ export default async function ChangesExportPage({ searchParams }: { searchParams
                   </CardHeader>
                   <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                     <Badge variant="muted">注册证号: {item.product.reg_no || '-'}</Badge>
-                    <Badge variant="muted">UDI-DI: {item.product.udi_di}</Badge>
-                    <Badge variant="muted">IVD类别: {labelFrom(IVD_CATEGORY_ZH, item.product.ivd_category)}</Badge>
+                    <Badge variant="muted">UDI-DI: {item.product.udi_di || '-'}</Badge>
+                    <Badge variant="muted">IVD分类: {labelFrom(IVD_CATEGORY_ZH, item.product.ivd_category)}</Badge>
                     <Badge variant="muted">企业: {item.product.company?.name || '-'}</Badge>
                     <Link className="muted" href={`/changes/${item.id}`}>
                       查看详情

@@ -24,13 +24,20 @@ export const IVD_CATEGORY_ZH: Record<string, string> = {
 
 export const CHANGE_TYPE_ZH: Record<string, string> = {
   new: '新增',
-  update: '更新',
-  expire: '过期',
+  update: '变更',
+  expire: '失效',
   cancel: '注销',
   created: '新增',
-  updated: '更新',
+  updated: '变更',
   removed: '移除',
   status_changed: '状态变化',
+};
+
+export const FIELD_ZH: Record<string, string> = {
+  reg_no: '注册证号',
+  udi_di: 'UDI-DI',
+  change_type: '变化类型',
+  ivd_category: 'IVD分类',
 };
 
 export const PLAN_ZH: Record<string, string> = {

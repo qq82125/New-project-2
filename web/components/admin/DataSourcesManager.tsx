@@ -86,7 +86,7 @@ type NmpaQueryReport = {
 type DataQualitySample = {
   id: string;
   name: string;
-  udi_di: string;
+  udi_di?: string | null;
   reg_no?: string | null;
   class_name?: string | null;
   ivd_category?: string | null;
@@ -889,7 +889,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
                   <div className="list" style={{ marginTop: 8 }}>
                     {(qualityReport.samples?.name_punct_only || []).slice(0, 5).map((it) => (
                       <div key={it.id} className="muted" style={{ wordBreak: 'break-all' }}>
-                        {it.name} | UDI-DI: {it.udi_di} | 注册证号: {it.reg_no || '-'}
+                        {it.name} | UDI-DI: {it.udi_di || '-'} | 注册证号: {it.reg_no || '-'}
                       </div>
                     ))}
                   </div>

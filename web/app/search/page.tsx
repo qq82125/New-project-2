@@ -38,7 +38,7 @@ type SearchData = {
       id: string;
       name: string;
       reg_no?: string | null;
-      udi_di: string;
+      udi_di?: string | null;
       status: string;
       company?: { id: string; name: string } | null;
       expiry_date?: string | null;
@@ -165,7 +165,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                       <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
                     </CardTitle>
                     <CardDescription>
-                      <span className="muted">UDI-DI:</span> {item.product.udi_di}
+                      <span className="muted">UDI-DI:</span> {item.product.udi_di || '-'}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="grid">

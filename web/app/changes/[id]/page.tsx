@@ -25,7 +25,7 @@ type ProductData = {
   id: string;
   name: string;
   reg_no?: string | null;
-  udi_di: string;
+  udi_di?: string | null;
   status: string;
   approved_date?: string | null;
   expiry_date?: string | null;
@@ -70,7 +70,7 @@ export default async function ChangeDetailPage({ params }: { params: Promise<{ i
             <>
               <Badge variant="muted">注册证号: {product.reg_no || '-'}</Badge>
               <Badge variant="muted">UDI-DI: {product.udi_di || '-'}</Badge>
-              <Badge variant="success">IVD类别: {labelFrom(IVD_CATEGORY_ZH, product.ivd_category)}</Badge>
+              <Badge variant="success">IVD分类: {labelFrom(IVD_CATEGORY_ZH, product.ivd_category)}</Badge>
               <Badge variant="muted">状态: {labelFrom(STATUS_ZH, product.status)}</Badge>
               <Badge variant="muted">批准日期: {product.approved_date || '-'}</Badge>
               <Badge variant="muted">失效日期: {product.expiry_date || '-'}</Badge>

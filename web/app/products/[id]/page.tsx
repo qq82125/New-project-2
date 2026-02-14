@@ -16,7 +16,7 @@ type ProductData = {
   id: string;
   name: string;
   reg_no?: string | null;
-  udi_di: string;
+  udi_di?: string | null;
   status: string;
   approved_date?: string | null;
   expiry_date?: string | null;
@@ -85,8 +85,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         <CardContent className="grid">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <Badge variant="muted">注册证号: {res.data.reg_no || '-'}</Badge>
-            <Badge variant="muted">UDI-DI: {res.data.udi_di}</Badge>
-            <Badge variant="success">IVD类别: {labelFrom(IVD_CATEGORY_ZH, res.data.ivd_category)}</Badge>
+            <Badge variant="muted">UDI-DI: {res.data.udi_di || '-'}</Badge>
+            <Badge variant="success">IVD分类: {labelFrom(IVD_CATEGORY_ZH, res.data.ivd_category)}</Badge>
             <Badge
               variant={
                 res.data.status === 'active'
