@@ -311,11 +311,19 @@ def sync_nmpa_ivd(
             doc_type='archive',
             run_id=f'source_run:{int(run.id)}',
         )
+        # Parse/extract should read from raw storage to ensure the evidence chain is authoritative.
+        raw_archive_path = archive_path
+        try:
+            doc = db.get(RawDocument, raw_doc_id)
+            if doc is not None and doc.storage_uri:
+                raw_archive_path = Path(str(doc.storage_uri))
+        except Exception:
+            raw_archive_path = archive_path
 
         # Best-effort: parse DI-level variants for packaging/manufacturer enrichment.
         variant_report = None
         try:
-            variant_rows = parse_udi_zip_bytes(archive_path.read_bytes())
+            variant_rows = parse_udi_zip_bytes(raw_archive_path.read_bytes())
             variant_result = upsert_product_variants(
                 db,
                 rows=variant_rows,
@@ -334,7 +342,7 @@ def sync_nmpa_ivd(
         except Exception as exc:
             variant_report = {'error': str(exc)}
 
-        extract_to_staging(archive_path, extract_dir)
+        extract_to_staging(raw_archive_path, extract_dir)
         records = load_staging_records(extract_dir)
         try:
             stats = ingest_staging_records(db, records, run.id, raw_document_id=raw_doc_id)
