@@ -184,6 +184,21 @@ class ProductRejected(Base):
     rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
 
 
+class NhsaCode(Base):
+    __tablename__ = 'nhsa_codes'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    snapshot_month: Mapped[str] = mapped_column(String(7), nullable=False, index=True)  # YYYY-MM
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    spec: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    manufacturer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True)
+    source_run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SourceRun(Base):
     __tablename__ = 'source_runs'
 

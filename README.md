@@ -137,6 +137,18 @@ docker compose exec api python -m app.workers.cli params:extract --execute --fil
 docker compose exec api python -m app.workers.cli params:rollback --execute --raw-document-id <uuid>
 ```
 
+NHSA（月度快照）入库（证据链 raw_documents + 结构化 nhsa_codes；支持回滚）：
+```bash
+# 本地 CSV 文件
+docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --file /path/to/nhsa.csv
+
+# 或者配置 URL（低频）
+docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --url https://example.com/nhsa.csv
+
+# 回滚（按 source_run_id 删除本次 run 写入的 nhsa_codes）
+docker compose exec api python -m app.workers.cli nhsa:rollback --execute --source-run-id 123
+```
+
 ## 测试
 
 单测：

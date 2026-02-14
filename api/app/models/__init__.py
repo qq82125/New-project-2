@@ -10,6 +10,7 @@ from app.models.entities import (
     ExportUsage,
     MembershipEvent,
     MembershipGrant,
+    NhsaCode,
     Product,
     ProductArchive,
     ProductParam,
@@ -46,4 +47,5 @@ __all__ = [
     'User',
     'MembershipGrant',
     'MembershipEvent',
+    'NhsaCode',
 ]

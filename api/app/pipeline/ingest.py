@@ -24,11 +24,21 @@ def save_raw_document(
 ) -> UUID:
     cfg = get_settings()
     sha = hashlib.sha256(content).hexdigest()
+    existing = db.scalar(
+        select(RawDocument).where(
+            RawDocument.source == source,
+            RawDocument.run_id == run_id,
+            RawDocument.sha256 == sha,
+        )
+    )
+    if existing is not None:
+        return existing.id
     suffix = Path(urlparse(url or '').path).suffix or '.bin'
     root = Path(cfg.raw_storage_dir) / source / datetime.now(timezone.utc).strftime('%Y%m%d')
     root.mkdir(parents=True, exist_ok=True)
     file_path = root / f'{sha}{suffix}'
-    file_path.write_bytes(content)
+    if not file_path.exists():
+        file_path.write_bytes(content)
     doc = RawDocument(
         source=source,
         source_url=url,

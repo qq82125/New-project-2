@@ -15,6 +15,7 @@ from app.repositories.source_runs import finish_source_run, start_source_run
 from app.services.data_cleanup import rollback_non_ivd_cleanup, run_non_ivd_cleanup
 from app.services.local_registry_supplement import run_local_registry_supplement
 from app.services.metrics import generate_daily_metrics
+from app.services.nhsa_ingest import ingest_nhsa_from_file, ingest_nhsa_from_url, rollback_nhsa_ingest
 from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
 from app.services.reclassify_ivd import run_reclassify_ivd
 from app.services.subscriptions import dispatch_daily_subscription_digest
@@ -125,6 +126,22 @@ def build_parser() -> argparse.ArgumentParser:
     params_rb_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     params_rb_mode.add_argument('--execute', action='store_true', help='Delete product_params rows for this raw document')
     params_rb_parser.add_argument('--raw-document-id', required=True, help='raw_documents.id UUID')
+
+    nhsa_parser = sub.add_parser('nhsa:ingest', help='Ingest NHSA monthly snapshot into evidence chain + nhsa_codes')
+    nhsa_mode = nhsa_parser.add_mutually_exclusive_group()
+    nhsa_mode.add_argument('--dry-run', action='store_true', help='Preview only (still stores raw_documents)')
+    nhsa_mode.add_argument('--execute', action='store_true', help='Write nhsa_codes')
+    nhsa_parser.add_argument('--month', required=True, help='Snapshot month YYYY-MM')
+    nhsa_src = nhsa_parser.add_mutually_exclusive_group(required=True)
+    nhsa_src.add_argument('--url', default=None, help='CSV download URL (low frequency)')
+    nhsa_src.add_argument('--file', default=None, help='Local snapshot file path (csv)')
+    nhsa_parser.add_argument('--timeout', type=int, default=30, help='HTTP timeout seconds (when using --url)')
+
+    nhsa_rb = sub.add_parser('nhsa:rollback', help='Rollback (delete) nhsa_codes rows inserted by a source_run_id')
+    nhsa_rb_mode = nhsa_rb.add_mutually_exclusive_group()
+    nhsa_rb_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    nhsa_rb_mode.add_argument('--execute', action='store_true', help='Delete nhsa_codes by source_run_id')
+    nhsa_rb.add_argument('--source-run-id', type=int, required=True, help='source_runs.id of the nhsa ingest run')
     return parser
 
 
@@ -534,6 +551,42 @@ def _run_params_rollback(*, dry_run: bool, raw_document_id: str) -> int:
         db.close()
 
 
+def _run_nhsa_ingest(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        if getattr(args, 'url', None):
+            res = ingest_nhsa_from_url(
+                db,
+                snapshot_month=str(args.month),
+                url=str(args.url),
+                timeout_seconds=int(getattr(args, 'timeout', 30)),
+                dry_run=dry_run,
+            )
+        else:
+            res = ingest_nhsa_from_file(
+                db,
+                snapshot_month=str(args.month),
+                file_path=str(args.file),
+                dry_run=dry_run,
+            )
+        print(json.dumps(res.__dict__, ensure_ascii=True))
+        return 0 if int(res.failed_count) == 0 else 1
+    finally:
+        db.close()
+
+
+def _run_nhsa_rollback(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        res = rollback_nhsa_ingest(db, source_run_id=int(args.source_run_id), dry_run=dry_run)
+        print(json.dumps(res, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -605,6 +658,10 @@ def main() -> None:
         )
     if args.cmd == 'params:rollback':
         raise SystemExit(_run_params_rollback(dry_run=(not bool(args.execute)), raw_document_id=str(args.raw_document_id)))
+    if args.cmd == 'nhsa:ingest':
+        raise SystemExit(_run_nhsa_ingest(args))
+    if args.cmd == 'nhsa:rollback':
+        raise SystemExit(_run_nhsa_rollback(args))
     if args.cmd == 'loop':
         loop_main()
         return

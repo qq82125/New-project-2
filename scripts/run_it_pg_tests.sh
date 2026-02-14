@@ -15,3 +15,4 @@ trap cleanup EXIT
 
 pytest -q api/tests/test_cleanup_rollback_integration_pg.py
 pytest -q api/tests/test_pr1_tables_integration_pg.py
+pytest -q api/tests/test_nhsa_ingest_integration_pg.py
