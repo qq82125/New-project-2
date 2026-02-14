@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { Table, TableWrap } from '../ui/table';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
+import { Input } from '../ui/input';
 import { Skeleton } from '../ui/skeleton';
 import { toast } from '../ui/use-toast';
 import { EmptyState, ErrorState } from '../States';
@@ -32,6 +33,7 @@ type SourceRun = {
 };
 
 type ApiResp<T> = { code: number; message: string; data: T };
+type PageData = { items: SourceRun[]; total: number; page: number; page_size: number };
 
 function badgeVariant(status: string): 'success' | 'danger' | 'muted' {
   if (status === 'success') return 'success';
@@ -39,16 +41,29 @@ function badgeVariant(status: string): 'success' | 'danger' | 'muted' {
   return 'muted';
 }
 
-export default function SyncManager({ initialItems }: { initialItems: SourceRun[] }) {
+export default function SyncManager({
+  initialItems,
+  initialPage = 1,
+  initialPageSize = 10,
+}: {
+  initialItems: SourceRun[];
+  initialPage?: number;
+  initialPageSize?: number;
+}) {
   const [items, setItems] = useState<SourceRun[]>(initialItems);
+  const [total, setTotal] = useState<number>(initialItems.length);
+  const [page, setPage] = useState<number>(Math.max(1, Number(initialPage || 1)));
+  const [pageSize, setPageSize] = useState<number>(Math.max(1, Number(initialPageSize || 10)));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
+  async function refresh(targetPage?: number, targetPageSize?: number) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/source-runs?limit=50`, {
+      const p = Math.max(1, Number(targetPage ?? page));
+      const ps = Math.max(1, Number(targetPageSize ?? pageSize));
+      const res = await fetch(`/api/admin/source-runs?page=${encodeURIComponent(String(p))}&page_size=${encodeURIComponent(String(ps))}`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -56,12 +71,15 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
         setError(`加载失败 (${res.status})`);
         return;
       }
-      const body = (await res.json()) as ApiResp<{ items: SourceRun[] }>;
+      const body = (await res.json()) as ApiResp<PageData>;
       if (body.code !== 0) {
         setError(body.message || '接口返回异常');
         return;
       }
       setItems(body.data.items || []);
+      setTotal(Number(body.data.total || 0));
+      setPage(Math.max(1, Number(body.data.page || p)));
+      setPageSize(Math.max(1, Number(body.data.page_size || ps)));
     } catch (e) {
       setError(e instanceof Error ? e.message : '网络错误');
     } finally {
@@ -105,9 +123,11 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh(page, pageSize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const totalPages = Math.max(1, Math.ceil(Math.max(0, total) / Math.max(1, pageSize)));
 
   return (
     <Card>
@@ -120,10 +140,62 @@ export default function SyncManager({ initialItems }: { initialItems: SourceRun[
           <Button onClick={runSync} disabled={loading}>
             手动触发同步
           </Button>
-          <Button variant="secondary" onClick={refresh} disabled={loading}>
+          <Button variant="secondary" onClick={() => void refresh()} disabled={loading}>
             刷新记录
           </Button>
           <Badge variant="muted">/api/admin/source-runs</Badge>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Badge variant="muted">共 {total} 条</Badge>
+          <span className="muted">
+            第 {page} / {totalPages} 页（每页 {pageSize} 条）
+          </span>
+          <span className="muted">|</span>
+          <Button type="button" variant="secondary" disabled={loading || page <= 1} onClick={() => void refresh(1, pageSize)}>
+            首页
+          </Button>
+          <Button type="button" variant="secondary" disabled={loading || page <= 1} onClick={() => void refresh(page - 1, pageSize)}>
+            上一页
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={loading || page >= totalPages}
+            onClick={() => void refresh(page + 1, pageSize)}
+          >
+            下一页
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={loading || page >= totalPages}
+            onClick={() => void refresh(totalPages, pageSize)}
+          >
+            末页
+          </Button>
+          <span className="muted">跳转</span>
+          <Input
+            value={String(page)}
+            onChange={(e) => setPage(Math.max(1, Number(e.target.value || '1')))}
+            inputMode="numeric"
+            style={{ width: 90 }}
+            disabled={loading}
+          />
+          <Button type="button" variant="secondary" disabled={loading} onClick={() => void refresh(page, pageSize)}>
+            前往
+          </Button>
+          <span className="muted">每页</span>
+          <Input
+            value={String(pageSize)}
+            onChange={(e) => setPageSize(Math.max(1, Number(e.target.value || '10')))}
+            inputMode="numeric"
+            style={{ width: 90 }}
+            disabled={loading}
+          />
+          <Button type="button" variant="secondary" disabled={loading} onClick={() => void refresh(1, pageSize)}>
+            应用
+          </Button>
         </div>
 
         {error ? <ErrorState text={error} /> : null}

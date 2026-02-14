@@ -47,7 +47,7 @@ def test_admin_source_runs_and_sync_run(monkeypatch) -> None:
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
     )
-    monkeypatch.setattr('app.main.list_source_runs', lambda _db, limit=50: [run])
+    monkeypatch.setattr('app.main.list_source_runs_page', lambda _db, page, page_size: ([run], 1))
 
     called = {'n': 0}
 
@@ -70,12 +70,12 @@ def test_admin_source_runs_and_sync_run(monkeypatch) -> None:
     token_admin = main.create_session_token(user_id=2, secret='test-secret', ttl_seconds=3600)
     client.cookies.set('ivd_session', token_admin)
 
-    r1 = client.get('/api/admin/source-runs?limit=10')
+    r1 = client.get('/api/admin/source-runs?page=1&page_size=10')
     assert r1.status_code == 200
     assert r1.json()['data']['items'][0]['id'] == 123
+    assert r1.json()['data']['total'] == 1
 
     r2 = client.post('/api/admin/sync/run')
     assert r2.status_code == 200
     assert r2.json()['data']['queued'] is True
     assert called['n'] == 1
-

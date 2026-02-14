@@ -41,6 +41,11 @@ type SourceRun = {
 
 export const dynamic = 'force-dynamic';
 
+type PageParams = {
+  page?: string;
+  page_size?: string;
+};
+
 async function getAdminMe(): Promise<AdminMe> {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -77,10 +82,10 @@ async function getDataSources(): Promise<DataSource[]> {
   return body.data.items || [];
 }
 
-async function getSourceRuns(): Promise<SourceRun[]> {
+async function getSourceRuns(page: number, pageSize: number): Promise<SourceRun[]> {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
-  const res = await fetch(`${API_BASE}/api/admin/source-runs?limit=50`, {
+  const res = await fetch(`${API_BASE}/api/admin/source-runs?page=${encodeURIComponent(String(page))}&page_size=${encodeURIComponent(String(pageSize))}`, {
     method: 'GET',
     headers: cookie ? { cookie } : undefined,
     cache: 'no-store',
@@ -95,8 +100,12 @@ async function getSourceRuns(): Promise<SourceRun[]> {
   return body.data.items || [];
 }
 
-export default async function AdminDataSourcesPage() {
-  const [me, items, runs] = await Promise.all([getAdminMe(), getDataSources(), getSourceRuns()]);
+export default async function AdminDataSourcesPage({ searchParams }: { searchParams: Promise<PageParams> }) {
+  const params = await searchParams;
+  const page = Math.max(1, Number(params.page || '1'));
+  const pageSize = Math.max(1, Number(params.page_size || '10'));
+
+  const [me, items, runs] = await Promise.all([getAdminMe(), getDataSources(), getSourceRuns(page, pageSize)]);
 
   return (
     <div className="grid">
@@ -117,7 +126,7 @@ export default async function AdminDataSourcesPage() {
       </Card>
 
       <DataSourcesManager initialItems={items} />
-      <SyncManager initialItems={runs} />
+      <SyncManager initialItems={runs} initialPage={page} initialPageSize={pageSize} />
     </div>
   );
 }

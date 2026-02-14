@@ -32,7 +32,7 @@ from app.repositories.products import admin_search_products, get_company, get_pr
 from app.repositories.product_params import list_product_params
 from app.repositories.radar import get_admin_config, get_product_timeline, list_admin_configs, upsert_admin_config
 from app.repositories.radar import count_active_subscriptions_by_subscriber, create_subscription
-from app.repositories.source_runs import latest_runs, list_source_runs
+from app.repositories.source_runs import latest_runs, list_source_runs, list_source_runs_page
 from app.repositories.users import create_user, get_user_by_email, get_user_by_id
 from app.repositories.admin_membership import (
     admin_extend_membership,
@@ -1178,11 +1178,18 @@ def _spawn_sync_thread() -> None:
 
 @app.get('/api/admin/source-runs')
 def admin_source_runs(
-    limit: int = Query(default=50, ge=1, le=200),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
+    limit: int | None = Query(default=None, ge=1, le=200),
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    runs = list_source_runs(db, limit=limit)
+    # Backward compatible:
+    # - old clients send `limit=...` (no paging), treat as first page.
+    safe_page = int(page or 1)
+    safe_page_size = int(page_size or (limit or 10))
+
+    runs, total = list_source_runs_page(db, page=safe_page, page_size=safe_page_size)
     items = [
         {
             'id': r.id,
@@ -1203,7 +1210,7 @@ def admin_source_runs(
         }
         for r in runs
     ]
-    return _ok({'items': items})
+    return _ok({'items': items, 'total': int(total), 'page': safe_page, 'page_size': safe_page_size})
 
 
 @app.post('/api/admin/sync/run')

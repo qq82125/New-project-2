@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models import SourceRun
@@ -69,6 +69,22 @@ def latest_runs(db: Session, limit: int = 10) -> list[SourceRun]:
 def list_source_runs(db: Session, limit: int = 50) -> list[SourceRun]:
     stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).limit(limit)
     return list(db.scalars(stmt))
+
+
+def count_source_runs(db: Session) -> int:
+    stmt = select(func.count()).select_from(SourceRun)
+    return int(db.scalar(stmt) or 0)
+
+
+def list_source_runs_page(db: Session, *, page: int, page_size: int) -> tuple[list[SourceRun], int]:
+    safe_page = max(1, int(page or 1))
+    safe_page_size = min(200, max(1, int(page_size or 50)))
+    offset = (safe_page - 1) * safe_page_size
+
+    total = count_source_runs(db)
+    stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).offset(offset).limit(safe_page_size)
+    items = list(db.scalars(stmt))
+    return items, total
 
 
 def get_running_source_run(db: Session, source: str) -> SourceRun | None:
