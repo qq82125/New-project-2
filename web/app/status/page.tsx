@@ -138,16 +138,26 @@ export default async function StatusPage() {
                         {x.change_date ? new Date(x.change_date).toLocaleString() : x.changed_at ? new Date(x.changed_at).toLocaleString() : '-'}
                       </CardDescription>
                     </CardHeader>
-                    <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Badge variant="muted">
-                        {labelFrom(FIELD_ZH, 'reg_no')}: {x.product.reg_no || '-'}
-                      </Badge>
-                      <Badge variant="muted">
-                        {labelFrom(FIELD_ZH, 'udi_di')}: {x.product.udi_di || '-'}
-                      </Badge>
-                      <Link className="muted" href={`/changes/${x.id}`}>
-                        查看详情
-                      </Link>
+                    <CardContent className="grid">
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                        <Badge variant="muted">
+                          {labelFrom(FIELD_ZH, 'reg_no')}: {x.product.reg_no || '-'}
+                        </Badge>
+                        <Badge variant="muted">
+                          {labelFrom(FIELD_ZH, 'udi_di')}: {x.product.udi_di || '-'}
+                        </Badge>
+                        <Link className="muted" href={`/changes/${x.id}`}>
+                          查看详情
+                        </Link>
+                      </div>
+                      <div>
+                        <span className="muted">企业：</span>
+                        {x.product.company?.id ? (
+                          <Link href={`/companies/${x.product.company.id}`}>{x.product.company.name}</Link>
+                        ) : (
+                          '-'
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
