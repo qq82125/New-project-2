@@ -570,7 +570,23 @@ def _run_nhsa_ingest(args: argparse.Namespace) -> int:
                 file_path=str(args.file),
                 dry_run=dry_run,
             )
-        print(json.dumps(res.__dict__, ensure_ascii=True))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "dry_run": bool(dry_run),
+                    "source_run_id": int(res.source_run_id),
+                    "raw_run_id": str(res.raw_run_id),
+                    "raw_document_id": str(res.raw_document_id),
+                    "snapshot_month": str(res.snapshot_month),
+                    "fetched_count": int(res.fetched_count),
+                    "parsed_count": int(res.parsed_count),
+                    "failed_count": int(res.failed_count),
+                    "upserted": int(res.upserted),
+                },
+                ensure_ascii=True,
+            )
+        )
         return 0 if int(res.failed_count) == 0 else 1
     finally:
         db.close()
