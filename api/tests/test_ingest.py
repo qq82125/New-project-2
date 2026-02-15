@@ -122,6 +122,55 @@ def test_ingest_filters_non_ivd_records(monkeypatch) -> None:
     assert stats['total'] == 2
     assert stats['filtered'] == 1
     assert stats['success'] == 1
+    # Rejection audit is idempotent by (source, source_key). FakeDB should have one ProductRejected.
+    from app.models import ProductRejected
+
+    rejected = [x for x in db.items if isinstance(x, ProductRejected)]
+    assert len(rejected) == 1
+    assert rejected[0].source == 'NMPA_UDI'
+    assert str(rejected[0].source_key or '').startswith('di:U-NON')
+
+
+def test_ingest_rejected_is_idempotent(monkeypatch) -> None:
+    from app.services.ingest import ingest_staging_records
+    from app.models import ProductRejected
+
+    db = FakeDB()
+
+    monkeypatch.setattr(
+        'app.services.ingest.classify',
+        lambda _raw, version=None: {
+            'is_ivd': False,
+            'ivd_category': None,
+            'ivd_subtypes': [],
+            'reason': {'by': 'unit_test', 'needs_review': False},
+            'version': 'ivd_v1_20260213',
+            'rule_version': 1,
+            'source': 'RULE',
+            'confidence': 0.9,
+        },
+    )
+    monkeypatch.setattr(
+        'app.services.ingest.map_raw_record',
+        lambda raw: SimpleNamespace(
+            name=raw.get('name') or 'x',
+            reg_no=raw.get('reg_no'),
+            udi_di=raw.get('udi_di') or 'U1',
+            status='active',
+            approved_date=None,
+            expiry_date=None,
+            class_name='07',
+            company_name=None,
+            company_country=None,
+            raw=raw,
+        ),
+    )
+    monkeypatch.setattr('app.services.ingest.upsert_product_record', lambda _db, _record, _run_id: ('added', None))
+
+    ingest_staging_records(db, [{'name': '骨科器械', 'udi_di': 'U-NON'}], source_run_id=1)
+    ingest_staging_records(db, [{'name': '骨科器械', 'udi_di': 'U-NON'}], source_run_id=2)
+    rejected = [x for x in db.items if isinstance(x, ProductRejected)]
+    assert len(rejected) == 1
 
 
 def test_ingest_writes_ivd_metadata_into_raw(monkeypatch) -> None:

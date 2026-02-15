@@ -129,7 +129,7 @@ def _sync_from_primary_source(db, run, source: DataSource, *, chunk_size: int = 
             for row in rows:
                 batch.append({str(k): _json_safe(v) for k, v in dict(row).items()})
                 if len(batch) >= chunk_size:
-                    s = ingest_staging_records(db, batch, run.id)
+                    s = ingest_staging_records(db, batch, run.id, source=str(getattr(run, 'source', '') or run_source_name or 'nmpa_source'))
                     total_scanned += int(s.get('total', 0) or 0)
                     total_success += int(s.get('success', 0) or 0)
                     total_failed += int(s.get('failed', 0) or 0)
@@ -139,7 +139,7 @@ def _sync_from_primary_source(db, run, source: DataSource, *, chunk_size: int = 
                     total_removed += int(s.get('removed', 0) or 0)
                     batch = []
             if batch:
-                s = ingest_staging_records(db, batch, run.id)
+                s = ingest_staging_records(db, batch, run.id, source=str(getattr(run, 'source', '') or run_source_name or 'nmpa_source'))
                 total_scanned += int(s.get('total', 0) or 0)
                 total_success += int(s.get('success', 0) or 0)
                 total_failed += int(s.get('failed', 0) or 0)
@@ -345,7 +345,7 @@ def sync_nmpa_ivd(
         extract_to_staging(raw_archive_path, extract_dir)
         records = load_staging_records(extract_dir)
         try:
-            stats = ingest_staging_records(db, records, run.id, raw_document_id=raw_doc_id)
+            stats = ingest_staging_records(db, records, run.id, source='NMPA_UDI', raw_document_id=raw_doc_id)
         except TypeError:
             # Backward-compat for older stubs/mocks that don't accept raw_document_id.
             stats = ingest_staging_records(db, records, run.id)

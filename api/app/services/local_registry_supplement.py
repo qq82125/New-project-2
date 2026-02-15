@@ -397,7 +397,7 @@ def run_local_registry_supplement(
             chunk_size = max(100, int(ingest_chunk_size))
             for i in range(0, len(rows), chunk_size):
                 batch = rows[i : i + chunk_size]
-                batch_stats = ingest_staging_records(db, batch, source_run_id)
+                batch_stats = ingest_staging_records(db, batch, source_run_id, source='local_registry')
                 for k in ingest_stats:
                     ingest_stats[k] += int(batch_stats.get(k, 0) or 0)
     elif ingest_new:

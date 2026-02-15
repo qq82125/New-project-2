@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.sql import func
 from sqlalchemy.orm import Session
 from bs4 import BeautifulSoup
 
@@ -248,7 +251,9 @@ def ingest_staging_records(
     records: list[dict[str, Any]],
     source_run_id: int | None,
     *,
+    source: str = 'NMPA_UDI',
     raw_document_id: UUID | None = None,
+    reject_audit: bool = True,
 ) -> dict[str, int]:
     stats = {'total': len(records), 'success': 0, 'failed': 0, 'filtered': 0, 'added': 0, 'updated': 0, 'removed': 0}
 
@@ -258,6 +263,75 @@ def ingest_staging_records(
             if value is not None and str(value).strip():
                 return str(value).strip()
         return str(record.class_name or '').strip()
+
+    def _reject_source_key(*, record: ProductRecord, raw: dict[str, Any]) -> str:
+        di = str(getattr(record, 'udi_di', '') or '').strip()
+        if di:
+            return f'di:{di}'
+        reg = str(getattr(record, 'reg_no', '') or '').strip()
+        if reg:
+            return f'reg:{reg}'
+        name = str(getattr(record, 'name', '') or '').strip()
+        if name:
+            return f'name:{name}'
+        # Stable fallback: hash of raw record.
+        try:
+            payload = json.dumps(raw, ensure_ascii=True, sort_keys=True, default=str).encode('utf-8', errors='ignore')
+        except Exception:
+            payload = repr(raw).encode('utf-8', errors='ignore')
+        return f'rawsha:{hashlib.sha256(payload).hexdigest()}'
+
+    def _upsert_rejected(
+        *,
+        src: str,
+        src_key: str,
+        reason: dict[str, Any] | None,
+        ivd_version: str | None,
+        raw_doc_id: UUID | None,
+    ) -> None:
+        # SQLAlchemy Session: upsert to enforce idempotency.
+        if hasattr(db, 'execute'):
+            stmt = insert(ProductRejected).values(
+                source=src,
+                source_key=src_key,
+                raw_document_id=raw_doc_id,
+                reason=reason,
+                ivd_version=ivd_version,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[ProductRejected.source, ProductRejected.source_key],
+                set_={
+                    'raw_document_id': stmt.excluded.raw_document_id,
+                    'reason': stmt.excluded.reason,
+                    'ivd_version': stmt.excluded.ivd_version,
+                    'rejected_at': func.now(),
+                },
+            )
+            db.execute(stmt)
+            return
+
+        # Fake/in-memory DB used in unit tests: dedupe by (source, source_key).
+        try:
+            items = getattr(db, 'items', None)
+            if isinstance(items, list):
+                for it in items:
+                    if isinstance(it, ProductRejected) and getattr(it, 'source', None) == src and getattr(it, 'source_key', None) == src_key:
+                        it.raw_document_id = raw_doc_id
+                        it.reason = reason
+                        it.ivd_version = ivd_version
+                        return
+        except Exception:
+            pass
+
+        db.add(
+            ProductRejected(
+                source=src,
+                source_key=src_key,
+                raw_document_id=raw_doc_id,
+                reason=reason,
+                ivd_version=ivd_version,
+            )
+        )
 
     for raw in records:
         try:
@@ -273,16 +347,15 @@ def ingest_staging_records(
                 version=IVD_CLASSIFIER_VERSION,
             )
             if not bool(decision.get('is_ivd')):
-                source_key = str(record.udi_di or record.reg_no or record.name or '').strip() or None
-                db.add(
-                    ProductRejected(
-                        source='NMPA_UDI',
-                        source_key=source_key,
-                        raw_document_id=raw_document_id,
+                if reject_audit:
+                    src_key = _reject_source_key(record=record, raw=raw)
+                    _upsert_rejected(
+                        src=str(source or 'unknown'),
+                        src_key=src_key,
+                        raw_doc_id=raw_document_id,
                         reason={'decision': decision},
-                        ivd_version=str(decision.get('version') or ''),
+                        ivd_version=str(decision.get('version') or IVD_CLASSIFIER_VERSION),
                     )
-                )
                 stats['filtered'] += 1
                 continue
             # Persist explainable IVD classification metadata with each accepted record.
