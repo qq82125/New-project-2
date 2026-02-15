@@ -7,6 +7,7 @@
 - 变更日志（`change_log`）与日指标（`daily_metrics`）
 - 前台 Dashboard/检索与后台运维管理
 - 数据治理：dry-run/execute/rollback（先归档再删除，可按 batch 回滚）
+- 说明书/招采附件参数抽取 v1（规则优先 + evidence_text/page）
 
 ## 结构概览
 
@@ -19,6 +20,7 @@
 - 架构现状：`docs/ARCH_NOTES.md`
 - 运行手册：`docs/RUNBOOK.md`
 - PR1（现状适配版）：`docs/PR1_DB_MODEL_ADAPTED.md`
+- 字段名表（DB Schema Dictionary）：`docs/FIELD_DICTIONARY.md`
 
 ## 架构图（ASCII）
 
@@ -62,6 +64,20 @@ docker compose up -d --build
 docker compose down
 ```
 
+## 主要接口（摘录）
+
+用户侧：
+- `GET /api/dashboard/summary|trend|rankings|radar`：日指标（IVD 口径）
+- `GET /api/search`：检索（强制 IVD 口径）
+- `GET /api/products/{id}`：产品详情（非 IVD 返回 404）
+- `GET /api/products/{id}/params`：参数摘要（Pro，evidence_text/page/source_url）
+
+Admin：
+- `GET /api/admin/products`：产品列表（支持 `is_ivd=true|false|all` + `ivd_category` + `ivd_version`）
+- `GET /api/admin/rejected-products`：非 IVD 拒收审计
+- `GET /api/admin/stats`：后台统计卡片（IVD 总数/分布/拒收数量）
+- `POST /api/admin/params/extract|rollback`：参数抽取/回滚
+
 ## 管理员初始化
 
 系统启动时会尝试用环境变量初始化管理员账号：
@@ -80,7 +96,7 @@ IVD 范围：
 默认严格口径：
 - 主产品查询/展示强制 `products.is_ivd IS TRUE`
 - 非 IVD 数据不写主表，可写入 `products_rejected` 审计
-- 管理端产品列表 `GET /api/admin/products` 仅支持 `is_ivd=true`；非 IVD 审计走 `GET /api/admin/rejected-products`
+- 管理端产品列表 `GET /api/admin/products` 支持 `is_ivd=true|false|all`；非 IVD 审计走 `GET /api/admin/rejected-products`
 
 破坏性清理规则：
 - 始终“先归档再删除”
@@ -95,6 +111,11 @@ IVD 范围：
 同步（一次）：
 ```bash
 docker compose exec worker python -m app.workers.cli sync --once
+```
+
+查看 IVD 库存快照（分类/来源分布）：
+```bash
+curl -s http://localhost:8000/api/dashboard/breakdown
 ```
 
 生成某日指标 / 发送某日摘要：
