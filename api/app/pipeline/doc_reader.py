@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from bs4 import BeautifulSoup
+
 
 @dataclass
 class PageText:
@@ -19,6 +21,7 @@ def iter_text_pages(*, content: bytes, doc_type: str | None = None, filename: st
     """Extract page-level text with best-effort, staying within project dependencies.
 
     - For PDF: uses pypdf if installed (lazy import).
+    - For HTML: uses BeautifulSoup to extract visible text.
     - Otherwise: decodes as UTF-8 with errors ignored.
     """
     name = (filename or '').lower()
@@ -42,6 +45,17 @@ def iter_text_pages(*, content: bytes, doc_type: str | None = None, filename: st
                 txt = ''
             if txt.strip():
                 yield PageText(page=i, text=txt)
+        return
+
+    is_html = dtype == 'html' or name.endswith('.html') or name.endswith('.htm')
+    if is_html:
+        text = content.decode('utf-8', errors='ignore')
+        soup = BeautifulSoup(text, 'html.parser')
+        for tag in soup(['script', 'style', 'noscript']):
+            tag.decompose()
+        cleaned = soup.get_text(separator='\n')
+        lines = [x.strip() for x in cleaned.splitlines() if x.strip()]
+        yield PageText(page=None, text='\n'.join(lines))
         return
 
     text = content.decode('utf-8', errors='ignore')
