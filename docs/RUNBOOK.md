@@ -19,11 +19,13 @@ python -m app.cli ivd:classify --version ivd_v1_20260213 --execute
 
 ## 3) 非IVD清理（先 dry-run 再 execute）
 ```bash
-python -m app.cli ivd:cleanup --dry-run
-python -m app.cli ivd:cleanup --execute
+python -m app.cli ivd:cleanup --dry-run --archive-batch-id non_ivd_cleanup_preview_$(date -u +%Y%m%d%H%M%S)
+python -m app.cli ivd:cleanup --execute --archive-batch-id non_ivd_cleanup_$(date -u +%Y%m%d%H%M%S)
 ```
 
-- `execute` 输出中会包含归档批次标识（`archive_batch_id=...`）并写入 `data_cleanup_runs.notes`，同时也会写入 `products_archive.archive_batch_id` 与 `change_log_archive.archive_batch_id`。
+- 为了可回滚可追溯，`--execute` 必须显式提供 `--archive-batch-id`。
+- dry-run 输出会包含分布统计（例如按 `raw_json.source`/`raw.source`、按 `created_at` 月份）。
+- 执行后 `archive_batch_id` 会写入 `products_archive.archive_batch_id` 与 `change_log_archive.archive_batch_id`。
 
 ## 4) 回滚
 ```bash

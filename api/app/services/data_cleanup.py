@@ -14,6 +14,7 @@ from app.services.metrics import regenerate_daily_metrics
 @dataclass
 class CleanupResult:
     run_id: int
+    archive_batch_id: str
     dry_run: bool
     target_count: int
     archived_count: int
@@ -57,14 +58,52 @@ def run_non_ivd_cleanup(
     db.refresh(run)
 
     if dry_run:
+        # Best-effort distributions for human review; avoid hard coupling to upstream schemas.
+        by_source_rows = list(
+            db.execute(
+                text(
+                    """
+                    SELECT
+                      COALESCE(p.raw_json->>'source', p.raw->>'source', 'unknown') AS src,
+                      COUNT(1) AS cnt
+                    FROM products p
+                    WHERE p.is_ivd IS FALSE
+                    GROUP BY 1
+                    ORDER BY cnt DESC, src ASC
+                    LIMIT 50
+                    """
+                )
+            ).all()
+        )
+        by_created_month_rows = list(
+            db.execute(
+                text(
+                    """
+                    SELECT
+                      to_char(date_trunc('month', p.created_at), 'YYYY-MM') AS month,
+                      COUNT(1) AS cnt
+                    FROM products p
+                    WHERE p.is_ivd IS FALSE
+                    GROUP BY 1
+                    ORDER BY month ASC
+                    LIMIT 120
+                    """
+                )
+            ).all()
+        )
         return CleanupResult(
             run_id=int(run.id),
+            archive_batch_id=batch_id,
             dry_run=True,
             target_count=target_count,
             archived_count=target_count,
             deleted_count=0,
             recomputed_days=0,
-            notes={'mode': 'dry_run'},
+            notes={
+                'mode': 'dry_run',
+                'by_source': {str(r[0]): int(r[1]) for r in by_source_rows},
+                'by_created_month': {str(r[0]): int(r[1]) for r in by_created_month_rows if r[0] is not None},
+            },
         )
 
     archived_count = 0
@@ -138,6 +177,7 @@ def run_non_ivd_cleanup(
         regen_dates = regenerate_daily_metrics(db, days=max(1, int(recompute_days)))
         return CleanupResult(
             run_id=int(run.id),
+            archive_batch_id=batch_id,
             dry_run=False,
             target_count=target_count,
             archived_count=archived_count,

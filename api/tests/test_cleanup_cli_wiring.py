@@ -23,6 +23,7 @@ def test_cleanup_cli_passes_archive_batch_id(monkeypatch) -> None:
             (),
             {
                 'run_id': 1,
+                'archive_batch_id': str(archive_batch_id or ''),
                 'dry_run': bool(dry_run),
                 'target_count': 0,
                 'archived_count': 0,
@@ -32,7 +33,9 @@ def test_cleanup_cli_passes_archive_batch_id(monkeypatch) -> None:
             },
         )()
 
-    monkeypatch.setattr(cli, 'run_non_ivd_cleanup', _cleanup)
+    import app.services.data_cleanup as dc
+
+    monkeypatch.setattr(dc, 'run_non_ivd_cleanup', _cleanup)
 
     rc = cli._run_cleanup_non_ivd_v2(  # type: ignore[attr-defined]
         dry_run=True,
@@ -70,7 +73,9 @@ def test_rollback_cli_passes_recompute_days(monkeypatch) -> None:
             },
         )()
 
-    monkeypatch.setattr(cli, 'rollback_non_ivd_cleanup', _rb)
+    import app.services.data_cleanup as dc
+
+    monkeypatch.setattr(dc, 'rollback_non_ivd_cleanup', _rb)
 
     rc = cli._run_ivd_rollback(archive_batch_id='bid2', dry_run=False, recompute_days=123)  # type: ignore[attr-defined]
     assert rc == 0

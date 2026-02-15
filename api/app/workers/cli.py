@@ -12,16 +12,6 @@ from app.db.session import SessionLocal
 from app.repositories.users import get_user_by_email
 from app.repositories.admin_membership import admin_grant_membership
 from app.repositories.source_runs import finish_source_run, start_source_run
-from app.services.data_cleanup import rollback_non_ivd_cleanup, run_non_ivd_cleanup
-from app.services.local_registry_supplement import run_local_registry_supplement
-from app.services.metrics import generate_daily_metrics
-from app.services.nhsa_ingest import ingest_nhsa_from_file, ingest_nhsa_from_url, rollback_nhsa_ingest
-from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
-from app.services.reclassify_ivd import run_reclassify_ivd
-from app.services.subscriptions import dispatch_daily_subscription_digest
-from app.workers.loop import main as loop_main
-from app.workers.sync import sync_nmpa_ivd
-from app.pipeline.ingest import save_raw_document_from_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -146,6 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_sync(args: argparse.Namespace) -> int:
+    from app.workers.sync import sync_nmpa_ivd
+
     result = sync_nmpa_ivd(
         package_url=args.package_url,
         checksum=args.checksum,
@@ -160,6 +152,8 @@ def _run_daily_metrics(metric_date: str | None) -> int:
     target = date.fromisoformat(metric_date) if metric_date else None
     db = SessionLocal()
     try:
+        from app.services.metrics import generate_daily_metrics
+
         row = generate_daily_metrics(db, target)
         print(json.dumps({'metric_date': row.metric_date.isoformat(), 'new_products': row.new_products}, ensure_ascii=True))
         return 0
@@ -171,6 +165,8 @@ def _run_daily_digest(digest_date: str | None, force: bool) -> int:
     target = date.fromisoformat(digest_date) if digest_date else None
     db = SessionLocal()
     try:
+        from app.services.subscriptions import dispatch_daily_subscription_digest
+
         res = dispatch_daily_subscription_digest(db, target, force=force)
         print(json.dumps(res, ensure_ascii=True))
         return 0 if res['failed'] == 0 else 1
@@ -237,6 +233,8 @@ def _run_grant(email: str, months: int, reason: str | None, note: str | None, ac
 def _run_cleanup_non_ivd(*, dry_run: bool, recompute_days: int, notes: str | None) -> int:
     db = SessionLocal()
     try:
+        from app.services.data_cleanup import run_non_ivd_cleanup
+
         # Backward-compat call signature; archive_batch_id is passed by newer commands (ivd:cleanup, cleanup_non_ivd).
         result = run_non_ivd_cleanup(db, dry_run=dry_run, recompute_days=recompute_days, notes=notes)
         print(
@@ -244,6 +242,7 @@ def _run_cleanup_non_ivd(*, dry_run: bool, recompute_days: int, notes: str | Non
                 {
                     'ok': True,
                     'run_id': result.run_id,
+                    'archive_batch_id': result.archive_batch_id,
                     'dry_run': result.dry_run,
                     'target_count': result.target_count,
                     'archived_count': result.archived_count,
@@ -262,6 +261,8 @@ def _run_cleanup_non_ivd(*, dry_run: bool, recompute_days: int, notes: str | Non
 def _run_cleanup_non_ivd_v2(*, dry_run: bool, recompute_days: int, notes: str | None, archive_batch_id: str | None) -> int:
     db = SessionLocal()
     try:
+        from app.services.data_cleanup import run_non_ivd_cleanup
+
         result = run_non_ivd_cleanup(
             db,
             dry_run=dry_run,
@@ -274,6 +275,7 @@ def _run_cleanup_non_ivd_v2(*, dry_run: bool, recompute_days: int, notes: str | 
                 {
                     'ok': True,
                     'run_id': result.run_id,
+                    'archive_batch_id': result.archive_batch_id,
                     'dry_run': result.dry_run,
                     'target_count': result.target_count,
                     'archived_count': result.archived_count,
@@ -292,6 +294,8 @@ def _run_cleanup_non_ivd_v2(*, dry_run: bool, recompute_days: int, notes: str | 
 def _run_ivd_rollback(*, archive_batch_id: str, dry_run: bool, recompute_days: int = 365) -> int:
     db = SessionLocal()
     try:
+        from app.services.data_cleanup import rollback_non_ivd_cleanup
+
         result = rollback_non_ivd_cleanup(
             db,
             archive_batch_id=archive_batch_id,
@@ -336,6 +340,8 @@ def _run_metrics_recompute(*, scope: str, since: str | None) -> int:
 
 
 def _run_source_udi(*, execute: bool, date_label: str | None) -> int:
+    from app.workers.sync import sync_nmpa_ivd
+
     if not execute:
         print(json.dumps({'ok': True, 'dry_run': True, 'source': 'udi', 'date': date_label, 'message': 'no side effects'}))
         return 0
@@ -347,6 +353,8 @@ def _run_source_udi(*, execute: bool, date_label: str | None) -> int:
 def _run_reclassify_ivd(*, dry_run: bool) -> int:
     db = SessionLocal()
     try:
+        from app.services.reclassify_ivd import run_reclassify_ivd
+
         result = run_reclassify_ivd(db, dry_run=dry_run)
         print(
             json.dumps(
@@ -372,6 +380,9 @@ def _run_local_registry_supplement(*, folder: str, dry_run: bool, ingest_new: bo
     db = SessionLocal()
     run = None
     try:
+        from app.services.local_registry_supplement import run_local_registry_supplement
+        from app.services.metrics import generate_daily_metrics
+
         if not dry_run:
             run = start_source_run(
                 db,
@@ -490,6 +501,9 @@ def _run_params_extract(
 ) -> int:
     db = SessionLocal()
     try:
+        from app.pipeline.ingest import save_raw_document_from_path
+        from app.services.product_params_extract import extract_params_for_raw_document
+
         rid: UUID | None = None
         if raw_document_id:
             rid = UUID(str(raw_document_id))
@@ -543,6 +557,8 @@ def _run_params_extract(
 def _run_params_rollback(*, dry_run: bool, raw_document_id: str) -> int:
     db = SessionLocal()
     try:
+        from app.services.product_params_extract import rollback_params_for_raw_document
+
         rid = UUID(str(raw_document_id))
         res = rollback_params_for_raw_document(db, raw_document_id=rid, dry_run=bool(dry_run))
         print(json.dumps({'ok': True, 'dry_run': res.dry_run, 'raw_document_id': str(res.raw_document_id), 'deleted': res.deleted}, ensure_ascii=True))
@@ -555,6 +571,8 @@ def _run_nhsa_ingest(args: argparse.Namespace) -> int:
     dry_run = bool(args.dry_run) or not bool(args.execute)
     db = SessionLocal()
     try:
+        from app.services.nhsa_ingest import ingest_nhsa_from_file, ingest_nhsa_from_url
+
         if getattr(args, 'url', None):
             res = ingest_nhsa_from_url(
                 db,
@@ -596,6 +614,8 @@ def _run_nhsa_rollback(args: argparse.Namespace) -> int:
     dry_run = bool(args.dry_run) or not bool(args.execute)
     db = SessionLocal()
     try:
+        from app.services.nhsa_ingest import rollback_nhsa_ingest
+
         res = rollback_nhsa_ingest(db, source_run_id=int(args.source_run_id), dry_run=dry_run)
         print(json.dumps(res, ensure_ascii=True))
         return 0
@@ -620,6 +640,8 @@ def main() -> None:
     if args.cmd == 'ivd:classify':
         raise SystemExit(_run_reclassify_ivd(dry_run=(not bool(args.execute))))
     if args.cmd in {'cleanup_non_ivd', 'cleanup-non-ivd'}:
+        if bool(args.execute) and not (getattr(args, 'archive_batch_id', None) or '').strip():
+            raise SystemExit('--archive-batch-id is required when using --execute (for rollback traceability)')
         raise SystemExit(
             _run_cleanup_non_ivd_v2(
                 dry_run=(not bool(args.execute)),
@@ -629,6 +651,8 @@ def main() -> None:
             )
         )
     if args.cmd == 'ivd:cleanup':
+        if bool(args.execute) and not (getattr(args, 'archive_batch_id', None) or '').strip():
+            raise SystemExit('--archive-batch-id is required when using --execute (for rollback traceability)')
         raise SystemExit(
             _run_cleanup_non_ivd_v2(
                 dry_run=(not bool(args.execute)),
@@ -679,6 +703,8 @@ def main() -> None:
     if args.cmd == 'nhsa:rollback':
         raise SystemExit(_run_nhsa_rollback(args))
     if args.cmd == 'loop':
+        from app.workers.loop import main as loop_main
+
         loop_main()
         return
 
