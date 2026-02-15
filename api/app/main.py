@@ -18,7 +18,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import ProductRejected, RawDocument, User
-from app.repositories.dashboard import get_breakdown, get_radar, get_rankings, get_summary, get_trend
+from app.repositories.dashboard import get_admin_stats, get_breakdown, get_radar, get_rankings, get_summary, get_trend
 from app.repositories.data_sources import (
     activate_data_source,
     create_data_source,
@@ -52,6 +52,7 @@ from app.schemas.api import (
     ApiResponseCompany,
     ApiResponseAdminConfig,
     ApiResponseAdminConfigs,
+    ApiResponseAdminStats,
     ApiResponsePublicContactInfo,
     ApiResponseProduct,
     ApiResponseProductParams,
@@ -76,6 +77,7 @@ from app.schemas.api import (
     DashboardTrendItem,
     DashboardBreakdownData,
     DashboardBreakdownItem,
+    AdminStatsData,
     ProductOut,
     ProductParamOut,
     ProductParamsData,
@@ -786,10 +788,7 @@ def admin_products(
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseSearch:
-    # Strict scope: admin UI only lists IVD products. Non-IVD records are audited in products_rejected.
-    if is_ivd != 'true':
-        raise HTTPException(status_code=400, detail='Only is_ivd=true is supported. Use /api/admin/rejected-products for audit.')
-    ivd_filter = True
+    ivd_filter = True if is_ivd == 'true' else False if is_ivd == 'false' else None
     products, total = admin_search_products(
         db,
         query=q,
@@ -811,6 +810,22 @@ def admin_products(
         sort_by=sort_by,
         sort_order=sort_order,
         items=[SearchItem(product=serialize_product(item)) for item in products],
+    )
+    return _ok(data)
+
+
+@app.get('/api/admin/stats', response_model=ApiResponseAdminStats)
+def admin_stats(
+    limit: int = Query(default=50, ge=1, le=200),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminStats:
+    raw = get_admin_stats(db, limit=int(limit))
+    data = AdminStatsData(
+        total_ivd_products=int(raw.get('total_ivd_products') or 0),
+        rejected_total=int(raw.get('rejected_total') or 0),
+        by_ivd_category=[DashboardBreakdownItem(key=k, value=int(v)) for k, v in (raw.get('by_ivd_category') or [])],
+        by_source=[DashboardBreakdownItem(key=k, value=int(v)) for k, v in (raw.get('by_source') or [])],
     )
     return _ok(data)
 

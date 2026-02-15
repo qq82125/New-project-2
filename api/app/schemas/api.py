@@ -179,6 +179,19 @@ class ApiResponseBreakdown(BaseModel):
     data: DashboardBreakdownData
 
 
+class AdminStatsData(BaseModel):
+    total_ivd_products: int
+    rejected_total: int
+    by_ivd_category: list[DashboardBreakdownItem]
+    by_source: list[DashboardBreakdownItem]
+
+
+class ApiResponseAdminStats(BaseModel):
+    code: int
+    message: str
+    data: AdminStatsData
+
+
 class ApiResponseSearch(BaseModel):
     code: int
     message: str

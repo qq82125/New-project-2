@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
-from app.models import DailyMetric
+from app.models import DailyMetric, ProductRejected
 
 
 def _window_start(days: int) -> date:
@@ -118,3 +118,9 @@ def get_breakdown(db: Session, *, limit: int = 50) -> dict:
         "by_ivd_category": [(str(r[0]), int(r[1])) for r in by_cat],
         "by_source": [(str(r[0]), int(r[1])) for r in by_src],
     }
+
+
+def get_admin_stats(db: Session, *, limit: int = 50) -> dict:
+    breakdown = get_breakdown(db, limit=int(limit))
+    rejected_total = int(db.execute(text("SELECT COUNT(1) FROM products_rejected")).scalar() or 0)
+    return {**breakdown, "rejected_total": rejected_total}
