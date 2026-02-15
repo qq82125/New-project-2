@@ -18,7 +18,7 @@ from sqlalchemy.pool import NullPool
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import ProductRejected, RawDocument, User
-from app.repositories.dashboard import get_radar, get_rankings, get_summary, get_trend
+from app.repositories.dashboard import get_breakdown, get_radar, get_rankings, get_summary, get_trend
 from app.repositories.data_sources import (
     activate_data_source,
     create_data_source,
@@ -61,6 +61,7 @@ from app.schemas.api import (
     ApiResponseProductTimeline,
     ApiResponseRadar,
     ApiResponseRankings,
+    ApiResponseBreakdown,
     ApiResponseSearch,
     ApiResponseStatus,
     ApiResponseSummary,
@@ -73,6 +74,8 @@ from app.schemas.api import (
     DashboardSummary,
     DashboardTrendData,
     DashboardTrendItem,
+    DashboardBreakdownData,
+    DashboardBreakdownItem,
     ProductOut,
     ProductParamOut,
     ProductParamsData,
@@ -682,6 +685,26 @@ def dashboard_radar(
             DashboardRadarItem(metric='expiring_in_90d', value=metric.expiring_in_90d),
             DashboardRadarItem(metric='active_subscriptions', value=metric.active_subscriptions),
         ],
+    )
+    return _ok(data)
+
+
+@app.get('/api/dashboard/breakdown', response_model=ApiResponseBreakdown)
+def dashboard_breakdown(
+    limit: int = Query(default=50, ge=1, le=200),
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseBreakdown:
+    # Keep it consistent with other "premium dashboard insights".
+    ent = get_entitlements(current_user)
+    if getattr(current_user, 'role', None) != 'admin' and ent.trend_range_days <= 30:
+        raise HTTPException(status_code=403, detail='Breakdown is available on Pro only. Upgrade to Pro.')
+
+    raw = get_breakdown(db, limit=int(limit))
+    data = DashboardBreakdownData(
+        total_ivd_products=int(raw.get('total_ivd_products') or 0),
+        by_ivd_category=[DashboardBreakdownItem(key=k, value=int(v)) for k, v in (raw.get('by_ivd_category') or [])],
+        by_source=[DashboardBreakdownItem(key=k, value=int(v)) for k, v in (raw.get('by_source') or [])],
     )
     return _ok(data)
 

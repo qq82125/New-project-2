@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models import DailyMetric
@@ -69,3 +69,52 @@ def get_rankings(db: Session, days: int, limit: int) -> tuple[list[tuple[date, i
 def get_radar(db: Session) -> DailyMetric | None:
     stmt = select(DailyMetric).order_by(desc(DailyMetric.metric_date)).limit(1)
     return db.scalar(stmt)
+
+
+def get_breakdown(db: Session, *, limit: int = 50) -> dict:
+    """Inventory breakdown snapshot (IVD-only).
+
+    We intentionally compute this from `products` (not `daily_metrics`) because it is a
+    current-state snapshot, not a daily event metric.
+    """
+    limit0 = max(1, min(int(limit), 200))
+
+    total_ivd = int(db.execute(text("SELECT COUNT(1) FROM products WHERE is_ivd IS TRUE")).scalar() or 0)
+
+    by_cat = list(
+        db.execute(
+            text(
+                """
+                SELECT COALESCE(NULLIF(TRIM(ivd_category), ''), 'unknown') AS k, COUNT(1) AS v
+                FROM products
+                WHERE is_ivd IS TRUE
+                GROUP BY 1
+                ORDER BY v DESC, k ASC
+                """
+            )
+        ).all()
+    )
+
+    by_src = list(
+        db.execute(
+            text(
+                """
+                SELECT
+                  COALESCE(NULLIF(TRIM(COALESCE(raw_json->>'source', raw->>'source', 'unknown')), ''), 'unknown') AS k,
+                  COUNT(1) AS v
+                FROM products
+                WHERE is_ivd IS TRUE
+                GROUP BY 1
+                ORDER BY v DESC, k ASC
+                LIMIT :lim
+                """
+            ),
+            {"lim": limit0},
+        ).all()
+    )
+
+    return {
+        "total_ivd_products": total_ivd,
+        "by_ivd_category": [(str(r[0]), int(r[1])) for r in by_cat],
+        "by_source": [(str(r[0]), int(r[1])) for r in by_src],
+    }

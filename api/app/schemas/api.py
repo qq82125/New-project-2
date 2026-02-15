@@ -124,6 +124,17 @@ class DashboardRadarData(BaseModel):
     items: list[DashboardRadarItem]
 
 
+class DashboardBreakdownItem(BaseModel):
+    key: str
+    value: int
+
+
+class DashboardBreakdownData(BaseModel):
+    total_ivd_products: int
+    by_ivd_category: list[DashboardBreakdownItem]
+    by_source: list[DashboardBreakdownItem]
+
+
 class AdminConfigItem(BaseModel):
     config_key: str
     config_value: dict
@@ -160,6 +171,12 @@ class ApiResponseRadar(BaseModel):
     code: int
     message: str
     data: DashboardRadarData
+
+
+class ApiResponseBreakdown(BaseModel):
+    code: int
+    message: str
+    data: DashboardBreakdownData
 
 
 class ApiResponseSearch(BaseModel):
