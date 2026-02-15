@@ -127,6 +127,36 @@ def split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
+def ensure_schema_migrations_table() -> None:
+    # Minimal migration bookkeeping: avoid re-running all migrations on every API restart,
+    # which can block on table locks (e.g. ALTER TABLE) when the worker is doing long reads.
+    ddl = """
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+
+
+def list_applied_migrations() -> set[str]:
+    with engine.begin() as conn:
+        try:
+            rows = conn.execute(text("SELECT filename FROM schema_migrations")).fetchall()
+        except Exception:
+            return set()
+    return {str(r[0]) for r in rows if r and r[0]}
+
+
+def mark_migration_applied(filename: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO schema_migrations(filename) VALUES (:f) ON CONFLICT (filename) DO NOTHING"),
+            {"f": filename},
+        )
+
+
 def run_sql_migration(file_path: Path) -> None:
     sql = file_path.read_text(encoding='utf-8')
     with engine.begin() as conn:
@@ -135,10 +165,16 @@ def run_sql_migration(file_path: Path) -> None:
 
 
 def main() -> None:
+    ensure_schema_migrations_table()
     root = Path(__file__).resolve().parents[3]
     migration_dir = root / 'migrations'
+    applied = list_applied_migrations()
     for migration_file in sorted(migration_dir.glob('*.sql')):
+        name = migration_file.name
+        if name in applied:
+            continue
         run_sql_migration(migration_file)
+        mark_migration_applied(name)
 
 
 if __name__ == '__main__':
