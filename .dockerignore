@@ -16,6 +16,9 @@ npm-debug.log*
 
 # Runtime artifacts
 staging/
+data/
+venv/
+.venv/
 pgdata/
 *.log
 

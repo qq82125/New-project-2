@@ -1,0 +1,8 @@
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+tsconfig 2.tsbuildinfo
+.DS_Store
+.idea/
+.vscode/
+

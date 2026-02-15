@@ -1,0 +1,15 @@
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+
+# Local venvs (should never be built into images)
+venv/
+.venv/
+
+# Editor/OS noise
+.DS_Store
+.idea/
+.vscode/
+

@@ -2,13 +2,13 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-COPY web/package.json /app/package.json
-COPY web/tsconfig.json /app/tsconfig.json
-COPY web/next.config.ts /app/next.config.ts
-COPY web/next-env.d.ts /app/next-env.d.ts
+COPY package.json /app/package.json
+COPY tsconfig.json /app/tsconfig.json
+COPY next.config.ts /app/next.config.ts
+COPY next-env.d.ts /app/next-env.d.ts
 RUN npm install
 
-COPY web /app
+COPY . /app
 
 RUN npm run build
 

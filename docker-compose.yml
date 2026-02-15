@@ -17,8 +17,8 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: api/Dockerfile
+      context: ./api
+      dockerfile: Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-nmpa}:${POSTGRES_PASSWORD:-nmpa}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-nmpa}}
       AUTH_SECRET: ${AUTH_SECRET:-local-dev-auth-secret}
@@ -45,12 +45,13 @@ services:
       sh -c "python -m app.db.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     volumes:
       - ./staging:/app/staging
+      - ./migrations:/app/migrations:ro
     restart: unless-stopped
 
   worker:
     build:
-      context: .
-      dockerfile: api/Dockerfile
+      context: ./api
+      dockerfile: Dockerfile
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-nmpa}:${POSTGRES_PASSWORD:-nmpa}@db:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-nmpa}}
       AUTH_SECRET: ${AUTH_SECRET:-local-dev-auth-secret}
@@ -72,12 +73,13 @@ services:
       sh -c "python -m app.workers.cli loop"
     volumes:
       - ./staging:/app/staging
+      - ./migrations:/app/migrations:ro
     restart: unless-stopped
 
   web:
     build:
-      context: .
-      dockerfile: web/Dockerfile
+      context: ./web
+      dockerfile: Dockerfile
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       API_BASE_URL: ${API_BASE_URL:-http://api:8000}
