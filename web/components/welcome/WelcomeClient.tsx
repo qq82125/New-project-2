@@ -57,7 +57,7 @@ export default function WelcomeClient() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>欢迎使用 IVD产品雷达</CardTitle>
+          <CardTitle>欢迎使用 IVD智慧大脑</CardTitle>
           <CardDescription>您当前为 Free 用户，以下是您可用的功能与升级选项</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -91,7 +91,7 @@ export default function WelcomeClient() {
               </thead>
               <tbody>
                 <tr>
-                  <td>Dashboard 行业概览</td>
+                  <td>仪表盘行业概览</td>
                   <td>✅</td>
                   <td>✅</td>
                 </tr>
