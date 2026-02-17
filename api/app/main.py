@@ -2801,9 +2801,26 @@ def admin_get_registration_methodologies(
 ) -> dict:
     reg_no = (registration_no or '').strip()
     if not reg_no:
-        raise HTTPException(status_code=400, detail='registration_no is required')
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                "message": "registration_no is required",
+                "legacy_detail": "registration_no is required",
+            },
+        )
+    reg_no_norm = normalize_registration_no(reg_no)
+    if not reg_no_norm:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_PARSE_FAILED.value,
+                "message": "registration_no normalize failed",
+                "legacy_detail": "registration_no normalize failed",
+            },
+        )
 
-    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
     if not reg:
         raise HTTPException(status_code=404, detail='registration not found')
 
@@ -2845,8 +2862,25 @@ def admin_set_registration_methodologies(
 ) -> dict:
     reg_no = (registration_no or '').strip()
     if not reg_no:
-        raise HTTPException(status_code=400, detail='registration_no is required')
-    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                "message": "registration_no is required",
+                "legacy_detail": "registration_no is required",
+            },
+        )
+    reg_no_norm = normalize_registration_no(reg_no)
+    if not reg_no_norm:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_PARSE_FAILED.value,
+                "message": "registration_no normalize failed",
+                "legacy_detail": "registration_no normalize failed",
+            },
+        )
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
     if not reg:
         raise HTTPException(status_code=404, detail='registration not found')
 
@@ -2949,8 +2983,25 @@ def admin_map_procurement_lot_registration(
 
     reg_no = str(payload.get('registration_no') or '').strip()
     if not reg_no:
-        raise HTTPException(status_code=400, detail='registration_no is required')
-    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                "message": "registration_no is required",
+                "legacy_detail": "registration_no is required",
+            },
+        )
+    reg_no_norm = normalize_registration_no(reg_no)
+    if not reg_no_norm:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": IngestErrorCode.E_PARSE_FAILED.value,
+                "message": "registration_no normalize failed",
+                "legacy_detail": "registration_no normalize failed",
+            },
+        )
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
     if reg is None:
         raise HTTPException(status_code=404, detail='registration not found')
 
