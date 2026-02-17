@@ -15,7 +15,8 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import Session
 from bs4 import BeautifulSoup
 
-from app.models import ChangeLog, Company, ConflictQueue, Product, ProductRejected
+from app.common.errors import IngestErrorCode
+from app.models import ChangeLog, Company, ConflictQueue, PendingRecord, Product, ProductRejected
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 from app.services.nmpa_assets import record_shadow_diff_failure, shadow_write_nmpa_snapshot_and_diffs
@@ -515,6 +516,52 @@ def ingest_staging_records(
 
             reg_no_norm = normalize_registration_no(record.reg_no)
             if not reg_no_norm:
+                # Canonical key gate: missing registration_no must not write registrations/products.
+                # Keep evidence chain via raw_document_id, and enqueue a pending row for ops/manual resolution.
+                if raw_document_id and source_run_id is not None:
+                    try:
+                        payload = json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+                    except Exception:
+                        payload = repr(raw).encode("utf-8", errors="ignore")
+                    payload_hash = hashlib.sha256(payload).hexdigest()
+                    try:
+                        stmt = insert(PendingRecord).values(
+                            source_key=str(source or "UNKNOWN").strip().upper() or "UNKNOWN",
+                            source_run_id=int(source_run_id),
+                            raw_document_id=raw_document_id,
+                            payload_hash=payload_hash,
+                            registration_no_raw=(str(record.reg_no or "").strip() or None),
+                            reason_code="NO_REG_NO",
+                            candidate_registry_no=(str(record.reg_no or "").strip() or None),
+                            candidate_company=str(record.company_name or "").strip() or None,
+                            candidate_product_name=str(record.name or "").strip() or None,
+                            reason=json.dumps(
+                                {
+                                    "error_code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                                    "message": "registration_no is required before structured upsert",
+                                },
+                                ensure_ascii=False,
+                            ),
+                            status="open",
+                        )
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=[PendingRecord.source_run_id, PendingRecord.payload_hash],
+                            set_={
+                                "raw_document_id": stmt.excluded.raw_document_id,
+                                "registration_no_raw": stmt.excluded.registration_no_raw,
+                                "reason_code": stmt.excluded.reason_code,
+                                "reason": stmt.excluded.reason,
+                                "candidate_registry_no": stmt.excluded.candidate_registry_no,
+                                "candidate_company": stmt.excluded.candidate_company,
+                                "candidate_product_name": stmt.excluded.candidate_product_name,
+                                "status": "open",
+                                "updated_at": func.now(),
+                            },
+                        )
+                        db.execute(stmt)
+                    except Exception:
+                        # Do not block the main ingest path on pending enqueue failures.
+                        db.rollback()
                 if reject_audit:
                     src_key = _reject_source_key(record=record, raw=raw)
                     _upsert_rejected(
@@ -522,7 +569,7 @@ def ingest_staging_records(
                         src_key=src_key,
                         raw_doc_id=raw_document_id,
                         reason={
-                            'error_code': 'MISSING_REGISTRATION_NO',
+                            'error_code': IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
                             'message': 'registration_no is required before structured upsert',
                         },
                         ivd_version=str(decision.get('version') or IVD_CLASSIFIER_VERSION),

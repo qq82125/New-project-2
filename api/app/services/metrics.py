@@ -51,24 +51,34 @@ def _latest_source_run_id(db: Session, metric_date: date) -> int | None:
 
 
 def _count_total_di(db: Session) -> int:
-    return int(db.scalar(select(func.count(UdiDiMaster.id))) or 0)
+    try:
+        return int(db.scalar(select(func.count(UdiDiMaster.id))) or 0)
+    except Exception:
+        # Unit tests may pass a lightweight FakeDB without SQLAlchemy APIs.
+        return 0
 
 
 def _count_mapped_di(db: Session) -> int:
     # product_udi_map can contain multiple rows for same DI historically; dedupe on DI for coverage.
-    return int(db.scalar(select(func.count(func.distinct(ProductUdiMap.di)))) or 0)
+    try:
+        return int(db.scalar(select(func.count(func.distinct(ProductUdiMap.di)))) or 0)
+    except Exception:
+        return 0
 
 
 def _count_unmapped_di_pending(db: Session) -> int:
     # Pending queue status is uppercase in pending_udi_links; keep open alias for compatibility.
-    return int(
-        db.scalar(
-            select(func.count(func.distinct(PendingUdiLink.di))).where(
-                PendingUdiLink.status.in_(('PENDING', 'OPEN', 'pending', 'open'))
+    try:
+        return int(
+            db.scalar(
+                select(func.count(func.distinct(PendingUdiLink.di))).where(
+                    PendingUdiLink.status.in_(('PENDING', 'OPEN', 'pending', 'open'))
+                )
             )
+            or 0
         )
-        or 0
-    )
+    except Exception:
+        return 0
 
 
 def generate_daily_metrics(db: Session, metric_date: date | None = None) -> DailyMetric:

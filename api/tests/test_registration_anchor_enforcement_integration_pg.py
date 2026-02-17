@@ -130,9 +130,8 @@ def test_missing_registration_no_goes_raw_plus_pending_only(monkeypatch) -> None
             assert pending >= 1
             assert raws >= 1
             assert regs == 0
-            assert missing_variant is not None
-            assert (missing_variant.registry_no or "") == ""
-            assert missing_variant.product_id is None
+            # Contract: missing registration_no must not write product_variants (or registrations/products).
+            assert missing_variant is None
         finally:
             _cleanup(db, source_key, reg_no=None, dis=[missing_di])
 

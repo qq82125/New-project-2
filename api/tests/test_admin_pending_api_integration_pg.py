@@ -385,12 +385,14 @@ def test_admin_pending_resolve_invalid_registration_returns_error_code(monkeypat
         r1 = client.post(f'/api/admin/pending/{pending_id}/resolve', json={'registration_no': ''})
         assert r1.status_code == 400
         d1 = r1.json().get('detail') or {}
-        assert d1.get('code') == IngestErrorCode.E_NO_REG_NO.value
+        assert d1.get('code') == IngestErrorCode.E_CANONICAL_KEY_MISSING.value
+        assert d1.get('legacy_code') == IngestErrorCode.E_NO_REG_NO.value
 
         r2 = client.post(f'/api/admin/pending/{pending_id}/resolve', json={'registration_no': '----'})
         assert r2.status_code == 400
         d2 = r2.json().get('detail') or {}
-        assert d2.get('code') == IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value
+        assert d2.get('code') == IngestErrorCode.E_PARSE_FAILED.value
+        assert d2.get('legacy_code') == IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value
     finally:
         app.dependency_overrides.pop(get_db, None)
         main_mod._settings = old_settings

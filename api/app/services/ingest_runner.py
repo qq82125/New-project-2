@@ -129,12 +129,21 @@ def enforce_registration_anchor(record: dict[str, Any], source_key: str) -> Anch
     assert isinstance(record, dict), "record must be a dict"
     _ = str(source_key or "").strip().upper()  # keep signature stable; reserved for source-specific rules.
 
-    reg_no_raw = _pick_text(record, "registration_no", "reg_no", "registry_no")
+    src = str(source_key or "").strip().upper()
+    reg_a_raw = _pick_text(record, "registration_no", "reg_no")
+    reg_b_raw = _pick_text(record, "registry_no")
+    di = _pick_text(record, "udi_di", "di")
+
+    reg_no_raw = reg_a_raw or reg_b_raw
     if not reg_no_raw:
         return AnchorGateResult(
             ok=False,
             normalized_registration_no=None,
-            error_code=IngestErrorCode.E_NO_REG_NO.value,
+            error_code=(
+                IngestErrorCode.E_UDI_DI_WITHOUT_REG.value
+                if (src in {"UDI_DI", "UDI"} and di)
+                else IngestErrorCode.E_CANONICAL_KEY_MISSING.value
+            ),
             reason_code="NO_REG_NO",
             reason="registration_no missing in payload",
         )
@@ -147,6 +156,19 @@ def enforce_registration_anchor(record: dict[str, Any], source_key: str) -> Anch
             reason_code="PARSE_ERROR",
             reason=f"registration_no normalize failed: {reg_no_raw}",
         )
+
+    # Detect conflicting candidate keys in the same payload (e.g. reg_no vs registry_no mismatch).
+    if reg_a_raw and reg_b_raw:
+        reg_a = normalize_registration_no(reg_a_raw)
+        reg_b = normalize_registration_no(reg_b_raw)
+        if reg_a and reg_b and reg_a != reg_b:
+            return AnchorGateResult(
+                ok=False,
+                normalized_registration_no=None,
+                error_code=IngestErrorCode.E_CANONICAL_KEY_CONFLICT.value,
+                reason_code="PARSE_ERROR",
+                reason=f"registration_no conflict: {reg_a_raw} != {reg_b_raw}",
+            )
     return AnchorGateResult(
         ok=True,
         normalized_registration_no=reg_no,
@@ -419,19 +441,34 @@ def _resolve_source_policy(
 ) -> tuple[str, int]:
     defn = db.get(SourceDefinition, str(source_key or "").strip().upper())
     cfg = db.scalar(select(SourceConfig).where(SourceConfig.source_key == str(source_key or "").strip().upper()))
-    evidence_grade = (
+    evidence_grade_raw = (
         str(default_evidence_grade or "").strip().upper()
         or (str(getattr(defn, "default_evidence_grade", "C")).strip().upper() if defn is not None else "C")
         or "C"
     )
     if default_source_priority is not None:
-        source_priority = int(default_source_priority)
+        source_priority_raw: Any = default_source_priority
     else:
-        source_priority = (
-            int((cfg.upsert_policy or {}).get("priority", 100))
+        source_priority_raw = (
+            (cfg.upsert_policy or {}).get("priority", 100)
             if (cfg is not None and isinstance(cfg.upsert_policy, dict))
             else 100
         )
+
+    # Validate contract-level policy inputs; do not abort ingest for config errors.
+    codes: list[str] = []
+    evidence_grade = evidence_grade_raw if evidence_grade_raw in {"A", "B", "C"} else "C"
+    if evidence_grade_raw not in {"A", "B", "C"}:
+        codes.append(IngestErrorCode.E_EVIDENCE_GRADE_INVALID.value)
+    try:
+        source_priority = int(source_priority_raw)
+        if source_priority < 0:
+            raise ValueError("negative priority")
+    except Exception:
+        source_priority = 100
+        codes.append(IngestErrorCode.E_SOURCE_PRIORITY_INVALID.value)
+
+    # Caller may count codes into source_run notes; we only return validated values here.
     return evidence_grade, int(source_priority)
 
 
@@ -450,7 +487,7 @@ def upsert_structured_record_via_runner(
     gate = enforce_registration_anchor(row, str(source_key))
     reg_no = gate.normalized_registration_no
     if not gate.ok or not reg_no:
-        raise ValueError(gate.error_code or IngestErrorCode.E_PARSE_FAILED.value)
+        raise ValueError(gate.error_code or IngestErrorCode.E_STRUCT_WRITE_FORBIDDEN.value)
 
     resolved_parser_key = str(parser_key or "").strip()
     if not resolved_parser_key:
@@ -633,9 +670,6 @@ def _run_one_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig, e
                     reason_code=(gate.reason_code or "PARSE_ERROR"),
                     reason=(gate.reason or "registration anchor gate failed"),
                 )
-                if parser_key == "udi_di_parser" and di:
-                    if _upsert_variant_from_row_with_bindings(db, row=row, registry_no=None, product_id=None):
-                        stats.variants_upserted_count += 1
                 continue
 
             _set_raw_parse_log(

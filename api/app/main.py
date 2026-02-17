@@ -2396,7 +2396,8 @@ def admin_resolve_pending_record(
         raise HTTPException(
             status_code=400,
             detail={
-                'code': IngestErrorCode.E_NO_REG_NO.value,
+                'code': IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                'legacy_code': IngestErrorCode.E_NO_REG_NO.value,
                 'message': 'registration_no is required',
             },
         )
@@ -2405,7 +2406,8 @@ def admin_resolve_pending_record(
         raise HTTPException(
             status_code=400,
             detail={
-                'code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'code': IngestErrorCode.E_PARSE_FAILED.value,
+                'legacy_code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
                 'message': 'registration_no normalize failed',
             },
         )
@@ -2659,7 +2661,8 @@ def _admin_resolve_pending_udi_link(
         raise HTTPException(
             status_code=400,
             detail={
-                'code': IngestErrorCode.E_NO_REG_NO.value,
+                'code': IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                'legacy_code': IngestErrorCode.E_NO_REG_NO.value,
                 'message': 'registration_no is required',
             },
         )
@@ -2668,7 +2671,8 @@ def _admin_resolve_pending_udi_link(
         raise HTTPException(
             status_code=400,
             detail={
-                'code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'code': IngestErrorCode.E_PARSE_FAILED.value,
+                'legacy_code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
                 'message': 'registration_no normalize failed',
             },
         )

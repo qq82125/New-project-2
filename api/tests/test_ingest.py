@@ -153,7 +153,7 @@ def test_ingest_filters_non_ivd_records(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         'app.services.ingest.upsert_product_record',
-        lambda _db, _record, _run_id: ('added', None, None, None),
+        lambda *_args, **_kwargs: ('added', None, None, None),
     )
 
     stats = ingest_staging_records(
@@ -256,7 +256,7 @@ def test_ingest_writes_ivd_metadata_into_raw(monkeypatch) -> None:
     )
     captured = {}
 
-    def _upsert(_db, record, _run_id):
+    def _upsert(_db, record, _run_id, **_kwargs):
         captured['raw'] = record.raw
         return 'added', None, None, None
 
@@ -314,7 +314,7 @@ def test_ingest_filters_invalid_product_name(monkeypatch) -> None:
         },
     )
 
-    def _upsert(_db, _record, _run_id):
+    def _upsert(_db, _record, _run_id, **_kwargs):
         called['upsert'] += 1
         return 'added', None, None, None
 

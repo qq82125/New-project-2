@@ -4,6 +4,15 @@ from enum import Enum
 
 
 class IngestErrorCode(str, Enum):
+    # Canonical Key / Anchor Gate (contract-level)
+    E_CANONICAL_KEY_MISSING = "E_CANONICAL_KEY_MISSING"
+    E_CANONICAL_KEY_CONFLICT = "E_CANONICAL_KEY_CONFLICT"
+    E_UDI_DI_WITHOUT_REG = "E_UDI_DI_WITHOUT_REG"
+    E_STRUCT_WRITE_FORBIDDEN = "E_STRUCT_WRITE_FORBIDDEN"
+    E_EVIDENCE_GRADE_INVALID = "E_EVIDENCE_GRADE_INVALID"
+    E_SOURCE_PRIORITY_INVALID = "E_SOURCE_PRIORITY_INVALID"
+
+    # Backward-compatible / legacy codes still used by some endpoints/tests.
     E_NO_REG_NO = "E_NO_REG_NO"
     E_REG_NO_NORMALIZE_FAILED = "E_REG_NO_NORMALIZE_FAILED"
     E_PARSE_FAILED = "E_PARSE_FAILED"
