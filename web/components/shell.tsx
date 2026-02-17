@@ -87,6 +87,12 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
             >
               联系信息
             </Link>
+            <Link
+              href="/admin/udi-links"
+              className={cn('app-sidenav__item', pathname.startsWith('/admin/udi-links') ? 'is-active' : undefined)}
+            >
+              UDI待映射
+            </Link>
           </>
         ) : null}
       </div>

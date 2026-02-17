@@ -11,26 +11,7 @@ import { apiBase } from '../../../lib/api-server';
 type AdminMe = { id: number; email: string; role: string };
 type AdminMeResp = { code: number; message: string; data: AdminMe };
 
-type DataSource = {
-  id: number | null;
-  source_key: string;
-  entity_scope?: string;
-  name: string;
-  type: string;
-  is_active: boolean;
-  enabled: boolean;
-  updated_at: string;
-  compat?: {
-    bound?: boolean;
-    mode?: string;
-    legacy_name?: string;
-    legacy_type?: string;
-    legacy_exists?: boolean;
-    legacy_data_source_id?: number | null;
-    legacy_is_active?: boolean;
-  } | null;
-  config_preview: { host: string; port: number; database: string; username: string; sslmode?: string | null; source_table?: string | null; source_query?: string | null; folder?: string | null; ingest_new?: boolean; ingest_chunk_size?: number };
-};
+type DataSource = any;
 
 type ApiResp<T> = { code: number; message: string; data: T };
 type SourceRun = {
@@ -52,11 +33,6 @@ type SourceRun = {
 };
 
 export const dynamic = 'force-dynamic';
-
-type PageParams = {
-  page?: string;
-  page_size?: string;
-};
 
 async function getAdminMe(): Promise<AdminMe> {
   const API_BASE = apiBase();
@@ -89,33 +65,23 @@ async function getDataSources(): Promise<DataSource[]> {
   if (res.status === 403) notFound();
   if (!res.ok) throw new Error(`admin/sources failed: ${res.status}`);
 
-  const body = (await res.json()) as ApiResp<{
-    items: Array<{
-      source_key: string;
-      display_name: string;
-      entity_scope?: string;
-      enabled_by_default: boolean;
-      config?: { enabled?: boolean; updated_at?: string | null; fetch_params?: Record<string, unknown> };
-      compat?: DataSource['compat'];
-    }>;
-  }>;
+  const body = (await res.json()) as ApiResp<{ items: Array<Record<string, any>> }>;
   if (body.code !== 0) throw new Error(body.message || 'admin/sources returned error');
   return (body.data.items || []).map((item) => {
-    const fp = (item.config?.fetch_params || {}) as Record<string, unknown>;
+    const fp = (item?.config?.fetch_params || {}) as Record<string, unknown>;
     const legacy = (fp.legacy_data_source || {}) as Record<string, unknown>;
     const legacyCfg = (legacy.config || fp.connection || {}) as Record<string, unknown>;
-    const t = String(legacy.type || item.compat?.legacy_type || 'postgres');
+    const t = String(legacy.type || item?.compat?.legacy_type || 'postgres');
     const type = t === 'local_registry' ? 'local_registry' : 'postgres';
     return {
-      id: item.compat?.legacy_data_source_id ?? null,
-      source_key: item.source_key,
-      entity_scope: String(item?.entity_scope || ''),
-      name: String(legacy.name || item.display_name || item.source_key),
+      id: item?.compat?.legacy_data_source_id ?? null,
+      source_key: String(item?.source_key || ''),
+      name: String(legacy.name || item?.display_name || item?.source_key || ''),
       type,
-      is_active: Boolean(item.compat?.legacy_is_active),
-      enabled: Boolean(item.config?.enabled ?? item.enabled_by_default),
-      updated_at: String(item.config?.updated_at || ''),
-      compat: item.compat || null,
+      is_active: Boolean(item?.compat?.legacy_is_active),
+      enabled: Boolean(item?.config?.enabled ?? item?.enabled_by_default),
+      updated_at: String(item?.config?.updated_at || ''),
+      compat: item?.compat || null,
       config_preview: {
         host: String(legacyCfg.host || ''),
         port: Number(legacyCfg.port || 5432),
@@ -132,10 +98,10 @@ async function getDataSources(): Promise<DataSource[]> {
   });
 }
 
-async function getSourceRuns(page: number, pageSize: number): Promise<SourceRun[]> {
+async function getSourceRuns(): Promise<SourceRun[]> {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
-  const res = await fetch(`${API_BASE}/api/admin/source-runs?page=${encodeURIComponent(String(page))}&page_size=${encodeURIComponent(String(pageSize))}`, {
+  const res = await fetch(`${API_BASE}/api/admin/source-runs?limit=50`, {
     method: 'GET',
     headers: cookie ? { cookie } : undefined,
     cache: 'no-store',
@@ -150,12 +116,8 @@ async function getSourceRuns(page: number, pageSize: number): Promise<SourceRun[
   return body.data.items || [];
 }
 
-export default async function AdminDataSourcesPage({ searchParams }: { searchParams: Promise<PageParams> }) {
-  const params = await searchParams;
-  const page = Math.max(1, Number(params.page || '1'));
-  const pageSize = Math.max(1, Number(params.page_size || '10'));
-
-  const [me, items, runs] = await Promise.all([getAdminMe(), getDataSources(), getSourceRuns(page, pageSize)]);
+export default async function AdminDataSourcesPage() {
+  const [me, items, runs] = await Promise.all([getAdminMe(), getDataSources(), getSourceRuns()]);
 
   return (
     <div className="grid">
@@ -172,15 +134,11 @@ export default async function AdminDataSourcesPage({ searchParams }: { searchPar
           <Link href="/admin" className="muted">
             返回管理后台
           </Link>
-          <span className="muted">·</span>
-          <Link href="/admin/conflicts" className="muted">
-            冲突队列
-          </Link>
         </CardContent>
       </Card>
 
       <DataSourcesManager initialItems={items} />
-      <SyncManager initialItems={runs} initialPage={page} initialPageSize={pageSize} />
+      <SyncManager initialItems={runs} />
     </div>
   );
 }

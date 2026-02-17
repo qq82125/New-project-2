@@ -13,11 +13,23 @@ import { EmptyState, ErrorState } from '../States';
 import { RUN_STATUS_ZH, SOURCE_TYPE_ZH, labelFrom } from '../../constants/display';
 
 type DataSource = {
-  id: number;
+  id: number | null;
+  source_key: string;
+  entity_scope?: string;
   name: string;
   type: string;
   is_active: boolean;
+  enabled: boolean;
   updated_at: string;
+  compat?: {
+    bound?: boolean;
+    mode?: string;
+    legacy_name?: string;
+    legacy_type?: string;
+    legacy_exists?: boolean;
+    legacy_data_source_id?: number | null;
+    legacy_is_active?: boolean;
+  } | null;
   config_preview: {
     folder?: string | null;
     ingest_new?: boolean;
@@ -32,9 +44,36 @@ type DataSource = {
   };
 };
 
+type SourceRegistryItem = {
+  source_key: string;
+  display_name: string;
+  entity_scope: string;
+  parser_key: string;
+  enabled_by_default: boolean;
+  config: {
+    id?: string | null;
+    enabled?: boolean;
+    schedule_cron?: string | null;
+    fetch_params?: Record<string, unknown>;
+    parse_params?: Record<string, unknown>;
+    upsert_policy?: Record<string, unknown>;
+    updated_at?: string | null;
+  };
+  compat?: DataSource['compat'];
+};
+
 type ApiResp<T> = { code: number; message: string; data: T };
 
-type ListData = { items: DataSource[] };
+type LegacyDataSource = {
+  id: number;
+  name: string;
+  type: string;
+  is_active: boolean;
+  updated_at: string;
+  config_preview: DataSource['config_preview'];
+};
+type ListData = { items: LegacyDataSource[] };
+type RegistryListData = { items: SourceRegistryItem[] };
 type SourceAuditReport = {
   generated_at?: string;
   upstream?: { filename?: string | null; md5?: string | null; download_url?: string | null } | null;
@@ -54,6 +93,7 @@ type SupplementSchedule = {
   interval_hours: number;
   batch_size: number;
   recent_hours: number;
+  source_key?: string | null;
   source_name?: string | null;
   nmpa_query_enabled: boolean;
   nmpa_query_interval_hours: number;
@@ -85,6 +125,7 @@ type NmpaQueryReport = {
 };
 type DataQualitySample = {
   id: string;
+  registration_id?: string | null;
   name: string;
   udi_di?: string | null;
   reg_no?: string | null;
@@ -104,6 +145,9 @@ type DataQualityReport = {
     reg_no_placeholder?: number;
     class_missing?: number;
     company_missing?: number;
+    registration_id_missing?: number;
+    reg_no_missing_or_placeholder?: number;
+    anchor_both_missing?: number;
   };
   samples?: {
     name_blank?: DataQualitySample[];
@@ -113,7 +157,39 @@ type DataQualityReport = {
     reg_no_placeholder?: DataQualitySample[];
     class_missing?: DataQualitySample[];
     company_missing?: DataQualitySample[];
+    registration_id_missing?: DataQualitySample[];
+    reg_no_missing_or_placeholder?: DataQualitySample[];
+    anchor_both_missing?: DataQualitySample[];
   };
+};
+type ContractBySource = {
+  source: string;
+  evidence_grade: string;
+  source_priority: number;
+  applied_changes?: number;
+  rejected_changes?: number;
+  changed_fields_total?: number;
+};
+type ContractByDay = {
+  date: string;
+  applied_changes: number;
+  rejected_changes: number;
+};
+type ContractConflictReport = {
+  date?: string | null;
+  since?: string | null;
+  window_start?: string;
+  window_end?: string;
+  totals?: {
+    total?: number;
+    created?: number;
+    updated?: number;
+    changed_fields_total?: number;
+    rejected_total?: number;
+  };
+  by_source?: ContractBySource[];
+  rejected_by_source?: ContractBySource[];
+  by_day?: ContractByDay[];
 };
 
 async function readErrorDetail(resp: Response): Promise<string | null> {
@@ -126,8 +202,13 @@ async function readErrorDetail(resp: Response): Promise<string | null> {
 }
 
 type FormState = {
+  source_key: string;
   name: string;
   type: 'postgres' | 'local_registry';
+  enabled: boolean;
+  display_name: string;
+  entity_scope: string;
+  parser_key: string;
   folder: string;
   ingest_new: boolean;
   ingest_chunk_size: string;
@@ -143,8 +224,13 @@ type FormState = {
 
 function initialForm(): FormState {
   return {
+    source_key: '',
     name: '',
     type: 'postgres',
+    enabled: true,
+    display_name: '',
+    entity_scope: 'REGISTRATION',
+    parser_key: '',
     folder: '',
     ingest_new: true,
     ingest_chunk_size: '2000',
@@ -159,6 +245,37 @@ function initialForm(): FormState {
   };
 }
 
+function toDataSource(item: SourceRegistryItem): DataSource {
+  const fp = (item.config?.fetch_params || {}) as Record<string, unknown>;
+  const legacy = (fp.legacy_data_source || {}) as Record<string, unknown>;
+  const legacyCfg = (legacy.config || fp.connection || {}) as Record<string, unknown>;
+  const t = String(legacy.type || item.compat?.legacy_type || 'postgres');
+  const type = t === 'local_registry' ? 'local_registry' : 'postgres';
+  return {
+    id: item.compat?.legacy_data_source_id ?? null,
+    source_key: item.source_key,
+    entity_scope: item.entity_scope,
+    name: String(legacy.name || item.display_name || item.source_key),
+    type,
+    is_active: Boolean(item.compat?.legacy_is_active),
+    enabled: Boolean(item.config?.enabled ?? item.enabled_by_default),
+    updated_at: String(item.config?.updated_at || ''),
+    compat: item.compat || null,
+    config_preview: {
+      folder: typeof legacyCfg.folder === 'string' ? legacyCfg.folder : '',
+      ingest_new: legacyCfg.ingest_new !== false,
+      ingest_chunk_size: Number(legacyCfg.ingest_chunk_size || 2000),
+      host: String(legacyCfg.host || ''),
+      port: Number(legacyCfg.port || 5432),
+      database: String(legacyCfg.database || ''),
+      username: String(legacyCfg.username || ''),
+      sslmode: (legacyCfg.sslmode ? String(legacyCfg.sslmode) : null),
+      source_table: (legacyCfg.source_table ? String(legacyCfg.source_table) : 'public.products'),
+      source_query: (legacyCfg.source_query ? String(legacyCfg.source_query) : null),
+    },
+  };
+}
+
 export default function DataSourcesManager({ initialItems }: { initialItems: DataSource[] }) {
   const [items, setItems] = useState<DataSource[]>(initialItems);
   const [loading, setLoading] = useState(false);
@@ -170,11 +287,15 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
   const [supplementLoading, setSupplementLoading] = useState(false);
   const [supplementReport, setSupplementReport] = useState<SupplementReport | null>(null);
   const [nmpaQueryReport, setNmpaQueryReport] = useState<NmpaQueryReport | null>(null);
+  const [contractLoading, setContractLoading] = useState(false);
+  const [contractSinceDays, setContractSinceDays] = useState<number>(7);
+  const [contractReport, setContractReport] = useState<ContractConflictReport | null>(null);
   const [supplementSchedule, setSupplementSchedule] = useState<SupplementSchedule>({
     enabled: false,
     interval_hours: 24,
     batch_size: 1000,
     recent_hours: 72,
+    source_key: 'UDI_DI',
     source_name: 'UDI补充数据源（规格/DI/包装/GTIN）',
     nmpa_query_enabled: true,
     nmpa_query_interval_hours: 24,
@@ -183,16 +304,65 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     nmpa_query_timeout_seconds: 20,
   });
 
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(initialForm());
 
-  const editing = useMemo(() => items.find((x) => x.id === editingId) || null, [items, editingId]);
+  const editing = useMemo(() => items.find((x) => x.source_key === editingId) || null, [items, editingId]);
+  const grouped = useMemo(() => {
+    const main = items.filter((x) => (x.compat?.mode || '').toLowerCase() === 'primary' || x.source_key === 'NMPA_REG');
+    const project = items.filter((x) => (x.entity_scope || '').toUpperCase() === 'PROCUREMENT' || x.source_key.startsWith('PROCUREMENT_'));
+    const mainKeys = new Set(main.map((x) => x.source_key));
+    const projectKeys = new Set(project.map((x) => x.source_key));
+    const enhance = items.filter((x) => !mainKeys.has(x.source_key) && !projectKeys.has(x.source_key));
+    return { main, enhance, project };
+  }, [items]);
+  const mainSource = useMemo(
+    () =>
+      items.find((x) => x.source_key === 'NMPA_REG') ||
+      items.find((x) => (x.compat?.mode || '').toLowerCase() === 'primary') ||
+      null,
+    [items],
+  );
+  const supplementSources = useMemo(
+    () =>
+      items.filter(
+        (x) =>
+          x.source_key !== 'NMPA_REG' &&
+          (x.source_key === 'UDI_DI' ||
+            (x.entity_scope || '').toUpperCase() === 'UDI' ||
+            (x.compat?.mode || '').toLowerCase() === 'supplement'),
+      ),
+    [items],
+  );
+  const selectedSupplementSource = useMemo(() => {
+    const key = String(supplementSchedule.source_key || '').trim().toUpperCase();
+    if (key) {
+      const found = supplementSources.find((x) => x.source_key === key);
+      if (found) return found;
+    }
+    const name = String(supplementSchedule.source_name || '').trim();
+    if (name) {
+      const found = supplementSources.find((x) => x.name === name);
+      if (found) return found;
+    }
+    return supplementSources[0] || null;
+  }, [supplementSchedule.source_key, supplementSchedule.source_name, supplementSources]);
   const supplementStatus = (supplementReport?.status || '').toLowerCase();
 
   async function refresh() {
     setLoading(true);
     setError(null);
     try {
+      const regRes = await fetch(`/api/admin/sources`, { credentials: 'include', cache: 'no-store' });
+      if (regRes.ok) {
+        const regBody = (await regRes.json()) as ApiResp<RegistryListData>;
+        if (regBody.code === 0) {
+          setItems((regBody.data.items || []).map(toDataSource));
+          return;
+        }
+      }
+
+      // Fallback to legacy API for compatibility.
       const res = await fetch(`/api/admin/data-sources`, { credentials: 'include', cache: 'no-store' });
       if (!res.ok) {
         setError(`加载失败 (${res.status})`);
@@ -203,7 +373,28 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
         setError(body.message || '接口返回异常');
         return;
       }
-      setItems(body.data.items);
+      setItems(
+        (body.data.items || []).map((x) => ({
+          id: x.id,
+          source_key: `LEGACY_${x.id}`,
+          entity_scope: 'LEGACY',
+          name: x.name,
+          type: x.type,
+          is_active: Boolean(x.is_active),
+          enabled: Boolean(x.is_active),
+          updated_at: x.updated_at,
+          compat: {
+            bound: true,
+            mode: 'legacy',
+            legacy_name: x.name,
+            legacy_type: x.type,
+            legacy_exists: true,
+            legacy_data_source_id: x.id,
+            legacy_is_active: x.is_active,
+          },
+          config_preview: x.config_preview,
+        })),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : '网络错误');
     } finally {
@@ -325,6 +516,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
               interval_hours: Number(raw.interval_hours || prev.interval_hours || 24),
               batch_size: Number(raw.batch_size || prev.batch_size || 1000),
               recent_hours: Number(raw.recent_hours || prev.recent_hours || 72),
+              source_key: String(raw.source_key || prev.source_key || 'UDI_DI'),
               source_name: String(raw.source_name || prev.source_name || 'UDI补充数据源（规格/DI/包装/GTIN）'),
               nmpa_query_enabled: Boolean(raw.nmpa_query_enabled ?? prev.nmpa_query_enabled),
               nmpa_query_interval_hours: Number(raw.nmpa_query_interval_hours || prev.nmpa_query_interval_hours || 24),
@@ -342,6 +534,27 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     }
   }
 
+  async function refreshContractConflicts(days: number = contractSinceDays) {
+    setContractLoading(true);
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - Math.max(0, Number(days || 0)));
+      const sinceText = since.toISOString().slice(0, 10);
+      const res = await fetch(`/api/admin/source-contract/conflicts?since=${encodeURIComponent(sinceText)}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as ApiResp<{ report: ContractConflictReport }>;
+      if (body.code !== 0) return;
+      setContractReport(body.data?.report || null);
+    } catch {
+      // no-op
+    } finally {
+      setContractLoading(false);
+    }
+  }
+
   async function saveSupplementSchedule() {
     setSupplementLoading(true);
     try {
@@ -355,7 +568,8 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
             interval_hours: Math.max(1, Number(supplementSchedule.interval_hours || 24)),
             batch_size: Math.max(50, Number(supplementSchedule.batch_size || 1000)),
             recent_hours: Math.max(1, Number(supplementSchedule.recent_hours || 72)),
-            source_name: supplementSchedule.source_name || 'UDI补充数据源（规格/DI/包装/GTIN）',
+            source_key: selectedSupplementSource?.source_key || supplementSchedule.source_key || 'UDI_DI',
+            source_name: selectedSupplementSource?.name || supplementSchedule.source_name || 'UDI注册证关联增强源（DI/GTIN/包装）',
             nmpa_query_enabled: supplementSchedule.nmpa_query_enabled,
             nmpa_query_interval_hours: Math.max(1, Number(supplementSchedule.nmpa_query_interval_hours || 24)),
             nmpa_query_batch_size: Math.max(10, Number(supplementSchedule.nmpa_query_batch_size || 200)),
@@ -443,6 +657,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     void refreshAudit();
     void refreshDataQuality();
     void refreshSupplement();
+    void refreshContractConflicts(7);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -452,10 +667,15 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
   }
 
   function startEdit(ds: DataSource) {
-    setEditingId(ds.id);
+    setEditingId(ds.source_key);
     setForm({
+      source_key: ds.source_key,
       name: ds.name,
       type: (ds.type === 'local_registry' ? 'local_registry' : 'postgres'),
+      enabled: ds.enabled,
+      display_name: ds.name,
+      entity_scope: 'REGISTRATION',
+      parser_key: '',
       folder: ds.config_preview.folder || '',
       ingest_new: ds.config_preview.ingest_new !== false,
       ingest_chunk_size: String(ds.config_preview.ingest_chunk_size || 2000),
@@ -476,58 +696,52 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     try {
       const port = Number(form.port || '5432');
       const isEdit = editingId != null;
-
-      const url = isEdit
-        ? `/api/admin/data-sources/${editingId}`
-        : `/api/admin/data-sources`;
-
-      const method = isEdit ? 'PUT' : 'POST';
-
-      const payload = isEdit
-        ? {
-            name: form.name,
-            config:
-              form.type === 'local_registry'
-                ? {
-                    folder: form.folder.trim(),
-                    ingest_new: form.ingest_new,
-                    ingest_chunk_size: Number(form.ingest_chunk_size || '2000'),
-                  }
-                : {
-                    host: form.host,
-                    port,
-                    database: form.database,
-                    username: form.username,
-                    ...(form.password ? { password: form.password } : {}),
-                    sslmode: form.sslmode || null,
-                    source_table: form.source_table || 'public.products',
-                    ...(form.source_query.trim() ? { source_query: form.source_query.trim() } : {}),
-                  },
-          }
-        : {
-            name: form.name,
+      const sourceKey = form.source_key.trim().toUpperCase();
+      if (!sourceKey) {
+        setError('source_key 不能为空');
+        return;
+      }
+      const role = sourceKey === 'NMPA_REG' ? 'primary' : 'supplement';
+      const legacyConfig =
+        form.type === 'local_registry'
+          ? {
+              folder: form.folder.trim(),
+              ingest_new: form.ingest_new,
+              ingest_chunk_size: Number(form.ingest_chunk_size || '2000'),
+            }
+          : {
+              host: form.host,
+              port,
+              database: form.database,
+              username: form.username,
+              ...(form.password ? { password: form.password } : {}),
+              sslmode: form.sslmode || null,
+              source_table: form.source_table || 'public.products',
+              ...(form.source_query.trim() ? { source_query: form.source_query.trim() } : {}),
+            };
+      const payload = {
+        source_key: sourceKey,
+        ...(isEdit
+          ? {}
+          : {
+              display_name: form.display_name.trim() || form.name.trim() || sourceKey,
+              entity_scope: form.entity_scope.trim().toUpperCase() || 'REGISTRATION',
+              parser_key: form.parser_key.trim() || sourceKey.toLowerCase(),
+              enabled_by_default: true,
+            }),
+        enabled: form.enabled,
+        fetch_params: {
+          legacy_data_source: {
+            name: form.name.trim() || form.display_name.trim() || sourceKey,
             type: form.type,
-            config:
-              form.type === 'local_registry'
-                ? {
-                    folder: form.folder.trim(),
-                    ingest_new: form.ingest_new,
-                    ingest_chunk_size: Number(form.ingest_chunk_size || '2000'),
-                  }
-                : {
-                    host: form.host,
-                    port,
-                    database: form.database,
-                    username: form.username,
-                    password: form.password,
-                    sslmode: form.sslmode || null,
-                    source_table: form.source_table || 'public.products',
-                    ...(form.source_query.trim() ? { source_query: form.source_query.trim() } : {}),
-                  },
-          };
+            role,
+            config: legacyConfig,
+          },
+        },
+      };
 
-      const resp = await fetch(url, {
-        method,
+      const resp = await fetch(`/api/admin/sources`, {
+        method: isEdit ? 'PATCH' : 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(payload),
@@ -539,14 +753,14 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
         toast({ variant: 'destructive', title: '保存失败', description: msg });
         return;
       }
-      const body = (await resp.json()) as ApiResp<{ id: number }>;
+      const body = (await resp.json()) as ApiResp<unknown>;
       if (body.code !== 0) {
         const msg = body.message || '接口返回异常';
         setError(msg);
         toast({ variant: 'destructive', title: '保存失败', description: msg });
         return;
       }
-      toast({ title: '保存成功', description: isEdit ? `已更新数据源 #${editingId}` : '已创建数据源' });
+      toast({ title: '保存成功', description: isEdit ? `已更新数据源 ${editingId}` : '已创建数据源' });
       startCreate();
       await refresh();
     } catch (e) {
@@ -558,11 +772,16 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     }
   }
 
-  async function testConnection(id: number) {
+  async function testConnection(ds: DataSource) {
+    const legacyId = ds.compat?.legacy_data_source_id;
+    if (!legacyId) {
+      toast({ variant: 'destructive', title: '无法测试', description: '该来源未绑定 legacy data source。' });
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/admin/data-sources/${id}/test`, {
+      const resp = await fetch(`/api/admin/data-sources/${legacyId}/test`, {
         method: 'POST',
         credentials: 'include',
       });
@@ -580,7 +799,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
         return;
       }
       if (body.data.ok) {
-        toast({ title: '连接成功', description: `数据源 #${id}` });
+        toast({ title: '连接成功', description: `${ds.name}` });
       } else {
         toast({ variant: 'destructive', title: '连接失败', description: body.data.message });
       }
@@ -593,13 +812,15 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     }
   }
 
-  async function activate(id: number) {
+  async function activate(sourceKey: string) {
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/admin/data-sources/${id}/activate`, {
-        method: 'POST',
+      const resp = await fetch(`/api/admin/sources`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({ source_key: sourceKey, enabled: true }),
       });
       if (!resp.ok) {
         const msg = `激活失败 (${resp.status})`;
@@ -607,14 +828,14 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
         toast({ variant: 'destructive', title: '激活失败', description: msg });
         return;
       }
-      const body = (await resp.json()) as ApiResp<{ id: number }>;
+      const body = (await resp.json()) as ApiResp<unknown>;
       if (body.code !== 0) {
         const msg = body.message || '接口返回异常';
         setError(msg);
         toast({ variant: 'destructive', title: '激活失败', description: msg });
         return;
       }
-      toast({ title: '已设为启用', description: `数据源 #${id}` });
+      toast({ title: '已设为启用', description: sourceKey });
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : '网络错误';
@@ -625,37 +846,35 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     }
   }
 
-  async function remove(id: number) {
-    const ds = items.find((x) => x.id === id);
+  async function remove(sourceKey: string) {
+    const ds = items.find((x) => x.source_key === sourceKey);
     if (!ds) return;
-    if (ds.is_active) {
-      toast({ variant: 'destructive', title: '无法删除', description: '请先将其它数据源设为启用。' });
-      return;
-    }
-    if (!window.confirm(`确认删除数据源「${ds.name}」(#${ds.id}) 吗？此操作不可恢复。`)) return;
+    if (!window.confirm(`确认停用数据源「${ds.name}」(${ds.source_key}) 吗？`)) return;
 
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch(`/api/admin/data-sources/${id}`, {
-        method: 'DELETE',
+      const resp = await fetch(`/api/admin/sources`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({ source_key: sourceKey, enabled: false }),
       });
       if (!resp.ok) {
         const detail = await readErrorDetail(resp);
-        const msg = detail ? `${detail} (${resp.status})` : `删除失败 (${resp.status})`;
+        const msg = detail ? `${detail} (${resp.status})` : `停用失败 (${resp.status})`;
         setError(msg);
-        toast({ variant: 'destructive', title: '删除失败', description: msg });
+        toast({ variant: 'destructive', title: '停用失败', description: msg });
         return;
       }
-      const body = (await resp.json()) as ApiResp<{ deleted: boolean }>;
-      if (body.code !== 0 || !body.data?.deleted) {
-        const msg = body.message || '删除失败';
+      const body = (await resp.json()) as ApiResp<unknown>;
+      if (body.code !== 0) {
+        const msg = body.message || '停用失败';
         setError(msg);
-        toast({ variant: 'destructive', title: '删除失败', description: msg });
+        toast({ variant: 'destructive', title: '停用失败', description: msg });
         return;
       }
-      toast({ title: '已删除', description: `数据源 #${id}` });
+      toast({ title: '已停用', description: sourceKey });
       await refresh();
     } catch (e) {
       const msg = e instanceof Error ? e.message : '网络错误';
@@ -670,7 +889,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>主源校验状态（NMPA注册产品库）</CardTitle>
+          <CardTitle>主源校验状态（{mainSource?.name || 'NMPA注册产品库（主数据源）'}）</CardTitle>
           <CardDescription>展示主数据源上游包一致性、近 24 小时新鲜度与主库覆盖率。</CardDescription>
         </CardHeader>
         <CardContent className="grid" style={{ gap: 10 }}>
@@ -689,6 +908,9 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
               }
             >
               主源包: {auditReport?.package_match?.same_filename ? '已匹配' : '待核对'}
+            </Badge>
+            <Badge variant={mainSource?.enabled ? 'success' : 'warning'}>
+              主源配置: {mainSource?.enabled ? '已启用' : '未启用'}
             </Badge>
           </div>
 
@@ -731,7 +953,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
       <Card>
         <CardHeader>
           <CardTitle>补充源自动任务</CardTitle>
-          <CardDescription>用于 UDI 补充源纠错/回溯补全，仅填充主源空字段，不覆盖已有值。</CardDescription>
+          <CardDescription>用于 UDI 增强源纠错/回溯补全，仅填充主源空字段，不覆盖已有值。</CardDescription>
         </CardHeader>
         <CardContent className="grid" style={{ gap: 10 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -740,6 +962,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
             </Badge>
             <Badge variant="muted">间隔: {supplementSchedule.interval_hours}h</Badge>
             <Badge variant="muted">批量: {supplementSchedule.batch_size}</Badge>
+            <Badge variant="muted">增强源: {selectedSupplementSource?.name || supplementSchedule.source_name || '-'}</Badge>
             <Badge variant={supplementSchedule.nmpa_query_enabled ? 'success' : 'muted'}>
               NMPA查询补充: {supplementSchedule.nmpa_query_enabled ? '已启用' : '未启用'}
             </Badge>
@@ -770,11 +993,29 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
               placeholder="回溯小时"
               inputMode="numeric"
             />
-            <Input
-              value={supplementSchedule.source_name || ''}
-              onChange={(e) => setSupplementSchedule((p) => ({ ...p, source_name: e.target.value }))}
-              placeholder="补充源名称"
-            />
+            <Select
+              value={(selectedSupplementSource?.source_key || supplementSchedule.source_key || 'UDI_DI').toString()}
+              onChange={(e) => {
+                const key = e.target.value;
+                const src = supplementSources.find((x) => x.source_key === key) || null;
+                setSupplementSchedule((p) => ({
+                  ...p,
+                  source_key: key,
+                  source_name: src?.name || p.source_name,
+                }));
+              }}
+            >
+              {(supplementSources.length > 0
+                ? supplementSources
+                : ([{ source_key: 'UDI_DI', name: 'UDI注册证关联增强源（DI/GTIN/包装）' }] as Array<
+                    Pick<DataSource, 'source_key' | 'name'>
+                  >)
+              ).map((s) => (
+                <option key={s.source_key} value={s.source_key}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
             <Select
               value={supplementSchedule.nmpa_query_enabled ? 'on' : 'off'}
               onChange={(e) => setSupplementSchedule((p) => ({ ...p, nmpa_query_enabled: e.target.value === 'on' }))}
@@ -849,8 +1090,110 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
 
       <Card>
         <CardHeader>
-          <CardTitle>数据质检（IVD）</CardTitle>
-          <CardDescription>一键扫描不合理产品信息（名称占位、符号名、注册证号占位、缺少分类或企业）。</CardDescription>
+          <CardTitle>Source Contract 冲突统计</CardTitle>
+          <CardDescription>展示 registration_no 冲突决策采纳/拒绝结果（evidence_grade + source_priority + observed_at）。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid" style={{ gap: 10 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Select
+              value={String(contractSinceDays)}
+              onChange={(e) => setContractSinceDays(Number(e.target.value || 7))}
+            >
+              <option value="1">近 1 天</option>
+              <option value="3">近 3 天</option>
+              <option value="7">近 7 天</option>
+              <option value="30">近 30 天</option>
+            </Select>
+            <Button variant="secondary" onClick={() => void refreshContractConflicts(contractSinceDays)} disabled={contractLoading || loading}>
+              {contractLoading ? '加载中...' : '刷新统计'}
+            </Button>
+            <Badge variant="muted">采纳: {contractReport?.totals?.total ?? 0}</Badge>
+            <Badge variant="warning">拒绝: {contractReport?.totals?.rejected_total ?? 0}</Badge>
+          </div>
+
+          {contractReport ? (
+            <div className="columns-3">
+              <div className="card">
+                <div className="muted">窗口</div>
+                <div style={{ fontSize: 12 }}>{contractReport.window_start || '-'}</div>
+                <div style={{ fontSize: 12 }}>{contractReport.window_end || '-'}</div>
+              </div>
+              <div className="card">
+                <div className="muted">采纳统计</div>
+                <div>创建: {contractReport.totals?.created ?? 0}</div>
+                <div>更新: {contractReport.totals?.updated ?? 0}</div>
+                <div className="muted">字段变更: {contractReport.totals?.changed_fields_total ?? 0}</div>
+              </div>
+              <div className="card">
+                <div className="muted">趋势(按天)</div>
+                {(contractReport.by_day || []).slice(-5).map((x) => (
+                  <div key={x.date} style={{ fontSize: 12 }}>
+                    {x.date}: 采纳 {x.applied_changes} / 拒绝 {x.rejected_changes}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyState text="暂无冲突统计数据" />
+          )}
+
+          {(contractReport?.by_source || []).length > 0 ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>来源</th>
+                    <th>证据等级</th>
+                    <th>优先级</th>
+                    <th>采纳</th>
+                    <th>字段变更</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(contractReport?.by_source || []).slice(0, 8).map((r, i) => (
+                    <tr key={`${r.source}-${r.evidence_grade}-${i}`}>
+                      <td>{r.source}</td>
+                      <td>{r.evidence_grade}</td>
+                      <td>{String(r.source_priority)}</td>
+                      <td>{String(r.applied_changes ?? 0)}</td>
+                      <td>{String(r.changed_fields_total ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : null}
+          {(contractReport?.rejected_by_source || []).length > 0 ? (
+            <TableWrap>
+              <Table>
+                <thead>
+                  <tr>
+                    <th>来源</th>
+                    <th>证据等级</th>
+                    <th>优先级</th>
+                    <th>拒绝次数</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(contractReport?.rejected_by_source || []).slice(0, 8).map((r, i) => (
+                    <tr key={`${r.source}-${r.evidence_grade}-rej-${i}`}>
+                      <td>{r.source}</td>
+                      <td>{r.evidence_grade}</td>
+                      <td>{String(r.source_priority)}</td>
+                      <td>{String(r.rejected_changes ?? 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </TableWrap>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>数据质检与锚点健康（IVD）</CardTitle>
+          <CardDescription>检查名称异常 + 注册锚点完整性（registration_id/reg_no）+ 企业与分类缺失。</CardDescription>
         </CardHeader>
         <CardContent className="grid" style={{ gap: 10 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -858,15 +1201,20 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
               {qualityLoading ? '质检中...' : '立即质检'}
             </Button>
             <Badge variant="muted">IVD总量: {qualityReport?.counters?.total_ivd ?? 0}</Badge>
-            <Badge variant={(qualityReport?.counters?.name_punct_only || 0) > 0 ? 'warning' : 'success'}>
-              纯符号名称: {qualityReport?.counters?.name_punct_only ?? 0}
+            <Badge variant={(qualityReport?.counters?.anchor_both_missing || 0) > 0 ? 'warning' : 'success'}>
+              锚点双缺失: {qualityReport?.counters?.anchor_both_missing ?? 0}
             </Badge>
-            <Badge variant={(qualityReport?.counters?.name_placeholder || 0) > 0 ? 'warning' : 'success'}>
-              占位名称: {qualityReport?.counters?.name_placeholder ?? 0}
+            <Badge variant={(qualityReport?.counters?.registration_id_missing || 0) > 0 ? 'warning' : 'success'}>
+              registration_id缺失: {qualityReport?.counters?.registration_id_missing ?? 0}
             </Badge>
-            <Badge variant={(qualityReport?.counters?.reg_no_placeholder || 0) > 0 ? 'warning' : 'success'}>
-              占位注册证号: {qualityReport?.counters?.reg_no_placeholder ?? 0}
+            <Badge variant={(qualityReport?.counters?.reg_no_missing_or_placeholder || 0) > 0 ? 'warning' : 'success'}>
+              reg_no缺失/占位: {qualityReport?.counters?.reg_no_missing_or_placeholder ?? 0}
             </Badge>
+            <Badge variant={(qualityReport?.counters?.company_missing || 0) > 0 ? 'warning' : 'success'}>
+              企业缺失: {qualityReport?.counters?.company_missing ?? 0}
+            </Badge>
+            <Badge variant="muted">主源: {mainSource?.name || '-'}</Badge>
+            <Badge variant="muted">增强源: {selectedSupplementSource?.name || '-'}</Badge>
           </div>
 
           {!qualityReport ? (
@@ -882,20 +1230,24 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
                 <div style={{ marginTop: 8 }}>
                   分类缺失: {qualityReport.counters?.class_missing ?? 0}，企业缺失: {qualityReport.counters?.company_missing ?? 0}
                 </div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  锚点建议优先修复: `anchor_both_missing` → `registration_id_missing` → `company_missing`
+                </div>
               </div>
-              {(qualityReport.samples?.name_punct_only || []).length > 0 ? (
+              {(qualityReport.samples?.anchor_both_missing || []).length > 0 ? (
                 <div className="card">
-                  <div className="muted">异常样例（纯符号名称）</div>
+                  <div className="muted">异常样例（注册锚点双缺失）</div>
                   <div className="list" style={{ marginTop: 8 }}>
-                    {(qualityReport.samples?.name_punct_only || []).slice(0, 5).map((it) => (
+                    {(qualityReport.samples?.anchor_both_missing || []).slice(0, 5).map((it) => (
                       <div key={it.id} className="muted" style={{ wordBreak: 'break-all' }}>
-                        {it.name} | UDI-DI: {it.udi_di || '-'} | 注册证号: {it.reg_no || '-'}
+                        {it.name} | UDI-DI: {it.udi_di || '-'} | reg_no: {it.reg_no || '-'} | registration_id:{' '}
+                        {it.registration_id || '-'}
                       </div>
                     ))}
                   </div>
                 </div>
               ) : (
-                <EmptyState text="当前未发现“纯符号名称”异常样例。" />
+                <EmptyState text="当前未发现“注册锚点双缺失”异常样例。" />
               )}
             </>
           )}
@@ -905,14 +1257,39 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
       <Card>
         <CardHeader>
           <CardTitle>数据源管理</CardTitle>
-          <CardDescription>可创建多个数据源；同一时间只能有一个启用数据源。名称需唯一。密码仅加密存储，不会在界面回显。</CardDescription>
+          <CardDescription>统一管理主源、增强源、项目源。新增来源可直接配置启用。</CardDescription>
         </CardHeader>
         <CardContent className="grid">
           <div className="controls">
             <Input
+              value={form.source_key}
+              onChange={(e) => setForm((p) => ({ ...p, source_key: e.target.value.toUpperCase() }))}
+              placeholder="来源编码（如 NMPA_REG / UDI_DI）"
+              disabled={editingId != null}
+            />
+            <Input
+              value={form.display_name}
+              onChange={(e) => setForm((p) => ({ ...p, display_name: e.target.value }))}
+              placeholder="展示名称（创建新 source 时必填）"
+            />
+            <Input
+              value={form.parser_key}
+              onChange={(e) => setForm((p) => ({ ...p, parser_key: e.target.value }))}
+              placeholder="解析器标识（创建新来源必填）"
+            />
+            <Select
+              value={form.entity_scope}
+              onChange={(e) => setForm((p) => ({ ...p, entity_scope: e.target.value }))}
+            >
+              <option value="REGISTRATION">REGISTRATION</option>
+              <option value="UDI">UDI</option>
+              <option value="PROCUREMENT">PROCUREMENT</option>
+              <option value="NHSA">NHSA</option>
+            </Select>
+            <Input
               value={form.name}
               onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              placeholder="名称（唯一）"
+              placeholder="连接名称（兼容旧链路）"
             />
             <Select
               value={form.type}
@@ -920,6 +1297,13 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
             >
               <option value="postgres">PostgreSQL</option>
               <option value="local_registry">本地注册库目录</option>
+            </Select>
+            <Select
+              value={form.enabled ? 'yes' : 'no'}
+              onChange={(e) => setForm((p) => ({ ...p, enabled: e.target.value === 'yes' }))}
+            >
+              <option value="yes">启用</option>
+              <option value="no">停用</option>
             </Select>
             {form.type === 'local_registry' ? (
               <>
@@ -992,13 +1376,13 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button onClick={save} disabled={loading}>
-              {editingId ? `保存编辑 #${editingId}` : '新增数据源'}
+              {editingId ? `保存编辑 ${editingId}` : '新增来源配置'}
             </Button>
             <Button variant="secondary" onClick={startCreate} disabled={loading}>
               清空表单
             </Button>
             {editingId ? (
-              <Badge variant="muted">正在编辑：{editing?.name || `#${editingId}`}</Badge>
+              <Badge variant="muted">正在编辑：{editing?.name || editingId}</Badge>
             ) : (
               <Badge variant="muted">创建新数据源</Badge>
             )}
@@ -1011,9 +1395,14 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
       <Card>
         <CardHeader>
           <CardTitle>数据源列表</CardTitle>
-          <CardDescription>同一时间只能有一个启用数据源。</CardDescription>
+          <CardDescription>展示 Source Registry 配置状态；主源是否 Active 见“主源Active”标记。</CardDescription>
         </CardHeader>
         <CardContent>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+            <Badge variant="success">主源 {grouped.main.length}</Badge>
+            <Badge variant="muted">增强源 {grouped.enhance.length}</Badge>
+            <Badge variant="warning">项目源 {grouped.project.length}</Badge>
+          </div>
           {loading && items.length === 0 ? (
             <div className="grid">
               <Skeleton height={28} />
@@ -1026,6 +1415,7 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
               <Table>
                 <thead>
                   <tr>
+                    <th>分组</th>
                     <th>名称</th>
                     <th>类型</th>
                     <th>连接</th>
@@ -1035,10 +1425,17 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
                 </thead>
                 <tbody>
                   {items.map((ds) => (
-                    <tr key={ds.id}>
+                    <tr key={ds.source_key}>
+                      <td>
+                        {(ds.compat?.mode || '').toLowerCase() === 'primary' || ds.source_key === 'NMPA_REG'
+                          ? '主源'
+                          : (ds.entity_scope || '').toUpperCase() === 'PROCUREMENT' || ds.source_key.startsWith('PROCUREMENT_')
+                            ? '项目源'
+                            : '增强源'}
+                      </td>
                       <td>
                         <strong>{ds.name}</strong>
-                        <div className="muted" style={{ fontSize: 12 }}>#{ds.id}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{ds.source_key}</div>
                       </td>
                       <td>{labelFrom(SOURCE_TYPE_ZH, ds.type)}</td>
                       <td>
@@ -1074,31 +1471,37 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
                         )}
                       </td>
                       <td>
-                        {ds.is_active ? <Badge variant="success">已启用</Badge> : <Badge variant="muted">未启用</Badge>}
+                        {ds.enabled ? <Badge variant="success">已启用</Badge> : <Badge variant="muted">未启用</Badge>}
+                        {ds.is_active ? <Badge variant="muted">主源Active</Badge> : null}
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <Button size="sm" variant="secondary" onClick={() => startEdit(ds)} disabled={loading}>
                             编辑
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => testConnection(ds.id)} disabled={loading}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => testConnection(ds)}
+                            disabled={loading || !ds.compat?.legacy_data_source_id}
+                          >
                             {ds.type === 'local_registry' ? '校验目录' : '测试连接'}
                           </Button>
                           <Button
                             size="sm"
-                            variant={ds.is_active ? 'secondary' : 'default'}
-                            onClick={() => activate(ds.id)}
-                            disabled={loading || ds.is_active}
+                            variant={ds.enabled ? 'secondary' : 'default'}
+                            onClick={() => activate(ds.source_key)}
+                            disabled={loading || ds.enabled}
                           >
                             设为启用
                           </Button>
                           <Button
                             size="sm"
-                            variant="destructive"
-                            onClick={() => remove(ds.id)}
-                            disabled={loading || ds.is_active}
+                            variant="secondary"
+                            onClick={() => remove(ds.source_key)}
+                            disabled={loading || !ds.enabled}
                           >
-                            删除
+                            停用
                           </Button>
                         </div>
                       </td>
