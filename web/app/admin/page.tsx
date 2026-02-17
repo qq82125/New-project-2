@@ -75,6 +75,9 @@ export default async function AdminHomePage() {
           <Link className="ui-btn" href="/admin/udi-links">
             UDI待映射
           </Link>
+          <Link className="ui-btn" href="/admin/pending">
+            Pending队列
+          </Link>
           <Link className="ui-btn" href="/admin/conflicts">
             冲突队列
           </Link>

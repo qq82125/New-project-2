@@ -83,6 +83,16 @@ class IngestRunnerStats:
         }
 
 
+@dataclass(frozen=True)
+class StructuredUpsertResult:
+    registration_id: Any
+    registration_no: str
+    registration_created: bool
+    registration_changed_fields: dict[str, Any]
+    variant_upserted: bool
+    di: str | None
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -400,6 +410,113 @@ def _upsert_variant_from_row_with_bindings(
     return True
 
 
+def _resolve_source_policy(
+    db: Session,
+    *,
+    source_key: str,
+    default_evidence_grade: str | None = None,
+    default_source_priority: int | None = None,
+) -> tuple[str, int]:
+    defn = db.get(SourceDefinition, str(source_key or "").strip().upper())
+    cfg = db.scalar(select(SourceConfig).where(SourceConfig.source_key == str(source_key or "").strip().upper()))
+    evidence_grade = (
+        str(default_evidence_grade or "").strip().upper()
+        or (str(getattr(defn, "default_evidence_grade", "C")).strip().upper() if defn is not None else "C")
+        or "C"
+    )
+    if default_source_priority is not None:
+        source_priority = int(default_source_priority)
+    else:
+        source_priority = (
+            int((cfg.upsert_policy or {}).get("priority", 100))
+            if (cfg is not None and isinstance(cfg.upsert_policy, dict))
+            else 100
+        )
+    return evidence_grade, int(source_priority)
+
+
+def upsert_structured_record_via_runner(
+    db: Session,
+    *,
+    source_key: str,
+    source_run_id: int | None,
+    row: dict[str, Any],
+    parser_key: str | None = None,
+    raw_document_id: Any | None = None,
+    observed_at: datetime | None = None,
+    default_evidence_grade: str | None = None,
+    default_source_priority: int | None = None,
+) -> StructuredUpsertResult:
+    gate = enforce_registration_anchor(row, str(source_key))
+    reg_no = gate.normalized_registration_no
+    if not gate.ok or not reg_no:
+        raise ValueError(gate.error_code or IngestErrorCode.E_PARSE_FAILED.value)
+
+    resolved_parser_key = str(parser_key or "").strip()
+    if not resolved_parser_key:
+        defn = db.get(SourceDefinition, str(source_key or "").strip().upper())
+        resolved_parser_key = str(getattr(defn, "parser_key", "") or "").strip()
+
+    evidence_grade, source_priority = _resolve_source_policy(
+        db,
+        source_key=str(source_key),
+        default_evidence_grade=default_evidence_grade,
+        default_source_priority=default_source_priority,
+    )
+    event_time = observed_at if observed_at is not None else _utcnow()
+
+    incoming_fields = {
+        "filing_no": _pick_text(row, "filing_no"),
+        "approval_date": _as_date(_pick_text(row, "approval_date", "approved_date")),
+        "expiry_date": _as_date(_pick_text(row, "expiry_date")),
+        "status": _pick_text(row, "status"),
+    }
+    payload_for_contract = _json_payload(row)
+    if raw_document_id is not None:
+        payload_for_contract["_raw_document_id"] = str(raw_document_id)
+    result = upsert_registration_with_contract(
+        db,
+        registration_no=reg_no,
+        incoming_fields=incoming_fields,
+        source=str(source_key),
+        source_run_id=(int(source_run_id) if source_run_id is not None else None),
+        evidence_grade=evidence_grade,
+        source_priority=int(source_priority),
+        observed_at=event_time,
+        raw_source_record_id=None,
+        raw_payload=payload_for_contract,
+        write_change_log=True,
+    )
+
+    di = _pick_text(row, "udi_di", "di")
+    variant_upserted = False
+    if resolved_parser_key == "udi_di_parser":
+        product_id = None
+        if di:
+            product_id = _ensure_product_snapshot_for_registration(
+                db,
+                registration_id=result.registration_id,
+                registration_no=reg_no,
+                di=di,
+                row=row,
+            )
+        variant_upserted = _upsert_variant_from_row_with_bindings(
+            db,
+            row=row,
+            registry_no=reg_no,
+            product_id=product_id,
+        )
+
+    return StructuredUpsertResult(
+        registration_id=result.registration_id,
+        registration_no=result.registration_no,
+        registration_created=bool(result.created),
+        registration_changed_fields=dict(result.changed_fields or {}),
+        variant_upserted=bool(variant_upserted),
+        di=di,
+    )
+
+
 def _run_one_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig, execute: bool) -> IngestRunnerStats:
     dry_run = not bool(execute)
     parser_key = str(defn.parser_key or "").strip()
@@ -458,9 +575,6 @@ def _run_one_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig, e
         rows = _fetch_rows_from_runtime(cfg)
         stats.fetched_count = len(rows)
         seen_hashes: set[str] = set()
-        source_priority = int((cfg.upsert_policy or {}).get("priority", 100)) if isinstance(cfg.upsert_policy, dict) else 100
-        evidence_grade = str(defn.default_evidence_grade or "C").strip().upper() or "C"
-
         for row in rows:
             row_hash = _payload_hash(row)
             if row_hash in seen_hashes:
@@ -535,46 +649,27 @@ def _run_one_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig, e
                 payload_hash=row_hash,
             )
 
-            incoming_fields = {
-                "filing_no": _pick_text(row, "filing_no"),
-                "approval_date": _as_date(_pick_text(row, "approval_date", "approved_date")),
-                "expiry_date": _as_date(_pick_text(row, "expiry_date")),
-                "status": _pick_text(row, "status"),
-            }
-            result = upsert_registration_with_contract(
+            result = upsert_structured_record_via_runner(
                 db,
-                registration_no=reg_no,
-                incoming_fields=incoming_fields,
-                source=str(defn.source_key),
+                source_key=str(defn.source_key),
                 source_run_id=int(run.id),
-                evidence_grade=evidence_grade,
-                source_priority=source_priority,
+                row=row,
+                parser_key=parser_key,
+                raw_document_id=raw_document_id,
                 observed_at=_utcnow(),
-                raw_source_record_id=None,
-                raw_payload=row,
-                write_change_log=True,
+                default_evidence_grade=str(defn.default_evidence_grade or "C").strip().upper() or "C",
+                default_source_priority=(
+                    int((cfg.upsert_policy or {}).get("priority", 100))
+                    if isinstance(cfg.upsert_policy, dict)
+                    else 100
+                ),
             )
-            if result.created or bool(result.changed_fields):
+            if result.registration_created or bool(result.registration_changed_fields):
                 stats.registration_upserted_count += 1
                 stats.registrations_upserted_count += 1
 
-            if parser_key == "udi_di_parser":
-                product_id = None
-                if di:
-                    product_id = _ensure_product_snapshot_for_registration(
-                        db,
-                        registration_id=result.registration_id,
-                        registration_no=reg_no,
-                        di=di,
-                        row=row,
-                    )
-                if _upsert_variant_from_row_with_bindings(
-                    db,
-                    row=row,
-                    registry_no=reg_no,
-                    product_id=product_id,
-                ):
-                    stats.variants_upserted_count += 1
+            if result.variant_upserted:
+                stats.variants_upserted_count += 1
 
         if not dry_run:
             stats.conflicts_count = int(

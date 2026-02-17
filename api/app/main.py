@@ -37,6 +37,7 @@ from app.models import (
     RawDocument,
     RawSourceRecord,
     Registration,
+    RegistrationConflictAudit,
     RegistrationEvent,
     RegistrationMethodology,
     SourceRun,
@@ -164,7 +165,9 @@ from app.services.data_quality import run_data_quality_audit
 from app.services.company_resolution import backfill_products_for_alias, normalize_company_name
 from app.services.methodology_v1 import map_methodologies_v1
 from app.services.normalize_keys import normalize_registration_no
-from app.services.source_contract import registration_contract_summary, upsert_registration_with_contract
+from app.services.source_contract import apply_field_policy, registration_contract_summary, upsert_registration_with_contract
+from app.services.ingest_runner import upsert_structured_record_via_runner
+from app.common.errors import IngestErrorCode
 from app.pipeline.ingest import save_raw_document
 from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
 from app.services.supplement_sync import (
@@ -1695,16 +1698,67 @@ def admin_source_contract_conflicts(
 def admin_list_conflicts_queue(
     status: str = Query(default='open'),
     limit: int = Query(default=100, ge=1, le=500),
+    group_by: str | None = Query(default=None),
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
     status_norm = str(status or 'open').strip().lower()
+    group_by_norm = str(group_by or '').strip().lower()
+    if group_by_norm and group_by_norm not in {'registration_no'}:
+        raise HTTPException(status_code=400, detail='group_by must be registration_no')
     q = select(ConflictQueue).order_by(desc(ConflictQueue.created_at)).limit(int(limit))
     if status_norm != 'all':
         if status_norm not in {'open', 'resolved'}:
             raise HTTPException(status_code=400, detail='status must be open/resolved/all')
         q = q.where(ConflictQueue.status == status_norm)
     rows = db.scalars(q).all()
+    if group_by_norm == 'registration_no':
+        grouped: dict[str, dict] = {}
+        for r in rows:
+            key = str(r.registration_no or '').strip()
+            if not key:
+                continue
+            bucket = grouped.get(key)
+            if bucket is None:
+                bucket = {
+                    'registration_no': key,
+                    'conflict_count': 0,
+                    'fields_set': set(),
+                    'top_sources_set': set(),
+                    'latest_created_at': r.created_at,
+                }
+                grouped[key] = bucket
+            bucket['conflict_count'] += 1
+            if r.field_name:
+                bucket['fields_set'].add(str(r.field_name))
+            if r.created_at and (bucket['latest_created_at'] is None or r.created_at > bucket['latest_created_at']):
+                bucket['latest_created_at'] = r.created_at
+            candidates = r.candidates if isinstance(r.candidates, list) else []
+            for c in candidates:
+                if isinstance(c, dict):
+                    src = str(c.get('source_key') or '').strip()
+                    if src:
+                        bucket['top_sources_set'].add(src)
+        items = []
+        for _, g in sorted(grouped.items(), key=lambda kv: kv[1]['latest_created_at'] or datetime.min, reverse=True):
+            items.append(
+                {
+                    'registration_no': g['registration_no'],
+                    'conflict_count': int(g['conflict_count']),
+                    'fields': sorted(list(g['fields_set'])),
+                    'latest_created_at': g['latest_created_at'],
+                    'top_sources': sorted(list(g['top_sources_set'])),
+                }
+            )
+        return _ok(
+            {
+                'items': items[: int(limit)],
+                'count': min(len(items), int(limit)),
+                'status': status_norm,
+                'group_by': 'registration_no',
+            }
+        )
+
     return _ok(
         {
             'items': [
@@ -1735,11 +1789,96 @@ def admin_list_conflicts_queue(
 def admin_list_conflicts(
     status: str = Query(default='open'),
     limit: int = Query(default=100, ge=1, le=500),
+    group_by: str | None = Query(default=None),
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
     # Backward-compatible alias of /api/admin/conflicts-queue.
-    return admin_list_conflicts_queue(status=status, limit=limit, _admin=_admin, db=db)
+    return admin_list_conflicts_queue(status=status, limit=limit, group_by=group_by, _admin=_admin, db=db)
+
+
+@app.get('/api/admin/conflicts/report')
+def admin_conflicts_report(
+    window: str = Query(default='7d'),
+    top_n: int = Query(default=10, ge=1, le=100),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    window_norm = str(window or '7d').strip().lower()
+    window_days_map = {'1d': 1, '7d': 7, '30d': 30}
+    if window_norm not in window_days_map:
+        raise HTTPException(status_code=400, detail='window must be one of: 1d/7d/30d')
+    days = int(window_days_map[window_norm])
+
+    top_fields_rows = db.execute(
+        text(
+            """
+            SELECT field_name, COUNT(*) AS conflict_count
+            FROM conflicts_queue
+            WHERE created_at >= NOW() - (:days || ' days')::interval
+            GROUP BY field_name
+            ORDER BY conflict_count DESC, field_name ASC
+            LIMIT :top_n
+            """
+        ),
+        {'days': days, 'top_n': int(top_n)},
+    ).mappings().all()
+
+    top_sources_rows = db.execute(
+        text(
+            """
+            WITH filtered AS (
+                SELECT candidates
+                FROM conflicts_queue
+                WHERE created_at >= NOW() - (:days || ' days')::interval
+            )
+            SELECT
+                COALESCE(NULLIF(elem->>'source_key', ''), 'UNKNOWN') AS source_key,
+                COUNT(*) AS conflict_count
+            FROM filtered
+            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(filtered.candidates, '[]'::jsonb)) AS elem
+            GROUP BY source_key
+            ORDER BY conflict_count DESC, source_key ASC
+            LIMIT :top_n
+            """
+        ),
+        {'days': days, 'top_n': int(top_n)},
+    ).mappings().all()
+
+    trend_rows = db.execute(
+        text(
+            """
+            SELECT DATE(created_at) AS metric_date, COUNT(*) AS conflict_count
+            FROM conflicts_queue
+            WHERE created_at >= NOW() - (:days || ' days')::interval
+            GROUP BY DATE(created_at)
+            ORDER BY metric_date ASC
+            """
+        ),
+        {'days': days},
+    ).mappings().all()
+
+    return _ok(
+        {
+            'window': window_norm,
+            'top_n': int(top_n),
+            'top_fields': [
+                {'field_name': str(r.get('field_name') or ''), 'conflict_count': int(r.get('conflict_count') or 0)}
+                for r in top_fields_rows
+            ],
+            'top_sources': [
+                {'source_key': str(r.get('source_key') or ''), 'conflict_count': int(r.get('conflict_count') or 0)}
+                for r in top_sources_rows
+            ],
+            'trend': [
+                {
+                    'date': (r.get('metric_date').isoformat() if r.get('metric_date') is not None else None),
+                    'conflict_count': int(r.get('conflict_count') or 0),
+                }
+                for r in trend_rows
+            ],
+        }
+    )
 
 
 @app.post('/api/admin/conflicts-queue/{conflict_id}/resolve')
@@ -1762,6 +1901,15 @@ def admin_resolve_conflict_queue(
     winner_value = str(payload.get('winner_value') or '').strip()
     if not winner_value:
         raise HTTPException(status_code=400, detail='winner_value is required')
+    resolve_reason = str(payload.get('reason') or '').strip()
+    if not resolve_reason:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_REASON_REQUIRED.value,
+                'message': 'reason is required',
+            },
+        )
     winner_source_key = str(payload.get('winner_source_key') or 'MANUAL').strip().upper() or 'MANUAL'
 
     reg_no = normalize_registration_no(str(row.registration_no or ''))
@@ -1777,31 +1925,91 @@ def admin_resolve_conflict_queue(
         'status': (str(reg.status) if reg.status is not None else None),
     }
 
-    old_val = before.get(field_name)
-    if field_name in {'approval_date', 'expiry_date'}:
-        try:
-            parsed = dt_date.fromisoformat(winner_value[:10])
-        except Exception:
-            raise HTTPException(status_code=400, detail='winner_value must be ISO date for approval_date/expiry_date')
-        setattr(reg, field_name, parsed)
-        winner_store = parsed.isoformat()
-    else:
-        setattr(reg, field_name, winner_value)
-        winner_store = winner_value
-
     raw_json = reg.raw_json if isinstance(reg.raw_json, dict) else {}
     prov = raw_json.get('_contract_provenance') if isinstance(raw_json.get('_contract_provenance'), dict) else {}
+    existing_meta = (prov.get(field_name) if isinstance(prov.get(field_name), dict) else None)
+    old_val = before.get(field_name)
+    now0 = datetime.now()
+    decision = apply_field_policy(
+        db,
+        field_name=field_name,
+        old_value=old_val,
+        new_value=winner_value,
+        source_key='admin',
+        observed_at=now0,
+        existing_meta=existing_meta,
+        source_run_id=row.source_run_id,
+        raw_source_record_id=None,
+        policy_evidence_grade='A',
+        policy_source_priority=-1,
+    )
+    if decision.action in {'keep', 'conflict'}:
+        db.add(
+            RegistrationConflictAudit(
+                registration_id=reg.id,
+                registration_no=reg.registration_no,
+                field_name=field_name,
+                old_value=old_val,
+                incoming_value=winner_value,
+                final_value=old_val,
+                resolution='REJECTED',
+                reason=f"manual_resolve:{resolve_reason};policy={decision.reason}",
+                existing_meta=(existing_meta if isinstance(existing_meta, dict) else None),
+                incoming_meta=(decision.incoming_meta if isinstance(decision.incoming_meta, dict) else None),
+                source_run_id=row.source_run_id,
+                observed_at=now0,
+            )
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'code': IngestErrorCode.E_CONFLICT_UNRESOLVED.value,
+                'message': f'field policy rejected manual resolve: {decision.reason}',
+            },
+        )
+
+    winner_store = old_val if decision.action == 'noop' else str(decision.value_to_store or winner_value)
+    if field_name in {'approval_date', 'expiry_date'}:
+        if decision.action == 'apply':
+            try:
+                parsed = dt_date.fromisoformat(winner_store[:10])
+            except Exception:
+                raise HTTPException(status_code=400, detail='winner_value must be ISO date for approval_date/expiry_date')
+            setattr(reg, field_name, parsed)
+            winner_store = parsed.isoformat()
+    elif decision.action == 'apply':
+        setattr(reg, field_name, winner_store)
+
     prov[field_name] = {
         'source': winner_source_key,
+        'source_key': 'admin',
         'source_run_id': row.source_run_id,
         'evidence_grade': 'A',
-        'source_priority': 0,
-        'observed_at': datetime.now().isoformat(),
+        'source_priority': -1,
+        'observed_at': now0.isoformat(),
         'raw_source_record_id': None,
+        'reason': resolve_reason,
+        'conflict_id': str(row.id),
     }
     raw_json['_contract_provenance'] = prov
     reg.raw_json = raw_json
     db.add(reg)
+    db.add(
+        RegistrationConflictAudit(
+            registration_id=reg.id,
+            registration_no=reg.registration_no,
+            field_name=field_name,
+            old_value=old_val,
+            incoming_value=winner_value,
+            final_value=winner_store,
+            resolution='APPLIED',
+            reason=f"manual_resolve:{resolve_reason};policy={decision.reason}",
+            existing_meta=(existing_meta if isinstance(existing_meta, dict) else None),
+            incoming_meta=(decision.incoming_meta if isinstance(decision.incoming_meta, dict) else None),
+            source_run_id=row.source_run_id,
+            observed_at=now0,
+        )
+    )
 
     after = {
         'registration_no': reg.registration_no,
@@ -1823,14 +2031,15 @@ def admin_resolve_conflict_queue(
             after_raw={
                 '_contract_meta': {
                     'source': winner_source_key,
-                    'source_key': winner_source_key,
+                    'source_key': 'admin',
                     'source_run_id': row.source_run_id,
                     'evidence_grade': 'A',
-                    'source_priority': 0,
-                    'observed_at': datetime.now().isoformat(),
+                    'source_priority': -1,
+                    'observed_at': now0.isoformat(),
                     'raw_source_record_id': None,
                     'resolution': 'manual_conflict_queue',
                     'conflict_queue_id': str(row.id),
+                    'reason': resolve_reason,
                 }
             },
             source_run_id=row.source_run_id,
@@ -1853,6 +2062,7 @@ def admin_resolve_conflict_queue(
             'winner_value': winner_store,
             'winner_source_key': winner_source_key,
             'status': row.status,
+            'reason': resolve_reason,
             'resolved_by': row.resolved_by,
             'resolved_at': row.resolved_at,
         }
@@ -2012,17 +2222,45 @@ def admin_upsert_company_alias(
 @app.get('/api/admin/pending')
 def admin_list_pending_records(
     status: str = Query(default='open'),
+    source_key: str | None = Query(default=None),
+    reason_code: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    order_by: str = Query(default='created_at desc'),
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
     status_norm = str(status or 'open').strip().lower()
-    q = select(PendingRecord).order_by(desc(PendingRecord.created_at)).limit(int(limit))
+    source_key_norm = str(source_key or '').strip()
+    reason_code_norm = str(reason_code or '').strip()
+    order_by_norm = ' '.join(str(order_by or '').strip().lower().split())
+    if not order_by_norm:
+        order_by_norm = 'created_at desc'
+    if order_by_norm not in {'created_at desc', 'created_at asc'}:
+        raise HTTPException(status_code=400, detail='order_by must be one of: created_at desc / created_at asc')
+
+    filters = []
     if status_norm != 'all':
         if status_norm not in {'open', 'resolved', 'ignored', 'pending'}:
             raise HTTPException(status_code=400, detail='status must be open/resolved/ignored/pending/all')
-        q = q.where(PendingRecord.status == status_norm)
+        filters.append(PendingRecord.status == status_norm)
+    if source_key_norm:
+        filters.append(PendingRecord.source_key == source_key_norm)
+    if reason_code_norm:
+        filters.append(PendingRecord.reason_code == reason_code_norm)
+
+    q = select(PendingRecord)
+    q_total = select(func.count(PendingRecord.id))
+    if filters:
+        q = q.where(*filters)
+        q_total = q_total.where(*filters)
+
+    q = q.order_by(
+        desc(PendingRecord.created_at) if order_by_norm == 'created_at desc' else PendingRecord.created_at.asc()
+    ).offset(int(offset)).limit(int(limit))
+
     rows = db.scalars(q).all()
+    total = int(db.scalar(q_total) or 0)
     return _ok(
         {
             'items': [
@@ -2041,8 +2279,101 @@ def admin_list_pending_records(
                 }
                 for r in rows
             ],
+            'total': total,
+            'limit': int(limit),
+            'offset': int(offset),
+            'order_by': order_by_norm,
             'count': len(rows),
             'status': status_norm,
+        }
+    )
+
+
+@app.get('/api/admin/pending/stats')
+def admin_pending_stats(
+    resolved_24h_hours: int = Query(default=24, ge=1, le=24 * 30),
+    resolved_7d_days: int = Query(default=7, ge=1, le=365),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    # by_source_key: open/resolved/ignored counters (grouped by source_key)
+    source_rows = db.execute(
+        text(
+            """
+            SELECT
+              source_key,
+              COUNT(*) FILTER (WHERE status = 'open') AS open_count,
+              COUNT(*) FILTER (WHERE status = 'resolved') AS resolved_count,
+              COUNT(*) FILTER (WHERE status = 'ignored') AS ignored_count
+            FROM pending_records
+            WHERE status IN ('open', 'resolved', 'ignored')
+            GROUP BY source_key
+            ORDER BY source_key ASC
+            """
+        )
+    ).mappings().all()
+
+    # by_reason_code: open counters to locate parser/anchor defects
+    reason_rows = db.execute(
+        text(
+            """
+            SELECT
+              reason_code,
+              COUNT(*) AS open_count
+            FROM pending_records
+            WHERE status = 'open'
+            GROUP BY reason_code
+            ORDER BY open_count DESC, reason_code ASC
+            """
+        )
+    ).mappings().all()
+
+    backlog_row = db.execute(
+        text(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'open') AS open_total,
+              COUNT(*) FILTER (
+                WHERE status = 'resolved'
+                  AND created_at >= NOW() - (:h || ' hours')::interval
+              ) AS resolved_last_24h,
+              COUNT(*) FILTER (
+                WHERE status = 'resolved'
+                  AND created_at >= NOW() - (:d || ' days')::interval
+              ) AS resolved_last_7d
+            FROM pending_records
+            """
+        ),
+        {"h": int(resolved_24h_hours), "d": int(resolved_7d_days)},
+    ).mappings().one()
+
+    return _ok(
+        {
+            "by_source_key": [
+                {
+                    "source_key": str(r.get("source_key") or ""),
+                    "open": int(r.get("open_count") or 0),
+                    "resolved": int(r.get("resolved_count") or 0),
+                    "ignored": int(r.get("ignored_count") or 0),
+                }
+                for r in source_rows
+            ],
+            "by_reason_code": [
+                {
+                    "reason_code": str(r.get("reason_code") or ""),
+                    "open": int(r.get("open_count") or 0),
+                }
+                for r in reason_rows
+            ],
+            "backlog": {
+                "open_total": int(backlog_row.get("open_total") or 0),
+                "resolved_last_24h": int(backlog_row.get("resolved_last_24h") or 0),
+                "resolved_last_7d": int(backlog_row.get("resolved_last_7d") or 0),
+                "windows": {
+                    "resolved_24h_hours": int(resolved_24h_hours),
+                    "resolved_7d_days": int(resolved_7d_days),
+                },
+            },
         }
     )
 
@@ -2060,23 +2391,24 @@ def admin_resolve_pending_record(
     if str(rec.status or '').lower() == 'resolved':
         raise HTTPException(status_code=409, detail='pending record already resolved')
 
-    reg_no = normalize_registration_no(str(payload.get('registration_no') or '').strip())
+    reg_no_raw = str(payload.get('registration_no') or '').strip()
+    if not reg_no_raw:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_NO_REG_NO.value,
+                'message': 'registration_no is required',
+            },
+        )
+    reg_no = normalize_registration_no(reg_no_raw)
     if not reg_no:
-        raise HTTPException(status_code=400, detail='registration_no is required')
-
-    upsert_registration_with_contract(
-        db,
-        registration_no=reg_no,
-        incoming_fields={},
-        source='ADMIN_PENDING_RESOLVE',
-        source_run_id=int(rec.source_run_id),
-        evidence_grade='A',
-        source_priority=1,
-        observed_at=datetime.now(),
-        raw_source_record_id=None,
-        raw_payload={'pending_record_id': str(rec.id), 'source_key': rec.source_key},
-        write_change_log=True,
-    )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'message': 'registration_no normalize failed',
+            },
+        )
 
     # Best-effort binding for UDI-like payloads: map DI to normalized registration_no when DI exists in reason.raw.
     try:
@@ -2084,39 +2416,85 @@ def admin_resolve_pending_record(
     except Exception:
         parsed_reason = {}
     raw_obj = parsed_reason.get('raw') if isinstance(parsed_reason, dict) else {}
-    di = None
-    if isinstance(raw_obj, dict):
-        di = str(raw_obj.get('di') or raw_obj.get('udi_di') or '').strip() or None
+    if not isinstance(raw_obj, dict):
+        raw_obj = {}
+    raw_obj = dict(raw_obj)
+    di = str(raw_obj.get('di') or raw_obj.get('udi_di') or '').strip() or None
+    raw_obj['registration_no'] = reg_no
+    if not raw_obj.get('product_name') and rec.candidate_product_name:
+        raw_obj['product_name'] = rec.candidate_product_name
+    if not raw_obj.get('company_name') and rec.candidate_company:
+        raw_obj['company_name'] = rec.candidate_company
+    if not raw_obj.get('source_url'):
+        raw_doc = db.get(RawDocument, rec.raw_document_id)
+        if raw_doc is not None:
+            raw_obj['source_url'] = raw_doc.source_url
+
+    upsert_res = upsert_structured_record_via_runner(
+        db,
+        source_key=str(rec.source_key or 'ADMIN_PENDING_RESOLVE'),
+        source_run_id=int(rec.source_run_id),
+        row=raw_obj,
+        parser_key=('udi_di_parser' if di else None),
+        raw_document_id=rec.raw_document_id,
+        observed_at=datetime.now(),
+    )
+    map_written = False
     if di:
-        stmt = insert(ProductVariant).values(
-            di=di,
-            registry_no=reg_no,
-            product_id=None,
-            product_name=(rec.candidate_product_name or (raw_obj.get('product_name') if isinstance(raw_obj, dict) else None)),
-            model_spec=(raw_obj.get('model_spec') if isinstance(raw_obj, dict) else None),
-            packaging=(raw_obj.get('packaging') if isinstance(raw_obj, dict) else None),
-            manufacturer=(rec.candidate_company or (raw_obj.get('company_name') if isinstance(raw_obj, dict) else None)),
-            is_ivd=True,
-            ivd_category=(raw_obj.get('ivd_category') if isinstance(raw_obj, dict) else None),
-            ivd_version='source_runner_v1',
+        db.execute(
+            text("DELETE FROM product_udi_map WHERE di = :di AND registration_no <> :registration_no"),
+            {'di': di, 'registration_no': upsert_res.registration_no},
         )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[ProductVariant.di],
+        map_stmt = insert(ProductUdiMap).values(
+            registration_no=upsert_res.registration_no,
+            di=di,
+            source='ADMIN_PENDING_RESOLVE',
+            match_type='manual',
+            confidence=0.95,
+            raw_source_record_id=None,
+        )
+        map_stmt = map_stmt.on_conflict_do_update(
+            index_elements=[ProductUdiMap.registration_no, ProductUdiMap.di],
             set_={
-                'registry_no': stmt.excluded.registry_no,
-                'product_name': stmt.excluded.product_name,
-                'manufacturer': stmt.excluded.manufacturer,
-                'is_ivd': stmt.excluded.is_ivd,
-                'ivd_version': stmt.excluded.ivd_version,
+                'source': map_stmt.excluded.source,
+                'match_type': map_stmt.excluded.match_type,
+                'confidence': map_stmt.excluded.confidence,
                 'updated_at': text('NOW()'),
             },
         )
-        db.execute(stmt)
+        db.execute(map_stmt)
+        map_written = True
 
+    before_status = str(rec.status or '')
+    before_candidate_no = rec.candidate_registry_no
     rec.candidate_registry_no = reg_no
     rec.status = 'resolved'
     rec.updated_at = datetime.now()
     db.add(rec)
+    db.add(
+        ChangeLog(
+            product_id=None,
+            entity_type='pending_record',
+            entity_id=rec.id,
+            change_type='resolve',
+            changed_fields={
+                'status': {'old': before_status, 'new': 'resolved'},
+                'candidate_registry_no': {'old': before_candidate_no, 'new': reg_no},
+            },
+            before_json={'status': before_status, 'candidate_registry_no': before_candidate_no},
+            after_json={'status': rec.status, 'candidate_registry_no': rec.candidate_registry_no},
+            before_raw={'raw_document_id': str(rec.raw_document_id)},
+            after_raw={
+                'raw_document_id': str(rec.raw_document_id),
+                'source_key': rec.source_key,
+                'resolved_by': str(getattr(admin, 'email', '') or ''),
+                'registration_no': reg_no,
+                'variant_upserted': bool(upsert_res.variant_upserted),
+                'udi_map_written': bool(map_written),
+            },
+            source_run_id=int(rec.source_run_id),
+        )
+    )
     db.commit()
 
     return _ok(
@@ -2125,6 +2503,8 @@ def admin_resolve_pending_record(
             'status': rec.status,
             'source_key': rec.source_key,
             'registration_no': reg_no,
+            'variant_upserted': bool(upsert_res.variant_upserted),
+            'udi_map_written': bool(map_written),
             'resolved_by': str(getattr(admin, 'email', '') or ''),
             'updated_at': rec.updated_at,
         }
@@ -2133,34 +2513,101 @@ def admin_resolve_pending_record(
 
 @app.get('/api/admin/udi/pending-links')
 def admin_list_pending_udi_links(
-    status: str = Query(default='PENDING'),
+    status: str = Query(default='pending'),
+    source_key: str | None = Query(default=None),
+    reason_code: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    order_by: str = Query(default='created_at desc'),
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    status_norm = str(status or 'PENDING').strip().upper()
-    q = select(PendingUdiLink).order_by(PendingUdiLink.created_at.desc()).limit(int(limit))
-    if status_norm and status_norm != 'ALL':
-        q = q.where(PendingUdiLink.status == status_norm)
-    rows = db.scalars(q).all()
+    status_norm = str(status or 'pending').strip().lower()
+    source_key_norm = str(source_key or '').strip()
+    reason_code_norm = str(reason_code or '').strip()
+    order_by_norm = ' '.join(str(order_by or '').strip().lower().split())
+    if not order_by_norm:
+        order_by_norm = 'created_at desc'
+    if order_by_norm not in {'created_at desc', 'created_at asc'}:
+        raise HTTPException(status_code=400, detail='order_by must be one of: created_at desc / created_at asc')
+
+    status_map = {
+        'pending': 'PENDING',
+        'open': 'PENDING',
+        'resolved': 'RESOLVED',
+        'ignored': 'IGNORED',
+    }
+    filters = []
+    if status_norm != 'all':
+        if status_norm not in status_map:
+            raise HTTPException(status_code=400, detail='status must be open/resolved/ignored/pending/all')
+        filters.append(PendingUdiLink.status == status_map[status_norm])
+    if reason_code_norm:
+        filters.append(PendingUdiLink.reason_code == reason_code_norm)
+    if source_key_norm:
+        filters.append(RawSourceRecord.source == source_key_norm)
+
+    join_cond = func.coalesce(PendingUdiLink.raw_source_record_id, PendingUdiLink.raw_id) == RawSourceRecord.id
+    q = (
+        select(PendingUdiLink, RawSourceRecord.source.label('source_key'))
+        .select_from(PendingUdiLink)
+        .outerjoin(RawSourceRecord, join_cond)
+    )
+    q_total = (
+        select(func.count(PendingUdiLink.id))
+        .select_from(PendingUdiLink)
+        .outerjoin(RawSourceRecord, join_cond)
+    )
+    if filters:
+        q = q.where(*filters)
+        q_total = q_total.where(*filters)
+    q = q.order_by(
+        desc(PendingUdiLink.created_at) if order_by_norm == 'created_at desc' else PendingUdiLink.created_at.asc()
+    ).offset(int(offset)).limit(int(limit))
+    rows = db.execute(q).all()
+    total = int(db.scalar(q_total) or 0)
 
     items: list[dict] = []
-    for p in rows:
+    for p, source_key_row in rows:
         raw_id = getattr(p, 'raw_source_record_id', None) or getattr(p, 'raw_id', None)
         raw_rec = db.get(RawSourceRecord, raw_id) if raw_id else None
+        candidate_registry_no = None
+        try:
+            reason_obj = json.loads(str(getattr(p, 'reason', '') or ''))
+        except Exception:
+            reason_obj = {}
+        if isinstance(reason_obj, dict):
+            candidate_registry_no = (
+                reason_obj.get('candidate_registry_no')
+                or reason_obj.get('registration_no')
+                or reason_obj.get('reg_no')
+                or reason_obj.get('registry_no')
+            )
+            raw_reason = reason_obj.get('raw')
+            if not candidate_registry_no and isinstance(raw_reason, dict):
+                candidate_registry_no = (
+                    raw_reason.get('candidate_registry_no')
+                    or raw_reason.get('registration_no')
+                    or raw_reason.get('reg_no')
+                    or raw_reason.get('registry_no')
+                )
+        source_key_text = str(source_key_row or getattr(raw_rec, 'source', '') or '')
         items.append(
             {
                 'id': str(p.id),
                 'di': str(getattr(p, 'di', '') or ''),
+                'source_key': source_key_text,
                 'status': str(getattr(p, 'status', '') or ''),
                 'reason': str(getattr(p, 'reason', '') or ''),
                 'reason_code': (str(getattr(p, 'reason_code', '') or '') or None),
+                'candidate_registry_no': (str(candidate_registry_no) if candidate_registry_no else None),
                 'raw_id': (str(getattr(p, 'raw_id', None)) if getattr(p, 'raw_id', None) else None),
                 'raw_source_record_id': (
                     str(getattr(p, 'raw_source_record_id', None))
                     if getattr(p, 'raw_source_record_id', None)
                     else None
                 ),
+                'raw_document_id': None,
                 'candidate_company_name': getattr(p, 'candidate_company_name', None),
                 'candidate_product_name': getattr(p, 'candidate_product_name', None),
                 'retry_count': int(getattr(p, 'retry_count', 0) or 0),
@@ -2172,7 +2619,17 @@ def admin_list_pending_udi_links(
                 'raw_payload': (raw_rec.payload if raw_rec is not None else None),
             }
         )
-    return _ok({'items': items, 'count': len(items), 'status': status_norm})
+    return _ok(
+        {
+            'items': items,
+            'total': total,
+            'limit': int(limit),
+            'offset': int(offset),
+            'order_by': order_by_norm,
+            'count': len(items),
+            'status': status_norm,
+        }
+    )
 
 
 @app.post('/api/admin/udi/pending-links/{pending_id}/bind')
@@ -2182,13 +2639,39 @@ def admin_bind_pending_udi_link(
     admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    # Backward-compatible alias; shares idempotent resolve logic.
+    return _admin_resolve_pending_udi_link(pending_id=pending_id, payload=payload, admin=admin, db=db)
+
+
+def _admin_resolve_pending_udi_link(
+    *,
+    pending_id: UUID,
+    payload: dict,
+    admin: User,
+    db: Session,
+) -> dict:
     pending = db.get(PendingUdiLink, pending_id)
     if pending is None:
         raise HTTPException(status_code=404, detail='pending_udi_link not found')
 
-    reg_no = normalize_registration_no(str(payload.get('registration_no') or '').strip())
+    reg_no_raw = str(payload.get('registration_no') or '').strip()
+    if not reg_no_raw:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_NO_REG_NO.value,
+                'message': 'registration_no is required',
+            },
+        )
+    reg_no = normalize_registration_no(reg_no_raw)
     if not reg_no:
-        raise HTTPException(status_code=400, detail='registration_no is required')
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'message': 'registration_no normalize failed',
+            },
+        )
 
     di = str(getattr(pending, 'di', '') or '').strip()
     if not di:
@@ -2223,7 +2706,7 @@ def admin_bind_pending_udi_link(
     stmt = insert(ProductUdiMap).values(
         registration_no=reg_res.registration_no,
         di=di,
-        source='ADMIN_UDI_BIND',
+        source='admin',
         match_type='manual',
         confidence=confidence,
         raw_source_record_id=raw_id,
@@ -2240,10 +2723,47 @@ def admin_bind_pending_udi_link(
     )
     db.execute(stmt)
 
+    before_status = str(getattr(pending, 'status', '') or '')
+    before_resolved_at = getattr(pending, 'resolved_at', None)
+    before_resolved_by = getattr(pending, 'resolved_by', None)
     pending.status = 'RESOLVED'
-    pending.resolved_at = datetime.now()
+    if before_resolved_at is None:
+        pending.resolved_at = datetime.now()
     pending.resolved_by = (str(getattr(admin, 'email', '') or '') or 'admin')
     db.add(pending)
+    db.add(
+        ChangeLog(
+            product_id=None,
+            entity_type='pending_udi_link',
+            entity_id=pending.id,
+            change_type='resolve',
+            changed_fields={
+                'status': {'old': before_status, 'new': pending.status},
+                'registration_no': {'old': None, 'new': reg_res.registration_no},
+                'di': {'old': di, 'new': di},
+            },
+            before_json={
+                'status': before_status,
+                'resolved_at': before_resolved_at.isoformat() if before_resolved_at else None,
+                'resolved_by': before_resolved_by,
+            },
+            after_json={
+                'status': pending.status,
+                'resolved_at': pending.resolved_at.isoformat() if pending.resolved_at else None,
+                'resolved_by': pending.resolved_by,
+                'registration_no': reg_res.registration_no,
+                'di': di,
+            },
+            before_raw={'pending_id': str(pending.id), 'raw_source_record_id': (str(raw_id) if raw_id else None)},
+            after_raw={
+                'pending_id': str(pending.id),
+                'raw_source_record_id': (str(raw_id) if raw_id else None),
+                'note': (str(payload.get('note') or '').strip() or None),
+                'reason': (str(payload.get('reason') or '').strip() or None),
+            },
+            source_run_id=None,
+        )
+    )
     db.commit()
 
     return _ok(
@@ -2254,8 +2774,19 @@ def admin_bind_pending_udi_link(
             'match_type': 'manual',
             'confidence': confidence,
             'status': pending.status,
+            'idempotent': bool(before_status.upper() == 'RESOLVED'),
         }
     )
+
+
+@app.post('/api/admin/udi/pending-links/{pending_id}/resolve')
+def admin_resolve_pending_udi_link(
+    pending_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    return _admin_resolve_pending_udi_link(pending_id=pending_id, payload=payload, admin=admin, db=db)
 
 
 @app.get('/api/admin/registrations/{registration_no}/methodologies')

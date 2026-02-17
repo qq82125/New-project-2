@@ -50,6 +50,21 @@ python -m app.cli metrics:recompute --scope ivd --since 2026-01-01
 - `raw_documents`：原始文档元数据（`storage_uri`, `sha256`, `run_id`, `source_url`）
 - `product_params`：参数与证据（`evidence_text`, `evidence_page`, `raw_document_id`）
 
+## pending_records Schema Guard（0031 口径）
+
+用于确保任意环境中的 `pending_records` 符合 `migrations/0031_add_pending_records.sql`：
+- `status` 默认值为 `open`
+- `chk_pending_records_status` 允许 `open/resolved/ignored/pending`
+- `uq_pending_records_run_payload` 唯一保护存在
+- 关键索引存在：`idx_pending_records_status`、`idx_pending_records_source_key`
+
+运行命令（本地）：
+```bash
+DATABASE_URL=postgresql+psycopg://nmpa:nmpa@127.0.0.1:5432/nmpa python scripts/verify_schema_pending_records.py
+```
+
+CI/发布前建议将此脚本作为必跑校验项；若不符合会返回非 0 并打印具体缺项。
+
 ## NMPA 快照与字段级 diff（shadow-write）
 
 新增表（用于订阅/日报/预警逐步接入，不改变现有前台口径）：

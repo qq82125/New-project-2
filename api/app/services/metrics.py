@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import ChangeLog, DailyMetric, Product, SourceRun, Subscription
+from app.models import ChangeLog, DailyMetric, DailyUdiMetric, PendingUdiLink, Product, ProductUdiMap, SourceRun, Subscription, UdiDiMaster
 
 
 def _count_change_type(db: Session, metric_date: date, change_type: str) -> int:
@@ -50,6 +50,27 @@ def _latest_source_run_id(db: Session, metric_date: date) -> int | None:
     return db.scalar(stmt)
 
 
+def _count_total_di(db: Session) -> int:
+    return int(db.scalar(select(func.count(UdiDiMaster.id))) or 0)
+
+
+def _count_mapped_di(db: Session) -> int:
+    # product_udi_map can contain multiple rows for same DI historically; dedupe on DI for coverage.
+    return int(db.scalar(select(func.count(func.distinct(ProductUdiMap.di)))) or 0)
+
+
+def _count_unmapped_di_pending(db: Session) -> int:
+    # Pending queue status is uppercase in pending_udi_links; keep open alias for compatibility.
+    return int(
+        db.scalar(
+            select(func.count(func.distinct(PendingUdiLink.di))).where(
+                PendingUdiLink.status.in_(('PENDING', 'OPEN', 'pending', 'open'))
+            )
+        )
+        or 0
+    )
+
+
 def generate_daily_metrics(db: Session, metric_date: date | None = None) -> DailyMetric:
     target_date = metric_date or date.today()
 
@@ -59,6 +80,10 @@ def generate_daily_metrics(db: Session, metric_date: date | None = None) -> Dail
     expiring_in_90d = _count_expiring_in_90d(db, target_date)
     active_subscriptions = _count_active_subscriptions(db)
     source_run_id = _latest_source_run_id(db, target_date)
+    total_di_count = _count_total_di(db)
+    mapped_di_count = _count_mapped_di(db)
+    unmapped_di_count = _count_unmapped_di_pending(db)
+    coverage_ratio = (float(mapped_di_count) / float(total_di_count)) if total_di_count > 0 else 0.0
 
     stmt = insert(DailyMetric).values(
         metric_date=target_date,
@@ -81,6 +106,26 @@ def generate_daily_metrics(db: Session, metric_date: date | None = None) -> Dail
         },
     )
     db.execute(stmt)
+
+    udi_stmt = insert(DailyUdiMetric).values(
+        metric_date=target_date,
+        total_di_count=total_di_count,
+        mapped_di_count=mapped_di_count,
+        unmapped_di_count=unmapped_di_count,
+        coverage_ratio=coverage_ratio,
+        source_run_id=source_run_id,
+    )
+    udi_stmt = udi_stmt.on_conflict_do_update(
+        index_elements=[DailyUdiMetric.metric_date],
+        set_={
+            'total_di_count': total_di_count,
+            'mapped_di_count': mapped_di_count,
+            'unmapped_di_count': unmapped_di_count,
+            'coverage_ratio': coverage_ratio,
+            'source_run_id': source_run_id,
+        },
+    )
+    db.execute(udi_stmt)
     db.commit()
 
     row = db.get(DailyMetric, target_date)

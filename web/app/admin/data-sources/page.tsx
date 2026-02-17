@@ -56,6 +56,7 @@ export const dynamic = 'force-dynamic';
 type PageParams = {
   page?: string;
   page_size?: string;
+  source_key?: string;
 };
 
 async function getAdminMe(): Promise<AdminMe> {
@@ -154,6 +155,7 @@ export default async function AdminDataSourcesPage({ searchParams }: { searchPar
   const params = await searchParams;
   const page = Math.max(1, Number(params.page || '1'));
   const pageSize = Math.max(1, Number(params.page_size || '10'));
+  const sourceKey = String(params.source_key || '').trim().toUpperCase();
 
   const [me, items, runs] = await Promise.all([getAdminMe(), getDataSources(), getSourceRuns(page, pageSize)]);
 
@@ -179,7 +181,7 @@ export default async function AdminDataSourcesPage({ searchParams }: { searchPar
         </CardContent>
       </Card>
 
-      <DataSourcesManager initialItems={items} />
+      <DataSourcesManager initialItems={items} initialSourceKey={sourceKey} />
       <SyncManager initialItems={runs} initialPage={page} initialPageSize={pageSize} />
     </div>
   );

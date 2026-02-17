@@ -276,8 +276,15 @@ function toDataSource(item: SourceRegistryItem): DataSource {
   };
 }
 
-export default function DataSourcesManager({ initialItems }: { initialItems: DataSource[] }) {
+export default function DataSourcesManager({
+  initialItems,
+  initialSourceKey,
+}: {
+  initialItems: DataSource[];
+  initialSourceKey?: string;
+}) {
   const [items, setItems] = useState<DataSource[]>(initialItems);
+  const [sourceKeyFilter, setSourceKeyFilter] = useState<string>(String(initialSourceKey || '').trim().toUpperCase());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -316,6 +323,16 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     const enhance = items.filter((x) => !mainKeys.has(x.source_key) && !projectKeys.has(x.source_key));
     return { main, enhance, project };
   }, [items]);
+  const targetSourceKey = useMemo(() => String(initialSourceKey || '').trim().toUpperCase(), [initialSourceKey]);
+  const filteredItems = useMemo(() => {
+    const key = String(sourceKeyFilter || '').trim().toUpperCase();
+    if (!key) return items;
+    return items.filter((x) => String(x.source_key || '').toUpperCase().includes(key));
+  }, [items, sourceKeyFilter]);
+  const targetMatched = useMemo(
+    () => (targetSourceKey ? items.some((x) => x.source_key === targetSourceKey) : false),
+    [items, targetSourceKey],
+  );
   const mainSource = useMemo(
     () =>
       items.find((x) => x.source_key === 'NMPA_REG') ||
@@ -660,6 +677,19 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
     void refreshContractConflicts(7);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const key = String(initialSourceKey || '').trim().toUpperCase();
+    if (!key) return;
+    setSourceKeyFilter(key);
+  }, [initialSourceKey]);
+
+  useEffect(() => {
+    if (!targetSourceKey) return;
+    const row = document.getElementById(`source-row-${targetSourceKey}`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [items, targetSourceKey]);
 
   function startCreate() {
     setEditingId(null);
@@ -1402,13 +1432,32 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
             <Badge variant="success">主源 {grouped.main.length}</Badge>
             <Badge variant="muted">增强源 {grouped.enhance.length}</Badge>
             <Badge variant="warning">项目源 {grouped.project.length}</Badge>
+            {targetSourceKey ? (
+              <Badge variant={targetMatched ? 'success' : 'warning'}>
+                定位来源: {targetSourceKey} {targetMatched ? '已匹配' : '未找到'}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="controls" style={{ marginBottom: 12 }}>
+            <Input
+              value={sourceKeyFilter}
+              onChange={(e) => setSourceKeyFilter(e.target.value.toUpperCase())}
+              placeholder="按 source_key 过滤（如 NMPA_REG / UDI_DI）"
+            />
+            <Button
+              variant="secondary"
+              onClick={() => setSourceKeyFilter('')}
+              disabled={!sourceKeyFilter}
+            >
+              清除过滤
+            </Button>
           </div>
           {loading && items.length === 0 ? (
             <div className="grid">
               <Skeleton height={28} />
               <Skeleton height={180} />
             </div>
-          ) : items.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <EmptyState text="暂无数据源" />
           ) : (
             <TableWrap>
@@ -1424,8 +1473,16 @@ export default function DataSourcesManager({ initialItems }: { initialItems: Dat
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((ds) => (
-                    <tr key={ds.source_key}>
+                  {filteredItems.map((ds) => (
+                    <tr
+                      key={ds.source_key}
+                      id={`source-row-${ds.source_key}`}
+                      style={
+                        targetSourceKey && ds.source_key === targetSourceKey
+                          ? { backgroundColor: 'rgba(16, 185, 129, 0.08)', outline: '1px solid rgba(16, 185, 129, 0.45)' }
+                          : undefined
+                      }
+                    >
                       <td>
                         {(ds.compat?.mode || '').toLowerCase() === 'primary' || ds.source_key === 'NMPA_REG'
                           ? '主源'

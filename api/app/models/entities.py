@@ -693,6 +693,19 @@ class DailyMetric(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class DailyUdiMetric(Base):
+    __tablename__ = 'daily_udi_metrics'
+
+    metric_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    total_di_count: Mapped[int] = mapped_column(Integer, default=0)
+    mapped_di_count: Mapped[int] = mapped_column(Integer, default=0)
+    unmapped_di_count: Mapped[int] = mapped_column(Integer, default=0)
+    coverage_ratio: Mapped[float] = mapped_column(Numeric(8, 6), default=0)
+    source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey('source_runs.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class User(Base):
     __tablename__ = 'users'
 
