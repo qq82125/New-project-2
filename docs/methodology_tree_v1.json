@@ -1,0 +1,82 @@
+{
+  "version": "v1",
+  "nodes": [
+    {
+      "name": "Molecular",
+      "synonyms": ["Molecular", "分子", "核酸", "NAAT", "NAT"],
+      "children": [
+        {
+          "name": "PCR",
+          "synonyms": ["PCR", "聚合酶链式反应"],
+          "children": [
+            {"name": "qPCR", "synonyms": ["qPCR", "QPCR", "RT-qPCR", "实时荧光", "荧光定量", "实时定量"]},
+            {"name": "dPCR", "synonyms": ["dPCR", "DPCR", "数字PCR", "数字化PCR"]},
+            {"name": "LAMP", "synonyms": ["LAMP", "等温扩增", "环介导等温扩增"]},
+            {"name": "RPA", "synonyms": ["RPA", "重组酶聚合酶扩增"]}
+          ]
+        },
+        {
+          "name": "NGS",
+          "synonyms": ["NGS", "二代测序", "高通量测序", "测序", "Next-Generation Sequencing"],
+          "children": [
+            {"name": "WGS", "synonyms": ["WGS", "全基因组测序"]},
+            {"name": "WES", "synonyms": ["WES", "外显子组测序"]},
+            {"name": "Targeted Sequencing", "synonyms": ["靶向测序", "Panel", "Panel测序"]}
+          ]
+        },
+        {"name": "Sanger", "synonyms": ["Sanger", "一代测序", "桑格测序"]},
+        {"name": "Hybridization", "synonyms": ["杂交", "核酸杂交", "探针杂交", "Hybridization"]}
+      ]
+    },
+    {
+      "name": "Immunoassay",
+      "synonyms": ["免疫", "抗原", "抗体", "免疫学"],
+      "children": [
+        {"name": "ELISA", "synonyms": ["ELISA", "酶联免疫", "酶联免疫吸附"]},
+        {"name": "CLIA", "synonyms": ["CLIA", "化学发光", "化学发光免疫"]},
+        {"name": "FIA", "synonyms": ["FIA", "荧光免疫", "荧光免疫分析"]},
+        {"name": "LFA", "synonyms": ["LFA", "胶体金", "免疫层析", "层析", "侧向层析", "金标"]},
+        {"name": "RIA", "synonyms": ["RIA", "放射免疫"]},
+        {"name": "Turbidimetry", "synonyms": ["免疫比浊", "比浊", "散射比浊"]},
+        {"name": "Nephelometry", "synonyms": ["散射比浊", "免疫散射"]}
+      ]
+    },
+    {
+      "name": "Biochemistry",
+      "synonyms": ["生化", "酶法", "比色", "光度", "生化分析"],
+      "children": [
+        {"name": "Colorimetry", "synonyms": ["比色法", "比色"]},
+        {"name": "Enzymatic", "synonyms": ["酶法"]},
+        {"name": "Electrochemistry", "synonyms": ["电化学", "电极法"]},
+        {"name": "Spectrophotometry", "synonyms": ["分光光度", "光度法"]}
+      ]
+    },
+    {
+      "name": "Hematology",
+      "synonyms": ["血液", "血细胞", "血常规", "血球"],
+      "children": [
+        {"name": "Flow Cytometry", "synonyms": ["流式", "流式细胞", "Flow Cytometry"]},
+        {"name": "Impedance", "synonyms": ["电阻抗", "阻抗法"]},
+        {"name": "Optical", "synonyms": ["光学法", "激光散射"]}
+      ]
+    },
+    {
+      "name": "Microbiology",
+      "synonyms": ["微生物", "培养", "鉴定", "药敏", "AST"],
+      "children": [
+        {"name": "Culture", "synonyms": ["培养", "细菌培养"]},
+        {"name": "Identification", "synonyms": ["鉴定", "菌种鉴定"]},
+        {"name": "AST", "synonyms": ["药敏", "药敏试验", "AST"]}
+      ]
+    },
+    {
+      "name": "POCT",
+      "synonyms": ["POCT", "床旁", "即时检验", "现场快速", "快检"],
+      "children": [
+        {"name": "POCT-PCR", "synonyms": ["POCT PCR", "POCT-PCR", "便携PCR"]},
+        {"name": "POCT-Immuno", "synonyms": ["POCT 免疫", "便携免疫", "床旁免疫"]}
+      ]
+    }
+  ]
+}
+

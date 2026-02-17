@@ -1,0 +1,144 @@
+{
+    "exported_at": "2026-02-16T17:12:43Z",
+    "source_configs": [
+        {
+            "enabled": true,
+            "source_key": "NHSA",
+            "fetch_params": {
+                "file": "/app/api/data/raw/samples/nhsa_sample.csv",
+                "month": "2026-02",
+                "batch_size": 500,
+                "lookback_days": 35
+            },
+            "parse_params": {
+                "mapping_version": "v1"
+            },
+            "schedule_cron": "0 3 * * 1",
+            "upsert_policy": {
+                "anchor": "registration_no",
+                "conflict": "evidence_then_priority",
+                "priority": 90,
+                "allow_overwrite": true
+            }
+        },
+        {
+            "enabled": true,
+            "source_key": "NMPA_REG",
+            "fetch_params": {
+                "batch_size": 2000,
+                "legacy_data_source": {
+                    "name": "NMPA注册产品库（主数据源）",
+                    "type": "postgres",
+                    "config": {
+                        "host": "db",
+                        "port": 5432,
+                        "database": "nmpa",
+                        "password": "***",
+                        "username": "nmpa",
+                        "batch_size": 2000,
+                        "source_table": "public.products"
+                    }
+                },
+                "cutoff_window_hours": 6
+            },
+            "parse_params": {
+                "mapping_version": "v1",
+                "strict_registration_no": true
+            },
+            "schedule_cron": "0 */6 * * *",
+            "upsert_policy": {
+                "anchor": "registration_no",
+                "conflict": "evidence_then_priority",
+                "priority": 100,
+                "allow_overwrite": true
+            }
+        },
+        {
+            "enabled": true,
+            "source_key": "PROCUREMENT_GD",
+            "fetch_params": {
+                "file": "/app/api/data/raw/samples/procurement_gd_sample.csv",
+                "province": "GD",
+                "batch_size": 1000,
+                "lookback_days": 30
+            },
+            "parse_params": {
+                "mapping_version": "v1",
+                "fuzzy_match_enabled": true
+            },
+            "schedule_cron": "0 5 * * *",
+            "upsert_policy": {
+                "anchor": "registration_no",
+                "conflict": "append_only",
+                "priority": 60,
+                "allow_overwrite": false
+            }
+        },
+        {
+            "enabled": true,
+            "source_key": "UDI_DI",
+            "fetch_params": {
+                "batch_size": 2000,
+                "legacy_data_source": {
+                    "name": "UDI注册证关联增强源（DI/GTIN/包装）",
+                    "type": "postgres",
+                    "config": {
+                        "host": "db",
+                        "port": 5432,
+                        "database": "nmpa",
+                        "password": "***",
+                        "username": "nmpa",
+                        "batch_size": 2000,
+                        "source_table": "public.product_variants"
+                    }
+                },
+                "cutoff_window_hours": 6
+            },
+            "parse_params": {
+                "mapping_version": "v1",
+                "strict_registration_no": true
+            },
+            "schedule_cron": "30 */6 * * *",
+            "upsert_policy": {
+                "anchor": "registration_no",
+                "conflict": "fill_missing_only",
+                "priority": 80,
+                "allow_overwrite": false
+            }
+        }
+    ],
+    "source_definitions": [
+        {
+            "parser_key": "nhsa_parser",
+            "source_key": "NHSA",
+            "display_name": "国家医保（NHSA）",
+            "entity_scope": "NHSA",
+            "enabled_by_default": false,
+            "default_evidence_grade": "A"
+        },
+        {
+            "parser_key": "nmpa_reg_parser",
+            "source_key": "NMPA_REG",
+            "display_name": "NMPA注册产品库（主数据源）",
+            "entity_scope": "REGISTRATION",
+            "enabled_by_default": true,
+            "default_evidence_grade": "A"
+        },
+        {
+            "parser_key": "procurement_gd_parser",
+            "source_key": "PROCUREMENT_GD",
+            "display_name": "广东集采公告",
+            "entity_scope": "PROCUREMENT",
+            "enabled_by_default": false,
+            "default_evidence_grade": "B"
+        },
+        {
+            "parser_key": "udi_di_parser",
+            "source_key": "UDI_DI",
+            "display_name": "UDI_DI（注册证/DI/包装）",
+            "entity_scope": "UDI",
+            "enabled_by_default": true,
+            "default_evidence_grade": "A"
+        }
+    ]
+}

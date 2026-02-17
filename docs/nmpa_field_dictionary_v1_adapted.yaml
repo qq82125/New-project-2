@@ -1,0 +1,97 @@
+version: "1.0-adapted"
+project: "IVD产品雷达"
+canonical:
+  registration_no: "registrations.registration_no"
+  product_table: "products"
+  udi_mapping: "product_variants.di -> product_variants.registry_no"
+  evidence: "raw_documents + product_params(raw_document_id,evidence_text,evidence_page)"
+  runs: "source_runs"
+entities:
+  products:
+    pk: "id"
+    fields:
+      udi_di: {col: "udi_di", type: "varchar(128)", unique: true}
+      reg_no: {col: "reg_no", type: "varchar(120)", index: true, nullable: true}
+      name: {col: "name", type: "varchar(500)", index: true}
+      class: {col: "class", type: "varchar(120)", nullable: true}
+      approved_date: {col: "approved_date", type: "date", nullable: true}
+      expiry_date: {col: "expiry_date", type: "date", nullable: true}
+      status: {col: "status", type: "varchar(20)", default: "ACTIVE"}
+      is_ivd: {col: "is_ivd", type: "boolean", index: true}
+      ivd_category: {col: "ivd_category", type: "text", nullable: true}
+      ivd_subtypes: {col: "ivd_subtypes", type: "text[]", nullable: true}
+      ivd_reason: {col: "ivd_reason", type: "jsonb", nullable: true}
+      ivd_version: {col: "ivd_version", type: "int", nullable: false}
+      ivd_source: {col: "ivd_source", type: "varchar(20)", nullable: true}
+      ivd_confidence: {col: "ivd_confidence", type: "numeric(3,2)", nullable: true}
+      company_id: {col: "company_id", type: "uuid", nullable: true}
+      registration_id: {col: "registration_id", type: "uuid", nullable: true}
+  registrations:
+    pk: "id"
+    fields:
+      registration_no: {col: "registration_no", type: "varchar(120)", unique: true}
+      filing_no: {col: "filing_no", type: "varchar(120)", nullable: true}
+      approval_date: {col: "approval_date", type: "date", nullable: true}
+      expiry_date: {col: "expiry_date", type: "date", nullable: true}
+      status: {col: "status", type: "varchar(50)", nullable: true}
+  product_variants:
+    pk: "id"
+    fields:
+      di: {col: "di", type: "varchar(128)", unique: true}
+      registry_no: {col: "registry_no", type: "varchar(120)", nullable: true}
+      product_id: {col: "product_id", type: "uuid", nullable: true}
+  raw_documents:
+    pk: "id"
+    required: ["sha256", "storage_uri", "fetched_at", "run_id"]
+  product_params:
+    pk: "id"
+    required_evidence: ["raw_document_id", "evidence_text"]
+param_codes:
+  - STORAGE_CONDITION
+  - METHODOLOGY
+  - TARGET_DEPARTMENT
+  - IS_IMPORTED
+  - TARGET_CUSTOMER
+new_tables:
+  nmpa_snapshots:
+    columns:
+      - {name: "id", type: "uuid", pk: true}
+      - {name: "registration_id", type: "uuid", fk: "registrations.id"}
+      - {name: "raw_document_id", type: "uuid", fk: "raw_documents.id"}
+      - {name: "source_run_id", type: "bigint", fk: "source_runs.id"}
+      - {name: "snapshot_date", type: "date", not_null: true}
+      - {name: "source_url", type: "text", nullable: true}
+      - {name: "sha256", type: "varchar(64)", nullable: true}
+    unique:
+      - ["registration_id", "source_run_id"]
+    indexes:
+      - ["registration_id"]
+      - ["snapshot_date"]
+      - ["source_run_id"]
+  field_diffs:
+    columns:
+      - {name: "id", type: "uuid", pk: true}
+      - {name: "snapshot_id", type: "uuid", fk: "nmpa_snapshots.id"}
+      - {name: "registration_id", type: "uuid", fk: "registrations.id"}
+      - {name: "field_name", type: "text", not_null: true}
+      - {name: "old_value", type: "text", nullable: true}
+      - {name: "new_value", type: "text", nullable: true}
+      - {name: "change_type", type: "varchar(20)", not_null: true}
+      - {name: "severity", type: "varchar(10)", not_null: true}
+      - {name: "confidence", type: "numeric(3,2)", not_null: true, default: 0.80}
+      - {name: "source_run_id", type: "bigint", fk: "source_runs.id"}
+    indexes:
+      - ["registration_id"]
+      - ["field_name"]
+      - ["source_run_id"]
+diff_fields:
+  - registration_no
+  - filing_no
+  - approval_date
+  - expiry_date
+  - status
+  - product_name
+  - class
+  - model
+  - specification
+

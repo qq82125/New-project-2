@@ -1,55 +1,56 @@
 # IVD产品雷达
 
-本项目用于汇总 IVD（试剂/仪器/医疗软件）产品变更信息，提供：
-- NMPA/UDI 同步与补充数据源接入
-- 严格 IVD 口径入库（默认仅 `is_ivd=true` 才写入主产品表）
-- 证据链（raw 证据 + sha256 + 来源 URL + run_id + parse_log）
-- 变更日志（`change_log`）与日指标（`daily_metrics`）
-- 前台 Dashboard/检索与后台运维管理
-- 数据治理：dry-run/execute/rollback（先归档再删除，可按 batch 回滚）
-- 说明书/招采附件参数抽取 v1（规则优先 + evidence_text/page）
+面向 IVD（试剂/仪器/医疗软件）的“监管事实驱动”产品雷达：从 NMPA/UDI 等来源同步数据，沉淀证据链与变更资产，提供检索/Dashboard/订阅投递，并逐步演进到“快照 + 字段级 diff + 风险与行动”的决策链路。
 
-## 结构概览
+## 核心原则（不动摇）
+- 严格 IVD 口径：前台默认只展示 `products.is_ivd = true`
+- 证据链优先：Raw 不覆盖，结构化数据必须可回指证据（`raw_documents` / `product_params`）
+- 资产化变更：基于 `change_log`（产品）+ `nmpa_snapshots/field_diffs`（注册证快照/diff）支撑订阅/日报/预警渐进接入
 
-目录：
+## 目录结构
 - 后端：`api/`（FastAPI + SQLAlchemy + Postgres）
 - 前端：`web/`（Next.js）
-- 迁移：`migrations/`（按文件排序执行的 SQL migrations runner）
+- 迁移：`migrations/`（按文件名排序执行的 SQL runner）
+- 运维脚本：`scripts/`
+- 文档：`docs/`
 
 关键文档：
-- 架构现状：`docs/ARCH_NOTES.md`
 - 运行手册：`docs/RUNBOOK.md`
-- PR1（现状适配版）：`docs/PR1_DB_MODEL_ADAPTED.md`
 - 字段名表（DB Schema Dictionary）：`docs/FIELD_DICTIONARY.md`
+- NMPA 快照+diff SSOT（人读）：`docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
+- NMPA 快照+diff SSOT（机器读）：`docs/nmpa_field_dictionary_v1_adapted.yaml`
 
-## 架构图（ASCII）
+## 主要数据资产（表级）
+证据链：
+- `raw_documents`：原始文档元数据（`storage_uri/sha256/source_url/run_id/parse_log`）
+- `product_params`：参数抽取（必须包含 `raw_document_id + evidence_text (+evidence_page)`）
 
+主业务：
+- `products`：产品快照（前台 IVD-only 口径）
+- `registrations`：注册证 canonical（`registration_no` UNIQUE）
+- `product_variants`：UDI DI 粒度（`di` UNIQUE，包含 `registry_no` 映射）
+
+变更与指标：
+- `change_log`：产品变更日志（`changed_fields/before_json/after_json`）
+- `daily_metrics`：日指标（IVD 口径）
+
+NMPA 快照与字段级 diff（shadow-write，不改变前台口径）：
+- `nmpa_snapshots`：注册证快照索引（`registration_id + source_run_id` 唯一）
+- `field_diffs`：字段级 old/new（字段集合见 SSOT 的 `diff_fields`）
+- 失败不阻断：diff 写入失败会追加到 `raw_documents.parse_log.shadow_diff_errors`，并计入 `source_runs.records_failed`
+
+## 架构（简图）
 ```text
-                 +-----------------------------+
-                 |  NMPA UDI / Primary Source  |
-                 +-------------+---------------+
-                               |
-                               v
-+-------------------+   +------+-------+   +-------------------+
-|  worker (Python)  +---> staging dir  +---> ingest/upsert DB  |
-|  sync + metrics   |   | downloads/... |   | products/change.. |
-+---------+---------+   +------+-------+   +---------+---------+
-          |                        |                   |
-          | daily-metrics          |                   v
-          v                        |          +-------------------+
-+-------------------+              |          | PostgreSQL        |
-| daily_metrics     +--------------+          | products/...      |
-+-------------------+                         +----+---------+----+
-                                                    |         |
-                                                    v         v
-                                            +-------+--+   +--+-------+
-                                            | FastAPI  |   | Next.js  |
-                                            | /api/*   |   | Dashboard|
-                                            +----------+   +----------+
+NMPA UDI / Primary Source
+          |
+          v
+ worker(sync/metrics/digest) -> staging -> ingest/upsert -> PostgreSQL
+                                              |
+                                              v
+                                         FastAPI / Next.js
 ```
 
 ## 快速启动（Docker）
-
 ```bash
 docker compose up -d --build
 ```
@@ -64,8 +65,61 @@ docker compose up -d --build
 docker compose down
 ```
 
-## 主要接口（摘录）
+## 管理员初始化
+系统启动时会尝试用环境变量初始化管理员账号：
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD`（默认：`admin@example.com` / `admin12345`）
+- 兼容变量：`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
 
+## 迁移与回滚
+迁移 runner：`python -m app.db.migrate`（内部使用 `schema_migrations` 记录已应用文件，避免重复执行）。
+
+NMPA 快照/diff 迁移（幂等）：
+- `migrations/0019_add_nmpa_snapshots.sql`
+- `migrations/0020_add_field_diffs.sql`
+
+回滚（手工执行，对现有 batch rollback 逻辑无影响）：
+- `scripts/rollback/0019_add_nmpa_snapshots_down.sql`
+- `scripts/rollback/0020_add_field_diffs_down.sql`
+
+## 常用命令（容器内）
+一次同步：
+```bash
+docker compose exec worker python -m app.workers.cli sync --once
+```
+
+日指标 / 日报投递：
+```bash
+docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-08
+docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-08
+```
+
+查看 NMPA 快照/当天 diff（运维/调试）：
+```bash
+docker compose exec worker python -m app.workers.cli nmpa:snapshots --since 2026-02-01
+docker compose exec worker python -m app.workers.cli nmpa:diffs --date 2026-02-08
+```
+
+说明书/文本参数抽取（dry-run/execute/rollback）：
+```bash
+docker compose exec api python -m app.workers.cli params:extract --dry-run --file /path/to/manual.pdf --di DI123
+docker compose exec api python -m app.workers.cli params:extract --execute --file /path/to/manual.pdf --di DI123
+docker compose exec api python -m app.workers.cli params:rollback --execute --raw-document-id <uuid>
+```
+
+NHSA（月度快照）入库（证据链 raw_documents + 结构化 nhsa_codes；支持回滚）：
+```bash
+docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --file /path/to/nhsa.csv
+docker compose exec api python -m app.workers.cli nhsa:rollback --execute --source-run-id 123
+```
+
+非 IVD 清理/回滚（先归档再删除）：
+```bash
+docker compose exec api python -m app.workers.cli ivd:cleanup --dry-run
+docker compose exec api python -m app.workers.cli ivd:cleanup --execute --archive-batch-id manual_batch_001
+docker compose exec api python -m app.workers.cli ivd:rollback --execute --archive-batch-id manual_batch_001 --recompute-days 365
+```
+
+## 主要接口（摘录）
 用户侧：
 - `GET /api/dashboard/summary|trend|rankings|radar`：日指标（IVD 口径）
 - `GET /api/search`：检索（强制 IVD 口径）
@@ -75,109 +129,16 @@ docker compose down
 Admin：
 - `GET /api/admin/products`：产品列表（支持 `is_ivd=true|false|all` + `ivd_category` + `ivd_version`）
 - `GET /api/admin/rejected-products`：非 IVD 拒收审计
-- `GET /api/admin/stats`：后台统计卡片（IVD 总数/分布/拒收数量）
+- `GET /api/admin/stats`：后台统计
 - `POST /api/admin/params/extract|rollback`：参数抽取/回滚
 
-## 管理员初始化
-
-系统启动时会尝试用环境变量初始化管理员账号：
-- `ADMIN_EMAIL` / `ADMIN_PASSWORD`（默认：`admin@example.com` / `admin12345`）
-- 兼容变量：`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
-
-普通用户可从 [http://localhost:3000/register](http://localhost:3000/register) 注册；`/admin` 仅 admin 角色可见。
-
-## 数据口径与治理
-
-IVD 范围：
-- `reagent`（试剂）
-- `instrument`（仪器/设备）
-- `software`（医疗软件）
-
-默认严格口径：
-- 主产品查询/展示强制 `products.is_ivd IS TRUE`
-- 非 IVD 数据不写主表，可写入 `products_rejected` 审计
-- 管理端产品列表 `GET /api/admin/products` 支持 `is_ivd=true|false|all`；非 IVD 审计走 `GET /api/admin/rejected-products`
-
-破坏性清理规则：
-- 始终“先归档再删除”
-- 归档批次 `archive_batch_id` 可用于回滚（同时覆盖 `products_archive` 与 `change_log_archive`）
-
-证据链：
-- `raw_documents`：`storage_uri + sha256 + source_url + run_id + parse_log`
-- `product_params`：结构化参数必须带 `raw_document_id`，并保存 `evidence_text/page`
-
-## 常用命令（容器内）
-
-同步（一次）：
-```bash
-docker compose exec worker python -m app.workers.cli sync --once
-```
-
-查看 IVD 库存快照（分类/来源分布）：
-```bash
-curl -s http://localhost:8000/api/dashboard/breakdown
-```
-
-生成某日指标 / 发送某日摘要：
-```bash
-docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-08
-docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-08
-```
-
-历史重分类（先 dry-run 再 execute）：
-```bash
-docker compose exec api python -m app.workers.cli ivd:classify --dry-run
-docker compose exec api python -m app.workers.cli ivd:classify --execute
-```
-
-非 IVD 清理（先归档再删除）：
-```bash
-docker compose exec api python -m app.workers.cli ivd:cleanup --dry-run
-docker compose exec api python -m app.workers.cli ivd:cleanup --execute --archive-batch-id manual_batch_001
-```
-
-回滚（按 batch 恢复 products + change_log，并重算指标）：
-```bash
-docker compose exec api python -m app.workers.cli ivd:rollback --execute --archive-batch-id manual_batch_001 --recompute-days 365
-```
-
-指标重算：
-```bash
-docker compose exec api python -m app.workers.cli metrics:recompute --scope ivd --since 2026-01-01
-```
-
-说明书/文本参数抽取（dry-run/execute/rollback）：
-```bash
-# 从本地文件上传为 raw_document 并抽取（dry-run）
-docker compose exec api python -m app.workers.cli params:extract --dry-run --file /path/to/manual.pdf --di DI123
-
-# 执行写入 product_params
-docker compose exec api python -m app.workers.cli params:extract --execute --file /path/to/manual.pdf --di DI123
-
-# 回滚（删除该 raw_document 对应的 product_params）
-docker compose exec api python -m app.workers.cli params:rollback --execute --raw-document-id <uuid>
-```
-
-NHSA（月度快照）入库（证据链 raw_documents + 结构化 nhsa_codes；支持回滚）：
-```bash
-# 本地 CSV 文件
-docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --file /path/to/nhsa.csv
-
-# 或者配置 URL（低频）
-docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --url https://example.com/nhsa.csv
-
-# 回滚（按 source_run_id 删除本次 run 写入的 nhsa_codes）
-docker compose exec api python -m app.workers.cli nhsa:rollback --execute --source-run-id 123
-```
-
 ## 测试
-
 单测：
 ```bash
 pytest -q
 ```
 
-临时 Postgres 集成测试（验证清理/回滚/指标与 PR1 表约束，一键启动临时库并自动清理）：
+Postgres 集成测试（需要 `IT_DATABASE_URL`）：
 ```bash
 ./scripts/run_it_pg_tests.sh
 ```

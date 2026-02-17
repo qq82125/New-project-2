@@ -326,3 +326,8 @@
 - `source_run_id` bigint FK -> `source_runs.id`, index
 - `created_at` timestamptz
 
+---
+
+SSOT 引用说明（NMPA 快照 + 字段级 diff）：
+- `docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`（Markdown 版说明，面向人读）
+- `docs/nmpa_field_dictionary_v1_adapted.yaml`（机器可读 SSOT：表/索引/唯一键/diff_fields）

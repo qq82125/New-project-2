@@ -49,3 +49,23 @@ python -m app.cli metrics:recompute --scope ivd --since 2026-01-01
 ## 证据链表
 - `raw_documents`：原始文档元数据（`storage_uri`, `sha256`, `run_id`, `source_url`）
 - `product_params`：参数与证据（`evidence_text`, `evidence_page`, `raw_document_id`）
+
+## NMPA 快照与字段级 diff（shadow-write）
+
+新增表（用于订阅/日报/预警逐步接入，不改变现有前台口径）：
+- `nmpa_snapshots`：注册证快照索引（每次 run 每注册证 1 条）
+- `field_diffs`：字段级 diff（old/new），字段集合见 SSOT
+
+SSOT：
+- `docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
+- `docs/nmpa_field_dictionary_v1_adapted.yaml`
+
+查看快照数量/异常（since）：
+```bash
+python -m app.cli nmpa:snapshots --since 2026-02-01
+```
+
+查看当天 diff 摘要（供 daily-digest 逐步接入）：
+```bash
+python -m app.cli nmpa:diffs --date 2026-02-08
+```
