@@ -8,6 +8,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import text
+
 from app.db.session import SessionLocal
 from app.repositories.users import get_user_by_email
 from app.repositories.admin_membership import admin_grant_membership
@@ -132,6 +134,63 @@ def build_parser() -> argparse.ArgumentParser:
     nhsa_rb_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     nhsa_rb_mode.add_argument('--execute', action='store_true', help='Delete nhsa_codes by source_run_id')
     nhsa_rb.add_argument('--source-run-id', type=int, required=True, help='source_runs.id of the nhsa ingest run')
+
+    proc_ingest = sub.add_parser('procurement:ingest', help='Ingest procurement snapshot into evidence chain + procurement_*')
+    proc_ingest_mode = proc_ingest.add_mutually_exclusive_group()
+    proc_ingest_mode.add_argument('--dry-run', action='store_true', help='Preview only (still stores raw_documents)')
+    proc_ingest_mode.add_argument('--execute', action='store_true', help='Write procurement structured tables')
+    proc_ingest.add_argument('--file', required=True, help='Local procurement snapshot file (csv/json)')
+    proc_ingest.add_argument('--province', required=True, help='Province label for this snapshot')
+
+    proc_rb = sub.add_parser('procurement:rollback', help='Rollback procurement_* rows inserted by a source_run_id')
+    proc_rb_mode = proc_rb.add_mutually_exclusive_group()
+    proc_rb_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    proc_rb_mode.add_argument('--execute', action='store_true', help='Delete procurement_* by source_run_id')
+    proc_rb.add_argument('--source-run-id', type=int, required=True, help='source_runs.id of the procurement ingest run')
+
+    nmpa_snap_parser = sub.add_parser('nmpa:snapshots', help='Inspect NMPA snapshots since a date (ops/debug)')
+    nmpa_snap_parser.add_argument('--since', required=True, help='YYYY-MM-DD')
+
+    nmpa_diff_parser = sub.add_parser('nmpa:diffs', help='Summarize NMPA field diffs for a date (ops/debug)')
+    nmpa_diff_parser.add_argument('--date', required=True, help='YYYY-MM-DD')
+
+    meth_seed = sub.add_parser('methodology:seed', help='Seed methodology tree (V1) into methodology_nodes')
+    meth_seed_mode = meth_seed.add_mutually_exclusive_group()
+    meth_seed_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    meth_seed_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    meth_seed.add_argument('--file', default='docs/methodology_tree_v1.json')
+
+    meth_map = sub.add_parser('methodology:map', help='Rule-map registrations to methodology_nodes via synonyms')
+    meth_map_mode = meth_map.add_mutually_exclusive_group()
+    meth_map_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    meth_map_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    meth_map.add_argument('--file', default=None, help='optional: seed file to load if methodology_nodes empty')
+    meth_map.add_argument('--registration-no', action='append', default=None, help='optional: filter by registration_no (repeatable)')
+
+    reg_ev = sub.add_parser('registration:events', help='Generate registration version events from snapshots/diffs')
+    reg_ev_mode = reg_ev.add_mutually_exclusive_group()
+    reg_ev_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    reg_ev_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    date_group = reg_ev.add_mutually_exclusive_group()
+    date_group.add_argument('--date', default=None, help='YYYY-MM-DD (snapshot_date)')
+    date_group.add_argument('--since', default=None, help='YYYY-MM-DD (snapshot_date >= since)')
+
+    source_run = sub.add_parser('source:run', help='Run unified ingest runner for one source_key')
+    source_run.add_argument('--source_key', required=True, help='source_definitions.source_key')
+    source_run_mode = source_run.add_mutually_exclusive_group()
+    source_run_mode.add_argument('--dry-run', action='store_true', help='Preview parse/upsert counts only')
+    source_run_mode.add_argument('--execute', action='store_true', help='Persist raw_source_records + upserts')
+
+    source_run_all = sub.add_parser('source:run-all', help='Run unified ingest runner for all enabled sources')
+    source_run_all_mode = source_run_all.add_mutually_exclusive_group()
+    source_run_all_mode.add_argument('--dry-run', action='store_true', help='Preview parse/upsert counts only')
+    source_run_all_mode.add_argument('--execute', action='store_true', help='Persist raw_source_records + upserts')
+
+    udi_audit = sub.add_parser('udi:audit', help='Audit DI binding distribution against registration anchors')
+    udi_audit_mode = udi_audit.add_mutually_exclusive_group()
+    udi_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
+    udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
     return parser
 
 
@@ -335,6 +394,124 @@ def _run_metrics_recompute(*, scope: str, since: str | None) -> int:
         rows = regenerate_daily_metrics(db, days=days)
         print(json.dumps({'ok': True, 'scope': scope, 'since': target_since.isoformat(), 'days': days, 'rows': len(rows)}, ensure_ascii=True))
         return 0
+    finally:
+        db.close()
+
+
+def _run_nmpa_snapshots(*, since: str) -> int:
+    target = date.fromisoformat(since)
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT snapshot_date, count(*) AS cnt, count(DISTINCT source_run_id) AS runs
+                FROM nmpa_snapshots
+                WHERE snapshot_date >= :since
+                GROUP BY snapshot_date
+                ORDER BY snapshot_date ASC
+                """
+            ),
+            {"since": target},
+        ).fetchall()
+        total = sum(int(r[1]) for r in rows)
+        out = {
+            "ok": True,
+            "since": target.isoformat(),
+            "total_snapshots": total,
+            "by_date": [{"date": r[0].isoformat(), "count": int(r[1]), "source_runs": int(r[2])} for r in rows],
+        }
+        print(json.dumps(out, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_nmpa_diffs(*, target_date: str) -> int:
+    d = date.fromisoformat(target_date)
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                  fd.source_run_id,
+                  fd.severity,
+                  fd.field_name,
+                  count(*) AS cnt
+                FROM field_diffs fd
+                JOIN nmpa_snapshots ns ON ns.id = fd.snapshot_id
+                WHERE ns.snapshot_date = :d
+                GROUP BY fd.source_run_id, fd.severity, fd.field_name
+                ORDER BY fd.source_run_id ASC, fd.severity DESC, cnt DESC
+                """
+            ),
+            {"d": d},
+        ).fetchall()
+        total = sum(int(r[3]) for r in rows)
+        out = {
+            "ok": True,
+            "date": d.isoformat(),
+            "total_diffs": total,
+            "rows": [
+                {
+                    "source_run_id": (int(r[0]) if r[0] is not None else None),
+                    "severity": r[1],
+                    "field_name": r[2],
+                    "count": int(r[3]),
+                }
+                for r in rows
+            ],
+        }
+        print(json.dumps(out, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_methodology_seed(*, dry_run: bool, file_path: str) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.methodology_v1 import seed_methodology_tree
+
+        res = seed_methodology_tree(db, seed_path=str(file_path), dry_run=bool(dry_run))
+        print(json.dumps(res, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_methodology_map(*, dry_run: bool, file_path: str | None, registration_nos: list[str] | None) -> int:
+    db = SessionLocal()
+    try:
+        from sqlalchemy import select
+        from app.models import MethodologyNode
+        from app.services.methodology_v1 import map_methodologies_v1, seed_methodology_tree
+
+        # Convenience: if empty, allow seeding from file (optional).
+        has_nodes = bool(db.scalar(select(MethodologyNode.id).limit(1)))
+        if not has_nodes and file_path:
+            seed_methodology_tree(db, seed_path=str(file_path), dry_run=False)
+
+        res = map_methodologies_v1(db, registration_nos=registration_nos, dry_run=bool(dry_run))
+        print(json.dumps(res, ensure_ascii=True))
+        return 0 if res.get('ok') else 1
+    finally:
+        db.close()
+
+
+def _run_registration_events(*, dry_run: bool, date_str: str | None, since_str: str | None) -> int:
+    from datetime import date
+
+    target_date = date.fromisoformat(date_str) if date_str else None
+    since = date.fromisoformat(since_str) if since_str else None
+    db = SessionLocal()
+    try:
+        from app.services.version_events import generate_registration_events
+
+        res = generate_registration_events(db, target_date=target_date, since=since, dry_run=bool(dry_run))
+        print(json.dumps(res.__dict__, ensure_ascii=True))
+        return 0 if res.ok else 1
     finally:
         db.close()
 
@@ -623,6 +800,185 @@ def _run_nhsa_rollback(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_procurement_ingest(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        from app.services.procurement_ingest import ingest_procurement_from_file
+
+        res = ingest_procurement_from_file(
+            db,
+            province=str(args.province),
+            file_path=str(args.file),
+            dry_run=dry_run,
+        )
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "dry_run": bool(dry_run),
+                    "province": str(args.province),
+                    "source_run_id": int(res.source_run_id),
+                    "raw_run_id": str(res.raw_run_id),
+                    "raw_document_id": str(res.raw_document_id),
+                    "fetched_count": int(res.fetched_count),
+                    "parsed_count": int(res.parsed_count),
+                    "failed_count": int(res.failed_count),
+                    "projects": int(res.projects),
+                    "lots": int(res.lots),
+                    "results": int(res.results),
+                    "maps": int(res.maps),
+                    "sample_mappings": res.sample_mappings[:10],
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0 if int(res.failed_count) == 0 else 1
+    finally:
+        db.close()
+
+
+def _run_procurement_rollback(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        from app.services.procurement_ingest import rollback_procurement_ingest
+
+        res = rollback_procurement_ingest(db, source_run_id=int(args.source_run_id), dry_run=dry_run)
+        print(json.dumps(res.__dict__, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_source_runner(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        from app.services.ingest_runner import run_source_by_key
+
+        try:
+            stats = run_source_by_key(db, source_key=str(args.source_key), execute=(not dry_run))
+            print(json.dumps(stats.to_dict(), ensure_ascii=True, default=str))
+            return 0 if stats.status in {"success", "skipped"} else 1
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "source_key": str(args.source_key),
+                        "dry_run": dry_run,
+                        "status": "failed",
+                        "error": str(exc),
+                    },
+                    ensure_ascii=True,
+                    default=str,
+                )
+            )
+            return 1
+    finally:
+        db.close()
+
+
+def _run_source_runner_all(args: argparse.Namespace) -> int:
+    dry_run = bool(args.dry_run) or not bool(args.execute)
+    db = SessionLocal()
+    try:
+        from app.services.ingest_runner import run_all_enabled_sources
+
+        rows = run_all_enabled_sources(db, execute=(not dry_run))
+        body = {
+            "count": len(rows),
+            "failed": sum(1 for x in rows if x.status == "failed"),
+            "skipped": sum(1 for x in rows if x.status == "skipped"),
+            "items": [x.to_dict() for x in rows],
+        }
+        print(json.dumps(body, ensure_ascii=True, default=str))
+        return 0 if int(body["failed"]) == 0 else 1
+    finally:
+        db.close()
+
+
+def _run_udi_audit(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        threshold = int(getattr(args, 'outlier_threshold', 100) or 100)
+        dist = db.execute(
+            text(
+                """
+                WITH per_reg AS (
+                  SELECT registry_no, COUNT(1)::bigint AS di_count
+                  FROM product_variants
+                  WHERE registry_no IS NOT NULL AND btrim(registry_no) <> ''
+                  GROUP BY registry_no
+                )
+                SELECT
+                  COALESCE(COUNT(1), 0)::bigint AS registration_count,
+                  COALESCE(SUM(di_count), 0)::bigint AS total_di_bound,
+                  COALESCE(MIN(di_count), 0)::bigint AS min_di,
+                  COALESCE(MAX(di_count), 0)::bigint AS max_di,
+                  COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p50,
+                  COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p90,
+                  COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p99
+                FROM per_reg
+                """
+            )
+        ).mappings().one()
+        unbound_di = int(
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM product_variants
+                    WHERE registry_no IS NULL OR btrim(registry_no) = ''
+                    """
+                )
+            ).scalar()
+            or 0
+        )
+        outliers = db.execute(
+            text(
+                """
+                SELECT registry_no, COUNT(1)::bigint AS di_count
+                FROM product_variants
+                WHERE registry_no IS NOT NULL AND btrim(registry_no) <> ''
+                GROUP BY registry_no
+                HAVING COUNT(1) > :threshold
+                ORDER BY di_count DESC, registry_no ASC
+                LIMIT 100
+                """
+            ),
+            {"threshold": threshold},
+        ).mappings().all()
+
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "mode": "dry_run",
+                    "outlier_threshold": threshold,
+                    "distribution": {
+                        "registration_count": int(dist.get("registration_count") or 0),
+                        "total_di_bound": int(dist.get("total_di_bound") or 0),
+                        "min": int(dist.get("min_di") or 0),
+                        "max": int(dist.get("max_di") or 0),
+                        "p50": float(dist.get("p50") or 0),
+                        "p90": float(dist.get("p90") or 0),
+                        "p99": float(dist.get("p99") or 0),
+                    },
+                    "di_unbound_registration_count": unbound_di,
+                    "outlier_registrations": [
+                        {"registration_no": str(r.get("registry_no") or ""), "di_count": int(r.get("di_count") or 0)}
+                        for r in outliers
+                    ],
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -702,6 +1058,38 @@ def main() -> None:
         raise SystemExit(_run_nhsa_ingest(args))
     if args.cmd == 'nhsa:rollback':
         raise SystemExit(_run_nhsa_rollback(args))
+    if args.cmd == 'procurement:ingest':
+        raise SystemExit(_run_procurement_ingest(args))
+    if args.cmd == 'procurement:rollback':
+        raise SystemExit(_run_procurement_rollback(args))
+    if args.cmd == 'nmpa:snapshots':
+        raise SystemExit(_run_nmpa_snapshots(since=str(args.since)))
+    if args.cmd == 'nmpa:diffs':
+        raise SystemExit(_run_nmpa_diffs(target_date=str(args.date)))
+    if args.cmd == 'methodology:seed':
+        raise SystemExit(_run_methodology_seed(dry_run=(not bool(args.execute)), file_path=str(args.file)))
+    if args.cmd == 'methodology:map':
+        raise SystemExit(
+            _run_methodology_map(
+                dry_run=(not bool(args.execute)),
+                file_path=(str(args.file) if getattr(args, 'file', None) else None),
+                registration_nos=(list(args.registration_no) if getattr(args, 'registration_no', None) else None),
+            )
+        )
+    if args.cmd == 'registration:events':
+        raise SystemExit(
+            _run_registration_events(
+                dry_run=(not bool(args.execute)),
+                date_str=(str(args.date).strip() if getattr(args, 'date', None) else None),
+                since_str=(str(args.since).strip() if getattr(args, 'since', None) else None),
+            )
+        )
+    if args.cmd == 'source:run':
+        raise SystemExit(_run_source_runner(args))
+    if args.cmd == 'source:run-all':
+        raise SystemExit(_run_source_runner_all(args))
+    if args.cmd == 'udi:audit':
+        raise SystemExit(_run_udi_audit(args))
     if args.cmd == 'loop':
         from app.workers.loop import main as loop_main
 

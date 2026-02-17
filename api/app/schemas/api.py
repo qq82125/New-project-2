@@ -15,6 +15,7 @@ class CompanyOut(BaseModel):
 
 class ProductOut(BaseModel):
     id: UUID
+    registration_id: UUID | None = None
     # Some products only have reg_no or incomplete UDI mapping; keep API stable by allowing null.
     udi_di: str | None = None
     reg_no: str | None = None
@@ -24,6 +25,7 @@ class ProductOut(BaseModel):
     expiry_date: date | None = None
     class_name: str | None = None
     ivd_category: str | None = None
+    anchor_summary: dict | None = None
     company: CompanyOut | None = None
 
 

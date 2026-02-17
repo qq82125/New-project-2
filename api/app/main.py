@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import date as dt_date
+from datetime import datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -10,14 +13,37 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from secrets import compare_digest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import create_engine, desc, func, select, text
+from sqlalchemy import create_engine, desc, func, select, text, update
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
-from app.models import ProductRejected, RawDocument, User
+from app.models import (
+    ChangeLog,
+    Company,
+    CompanyAlias,
+    ConflictQueue,
+    MethodologyNode,
+    NmpaSnapshot,
+    PendingRecord,
+    PendingUdiLink,
+    ProcurementLot,
+    ProductUdiMap,
+    ProductVariant,
+    ProductRejected,
+    RawDocument,
+    RawSourceRecord,
+    Registration,
+    RegistrationEvent,
+    RegistrationMethodology,
+    SourceRun,
+    SourceConfig,
+    SourceDefinition,
+    User,
+)
 from app.repositories.dashboard import get_admin_stats, get_breakdown, get_radar, get_rankings, get_summary, get_trend
 from app.repositories.data_sources import (
     activate_data_source,
@@ -29,6 +55,7 @@ from app.repositories.data_sources import (
 )
 from app.repositories.company_tracking import get_company_tracking_detail, list_company_tracking
 from app.repositories.changes import get_change_detail, get_change_stats, list_recent_changes
+from app.repositories.procurement import upsert_manual_registration_map
 from app.repositories.products import admin_search_products, get_company, get_product, list_full_products, search_products
 from app.repositories.product_params import list_product_params
 from app.repositories.radar import get_admin_config, get_product_timeline, list_admin_configs, upsert_admin_config
@@ -134,6 +161,10 @@ from app.services.crypto import decrypt_json, encrypt_json
 from app.services.plan import compute_plan
 from app.services.source_audit import run_source_audit
 from app.services.data_quality import run_data_quality_audit
+from app.services.company_resolution import backfill_products_for_alias, normalize_company_name
+from app.services.methodology_v1 import map_methodologies_v1
+from app.services.normalize_keys import normalize_registration_no
+from app.services.source_contract import registration_contract_summary, upsert_registration_with_contract
 from app.pipeline.ingest import save_raw_document
 from app.services.product_params_extract import extract_params_for_raw_document, rollback_params_for_raw_document
 from app.services.supplement_sync import (
@@ -148,6 +179,15 @@ app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
 PRIMARY_SOURCE_NAME = 'NMPA注册产品库（主数据源）'
 POSTGRES_SOURCE_TYPE = 'postgres'
 LOCAL_REGISTRY_SOURCE_TYPE = 'local_registry'
+
+SOURCE_REGISTRY_LEGACY_BINDINGS: dict[str, dict[str, str]] = {
+    # role=primary means this source can become active datasource for sync primary path.
+    'NMPA_REG': {'legacy_name': PRIMARY_SOURCE_NAME, 'legacy_type': POSTGRES_SOURCE_TYPE, 'role': 'primary'},
+    # role=supplement means this source is consumed by supplement logic via configured name.
+    'UDI_DI': {'legacy_name': DEFAULT_SUPPLEMENT_SOURCE_NAME, 'legacy_type': POSTGRES_SOURCE_TYPE, 'role': 'supplement'},
+}
+
+REGISTRATION_CONFLICT_FIELDS = {'filing_no', 'approval_date', 'expiry_date', 'status'}
 
 def _settings():
     return get_settings()
@@ -342,39 +382,185 @@ def _require_debug_enabled() -> None:
         raise HTTPException(status_code=404, detail='Not found')
 
 
+def _use_registration_anchor() -> bool:
+    try:
+        return bool(getattr(_settings(), 'use_registration_anchor', False))
+    except Exception:
+        return False
+
+
 def serialize_company(company) -> CompanyOut:
     return CompanyOut(id=company.id, name=company.name, country=company.country)
 
 
-def serialize_product(product) -> ProductOut:
+def _product_attr(product, name: str, default=None):
+    return getattr(product, name, default)
+
+
+def serialize_product(product, overrides: dict | None = None) -> ProductOut:
+    ov = overrides or {}
     return ProductOut(
-        id=product.id,
-        udi_di=product.udi_di,
-        reg_no=product.reg_no,
-        name=product.name,
-        status=product.status,
-        approved_date=product.approved_date,
-        expiry_date=product.expiry_date,
-        class_name=product.class_name,
-        ivd_category=getattr(product, 'ivd_category', None),
-        company=serialize_company(product.company) if product.company else None,
+        id=_product_attr(product, 'id'),
+        registration_id=ov.get('registration_id', _product_attr(product, 'registration_id')),
+        udi_di=ov.get('udi_di', _product_attr(product, 'udi_di')),
+        reg_no=ov.get('reg_no', _product_attr(product, 'reg_no')),
+        name=ov.get('name', _product_attr(product, 'name')),
+        status=ov.get('status', _product_attr(product, 'status')),
+        approved_date=ov.get('approved_date', _product_attr(product, 'approved_date')),
+        expiry_date=ov.get('expiry_date', _product_attr(product, 'expiry_date')),
+        class_name=ov.get('class_name', _product_attr(product, 'class_name')),
+        ivd_category=ov.get('ivd_category', _product_attr(product, 'ivd_category', None)),
+        anchor_summary=ov.get('anchor_summary', None),
+        company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
 
 
-def serialize_product_limited(product) -> ProductOut:
+def serialize_product_limited(product, overrides: dict | None = None) -> ProductOut:
     # Keep schema stable but trim optional fields for Free users (summary view).
+    ov = overrides or {}
     return ProductOut(
-        id=product.id,
-        udi_di=product.udi_di,
-        reg_no=product.reg_no,
-        name=product.name,
-        status=product.status,
+        id=_product_attr(product, 'id'),
+        registration_id=ov.get('registration_id', _product_attr(product, 'registration_id')),
+        udi_di=ov.get('udi_di', _product_attr(product, 'udi_di')),
+        reg_no=ov.get('reg_no', _product_attr(product, 'reg_no')),
+        name=ov.get('name', _product_attr(product, 'name')),
+        status=ov.get('status', _product_attr(product, 'status')),
         approved_date=None,
-        expiry_date=product.expiry_date,
+        expiry_date=ov.get('expiry_date', _product_attr(product, 'expiry_date')),
         class_name=None,
-        ivd_category=getattr(product, 'ivd_category', None),
-        company=serialize_company(product.company) if product.company else None,
+        ivd_category=ov.get('ivd_category', _product_attr(product, 'ivd_category', None)),
+        anchor_summary=ov.get('anchor_summary', None),
+        company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
+
+
+def _resolve_registration_by_no(db: Session, reg_no: str | None) -> Registration | None:
+    raw = str(reg_no or '').strip()
+    if not raw:
+        return None
+    exact = db.scalar(select(Registration).where(Registration.registration_no == raw))
+    if exact is not None:
+        return exact
+
+    norm = normalize_registration_no(raw)
+    if not norm:
+        return None
+    stmt = text(
+        """
+        SELECT id
+        FROM registrations
+        WHERE regexp_replace(upper(coalesce(registration_no, '')), '[^0-9A-Z一-龥]+', '', 'g') = :n
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """
+    )
+    rid = db.execute(stmt, {'n': norm}).scalar_one_or_none()
+    if rid is None:
+        return None
+    try:
+        return db.get(Registration, UUID(str(rid)))
+    except Exception:
+        return None
+
+
+def _resolve_registration_anchor_context(db: Session, product) -> dict | None:
+    reg: Registration | None = None
+    source = 'none'
+    pid = _product_attr(product, 'id')
+    product_reg_id = _product_attr(product, 'registration_id')
+    if product_reg_id:
+        reg = db.get(Registration, product_reg_id)
+        if reg is not None:
+            source = 'products.registration_id'
+
+    candidate_nos: list[str] = []
+    p_reg_no = str(_product_attr(product, 'reg_no') or '').strip()
+    if p_reg_no:
+        candidate_nos.append(p_reg_no)
+    if pid:
+        var_nos = db.scalars(
+            select(ProductVariant.registry_no)
+            .where(ProductVariant.product_id == pid, ProductVariant.registry_no.is_not(None))
+            .order_by(ProductVariant.updated_at.desc())
+            .limit(20)
+        ).all()
+        for no in var_nos:
+            v = str(no or '').strip()
+            if v:
+                candidate_nos.append(v)
+
+    if reg is None and p_reg_no:
+        norm = normalize_registration_no(p_reg_no)
+        if norm:
+            var_match_nos = db.scalars(
+                text(
+                    """
+                    SELECT registry_no
+                    FROM product_variants
+                    WHERE registry_no IS NOT NULL
+                      AND regexp_replace(upper(coalesce(registry_no, '')), '[^0-9A-Z一-龥]+', '', 'g') = :n
+                    ORDER BY updated_at DESC
+                    LIMIT 20
+                    """
+                ),
+                {'n': norm},
+            ).all()
+            for no in var_match_nos:
+                v = str(no or '').strip()
+                if v:
+                    candidate_nos.append(v)
+
+    if reg is None:
+        seen: set[str] = set()
+        for no in candidate_nos:
+            key = normalize_registration_no(no) or no
+            if key in seen:
+                continue
+            seen.add(key)
+            reg = _resolve_registration_by_no(db, no)
+            if reg is not None:
+                source = 'reg_no_or_variant'
+                break
+
+    if reg is None:
+        return None
+
+    snap_row = db.execute(
+        select(func.max(NmpaSnapshot.snapshot_date), func.count(NmpaSnapshot.id)).where(NmpaSnapshot.registration_id == reg.id)
+    ).first()
+    latest_snap = (snap_row[0] if snap_row else None)
+    snap_count = int((snap_row[1] if snap_row else 0) or 0)
+    ev_row = db.execute(
+        select(func.max(RegistrationEvent.event_date), func.count(RegistrationEvent.id)).where(
+            RegistrationEvent.registration_id == reg.id
+        )
+    ).first()
+    latest_event_date = (ev_row[0] if ev_row else None)
+    event_count = int((ev_row[1] if ev_row else 0) or 0)
+    latest_event_type = db.scalar(
+        select(RegistrationEvent.event_type)
+        .where(RegistrationEvent.registration_id == reg.id)
+        .order_by(RegistrationEvent.event_date.desc(), RegistrationEvent.created_at.desc())
+        .limit(1)
+    )
+
+    return {
+        'registration_id': reg.id,
+        'reg_no': reg.registration_no,
+        'status': reg.status or _product_attr(product, 'status'),
+        'approved_date': reg.approval_date or _product_attr(product, 'approved_date'),
+        'expiry_date': reg.expiry_date or _product_attr(product, 'expiry_date'),
+        'anchor_summary': {
+            'enabled': True,
+            'source': source,
+            'snapshot_count': snap_count,
+            'latest_snapshot_date': (latest_snap.isoformat() if latest_snap else None),
+            'event_count': event_count,
+            'latest_event_date': (latest_event_date.isoformat() if latest_event_date else None),
+            'latest_event_type': (str(latest_event_type) if latest_event_type else None),
+            'candidate_reg_nos': candidate_nos[:10],
+        },
+    }
 
 
 def _require_admin(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -460,6 +646,7 @@ def bootstrap_admin() -> None:
                     'interval_hours': max(1, int(sched_raw.get('interval_hours', 24) or 24)),
                     'batch_size': max(50, int(sched_raw.get('batch_size', 1000) or 1000)),
                     'recent_hours': max(1, int(sched_raw.get('recent_hours', 72) or 72)),
+                    'source_key': str(sched_raw.get('source_key') or 'UDI_DI').strip().upper() or 'UDI_DI',
                     'source_name': (supplement.name if supplement else DEFAULT_SUPPLEMENT_SOURCE_NAME),
                     'nmpa_query_enabled': bool(sched_raw.get('nmpa_query_enabled', True)),
                     'nmpa_query_interval_hours': max(1, int(sched_raw.get('nmpa_query_interval_hours', 24) or 24)),
@@ -478,6 +665,7 @@ def bootstrap_admin() -> None:
             db,
             'ivd_scope_policy',
             {
+                'sync_mode': 'nmpa_udi',
                 'primary_source': PRIMARY_SOURCE_NAME,
                 'supplement_source': DEFAULT_SUPPLEMENT_SOURCE_NAME,
                 'allowlist': list(IVD_SCOPE_ALLOWLIST),
@@ -1096,9 +1284,12 @@ def product_detail(
     product = get_product(db, product_id)
     if not product:
         raise HTTPException(status_code=404, detail='Product not found')
+    overrides: dict | None = None
+    if _use_registration_anchor():
+        overrides = _resolve_registration_anchor_context(db, product)
     if effective_mode == 'limited' and not plan_is_pro:
-        return _ok(serialize_product_limited(product))
-    return _ok(serialize_product(product))
+        return _ok(serialize_product_limited(product, overrides=overrides))
+    return _ok(serialize_product(product, overrides=overrides))
 
 
 @app.get('/api/products/{product_id}/params', response_model=ApiResponseProductParams)
@@ -1430,6 +1621,255 @@ def admin_get_last_source_supplement(
     return _ok({'report': (cfg.config_value if cfg else None)})
 
 
+@app.get('/api/admin/source-supplement/runs')
+def admin_list_source_supplement_runs(
+    limit: int = Query(default=20, ge=1, le=200),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    rows = db.scalars(
+        select(SourceRun)
+        .where(SourceRun.source == 'nmpa_supplement')
+        .order_by(desc(SourceRun.started_at))
+        .limit(int(limit))
+    ).all()
+    items: list[dict] = []
+    for r in rows:
+        notes = getattr(r, 'source_notes', None) or {}
+        if not isinstance(notes, dict):
+            notes = {}
+        items.append(
+            {
+                'run_id': int(r.id),
+                'source': str(r.source),
+                'status': str(r.status),
+                'message': (str(r.message) if getattr(r, 'message', None) is not None else None),
+                'records_total': int(getattr(r, 'records_total', 0) or 0),
+                'records_success': int(getattr(r, 'records_success', 0) or 0),
+                'records_failed': int(getattr(r, 'records_failed', 0) or 0),
+                'matched_by_udi_di': int(notes.get('matched_by_udi_di', 0) or 0),
+                'matched_by_reg_no': int(notes.get('matched_by_reg_no', 0) or 0),
+                'updated_by_udi_di': int(notes.get('updated_by_udi_di', 0) or 0),
+                'updated_by_reg_no': int(notes.get('updated_by_reg_no', 0) or 0),
+                'missing_identifier': int(notes.get('missing_identifier', 0) or 0),
+                'missing_local': int(notes.get('missing_local', 0) or 0),
+                'source_query_used': bool(notes.get('source_query_used', False)),
+                'source_table': notes.get('source_table'),
+                'source_name': notes.get('source_name'),
+                'source_id': notes.get('source_id'),
+                'started_at': getattr(r, 'started_at', None),
+                'finished_at': getattr(r, 'finished_at', None),
+            }
+        )
+    return _ok({'items': items, 'count': len(items)})
+
+
+@app.get('/api/admin/source-contract/conflicts')
+def admin_source_contract_conflicts(
+    date: dt_date | None = Query(default=None),
+    since: dt_date | None = Query(default=None),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    if date is not None and since is not None:
+        raise HTTPException(status_code=400, detail='date and since are mutually exclusive')
+    today = dt_date.today()
+    if since is not None:
+        start = datetime.combine(since, datetime.min.time())
+        end = datetime.combine(today, datetime.min.time()) + timedelta(days=1)
+    else:
+        target = date or today
+        start = datetime.combine(target, datetime.min.time())
+        end = start + timedelta(days=1)
+    report = registration_contract_summary(db, start=start, end=end)
+    if since is not None:
+        report['since'] = since.isoformat()
+        report['date'] = None
+    else:
+        report['date'] = (date or today).isoformat()
+        report['since'] = None
+    return _ok({"report": report})
+
+
+@app.get('/api/admin/conflicts-queue')
+def admin_list_conflicts_queue(
+    status: str = Query(default='open'),
+    limit: int = Query(default=100, ge=1, le=500),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    status_norm = str(status or 'open').strip().lower()
+    q = select(ConflictQueue).order_by(desc(ConflictQueue.created_at)).limit(int(limit))
+    if status_norm != 'all':
+        if status_norm not in {'open', 'resolved'}:
+            raise HTTPException(status_code=400, detail='status must be open/resolved/all')
+        q = q.where(ConflictQueue.status == status_norm)
+    rows = db.scalars(q).all()
+    return _ok(
+        {
+            'items': [
+                {
+                    'id': str(r.id),
+                    'registration_no': r.registration_no,
+                    'registration_id': (str(r.registration_id) if r.registration_id else None),
+                    'field_name': r.field_name,
+                    'candidates': (r.candidates if isinstance(r.candidates, list) else []),
+                    'status': r.status,
+                    'winner_value': r.winner_value,
+                    'winner_source_key': r.winner_source_key,
+                    'source_run_id': r.source_run_id,
+                    'resolved_by': r.resolved_by,
+                    'resolved_at': r.resolved_at,
+                    'created_at': r.created_at,
+                    'updated_at': r.updated_at,
+                }
+                for r in rows
+            ],
+            'count': len(rows),
+            'status': status_norm,
+        }
+    )
+
+
+@app.get('/api/admin/conflicts')
+def admin_list_conflicts(
+    status: str = Query(default='open'),
+    limit: int = Query(default=100, ge=1, le=500),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    # Backward-compatible alias of /api/admin/conflicts-queue.
+    return admin_list_conflicts_queue(status=status, limit=limit, _admin=_admin, db=db)
+
+
+@app.post('/api/admin/conflicts-queue/{conflict_id}/resolve')
+def admin_resolve_conflict_queue(
+    conflict_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.get(ConflictQueue, conflict_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail='conflict not found')
+    if str(row.status or '').lower() == 'resolved':
+        raise HTTPException(status_code=409, detail='conflict already resolved')
+
+    field_name = str(row.field_name or '').strip()
+    if field_name not in REGISTRATION_CONFLICT_FIELDS:
+        raise HTTPException(status_code=400, detail=f'unsupported field_name: {field_name}')
+
+    winner_value = str(payload.get('winner_value') or '').strip()
+    if not winner_value:
+        raise HTTPException(status_code=400, detail='winner_value is required')
+    winner_source_key = str(payload.get('winner_source_key') or 'MANUAL').strip().upper() or 'MANUAL'
+
+    reg_no = normalize_registration_no(str(row.registration_no or ''))
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+    if reg is None:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    before = {
+        'registration_no': reg.registration_no,
+        'filing_no': (str(reg.filing_no) if reg.filing_no is not None else None),
+        'approval_date': (reg.approval_date.isoformat() if reg.approval_date is not None else None),
+        'expiry_date': (reg.expiry_date.isoformat() if reg.expiry_date is not None else None),
+        'status': (str(reg.status) if reg.status is not None else None),
+    }
+
+    old_val = before.get(field_name)
+    if field_name in {'approval_date', 'expiry_date'}:
+        try:
+            parsed = dt_date.fromisoformat(winner_value[:10])
+        except Exception:
+            raise HTTPException(status_code=400, detail='winner_value must be ISO date for approval_date/expiry_date')
+        setattr(reg, field_name, parsed)
+        winner_store = parsed.isoformat()
+    else:
+        setattr(reg, field_name, winner_value)
+        winner_store = winner_value
+
+    raw_json = reg.raw_json if isinstance(reg.raw_json, dict) else {}
+    prov = raw_json.get('_contract_provenance') if isinstance(raw_json.get('_contract_provenance'), dict) else {}
+    prov[field_name] = {
+        'source': winner_source_key,
+        'source_run_id': row.source_run_id,
+        'evidence_grade': 'A',
+        'source_priority': 0,
+        'observed_at': datetime.now().isoformat(),
+        'raw_source_record_id': None,
+    }
+    raw_json['_contract_provenance'] = prov
+    reg.raw_json = raw_json
+    db.add(reg)
+
+    after = {
+        'registration_no': reg.registration_no,
+        'filing_no': (str(reg.filing_no) if reg.filing_no is not None else None),
+        'approval_date': (reg.approval_date.isoformat() if reg.approval_date is not None else None),
+        'expiry_date': (reg.expiry_date.isoformat() if reg.expiry_date is not None else None),
+        'status': (str(reg.status) if reg.status is not None else None),
+    }
+    db.add(
+        ChangeLog(
+            product_id=None,
+            entity_type='registration',
+            entity_id=reg.id,
+            change_type='update',
+            changed_fields={field_name: {'old': old_val, 'new': winner_store}},
+            before_json=before,
+            after_json=after,
+            before_raw=before,
+            after_raw={
+                '_contract_meta': {
+                    'source': winner_source_key,
+                    'source_key': winner_source_key,
+                    'source_run_id': row.source_run_id,
+                    'evidence_grade': 'A',
+                    'source_priority': 0,
+                    'observed_at': datetime.now().isoformat(),
+                    'raw_source_record_id': None,
+                    'resolution': 'manual_conflict_queue',
+                    'conflict_queue_id': str(row.id),
+                }
+            },
+            source_run_id=row.source_run_id,
+        )
+    )
+
+    row.status = 'resolved'
+    row.winner_value = winner_store
+    row.winner_source_key = winner_source_key
+    row.resolved_by = (str(getattr(admin, 'email', '') or '') or 'admin')
+    row.resolved_at = datetime.now()
+    db.add(row)
+    db.commit()
+
+    return _ok(
+        {
+            'id': str(row.id),
+            'registration_no': reg.registration_no,
+            'field_name': field_name,
+            'winner_value': winner_store,
+            'winner_source_key': winner_source_key,
+            'status': row.status,
+            'resolved_by': row.resolved_by,
+            'resolved_at': row.resolved_at,
+        }
+    )
+
+
+@app.post('/api/admin/conflicts/{conflict_id}/resolve')
+def admin_resolve_conflict(
+    conflict_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    # Backward-compatible alias of /api/admin/conflicts-queue/{id}/resolve.
+    return admin_resolve_conflict_queue(conflict_id=conflict_id, payload=payload, admin=admin, db=db)
+
+
 @app.post('/api/admin/source-nmpa-query/run')
 def admin_run_source_nmpa_query(
     _admin: User = Depends(_require_admin_user),
@@ -1468,6 +1908,533 @@ def admin_get_last_data_quality_audit(
     return _ok({'report': (cfg.config_value if cfg else None)})
 
 
+@app.get('/api/admin/company-aliases')
+def admin_list_company_aliases(
+    query: str | None = Query(default=None),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    q = select(CompanyAlias).order_by(CompanyAlias.updated_at.desc())
+    qtext = (query or '').strip()
+    if qtext:
+        q = q.where(CompanyAlias.alias_name.ilike(f'%{qtext}%'))
+    rows = db.scalars(q.limit(200)).all()
+    items = []
+    # Best-effort: include company name for convenience.
+    for a in rows:
+        c = db.get(Company, getattr(a, 'company_id', None))
+        items.append(
+            {
+                'id': str(a.id),
+                'alias_name': a.alias_name,
+                'company_id': str(a.company_id),
+                'company_name': (c.name if c else None),
+                'confidence': float(getattr(a, 'confidence', 0.0) or 0.0),
+                'source': str(getattr(a, 'source', '') or ''),
+                'created_at': getattr(a, 'created_at', None),
+                'updated_at': getattr(a, 'updated_at', None),
+            }
+        )
+    return _ok({'items': items, 'count': len(items)})
+
+
+@app.post('/api/admin/company-aliases')
+def admin_upsert_company_alias(
+    background_tasks: BackgroundTasks,
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    alias_raw = str(payload.get('alias_name') or '').strip()
+    if not alias_raw:
+        raise HTTPException(status_code=400, detail='alias_name is required')
+
+    alias_name = normalize_company_name(alias_raw)
+    if not alias_name:
+        raise HTTPException(status_code=400, detail='alias_name is invalid after normalization')
+
+    company_id_raw = str(payload.get('company_id') or '').strip()
+    if not company_id_raw:
+        raise HTTPException(status_code=400, detail='company_id is required')
+    try:
+        company_id = UUID(company_id_raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail='company_id must be a UUID')
+
+    company = db.get(Company, company_id)
+    if not company:
+        raise HTTPException(status_code=404, detail='company not found')
+
+    source = str(payload.get('source') or 'manual').strip().lower() or 'manual'
+    if source not in {'rule', 'manual', 'import'}:
+        raise HTTPException(status_code=400, detail='source must be one of: rule/manual/import')
+
+    try:
+        confidence = float(payload.get('confidence', 0.8))
+    except Exception:
+        confidence = 0.8
+    confidence = max(0.0, min(1.0, confidence))
+
+    stmt = insert(CompanyAlias).values(
+        alias_name=alias_name,
+        company_id=company_id,
+        confidence=confidence,
+        source=source,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[CompanyAlias.alias_name],
+        set_={
+            'company_id': stmt.excluded.company_id,
+            'confidence': stmt.excluded.confidence,
+            'source': stmt.excluded.source,
+            'updated_at': func.now(),
+        },
+    ).returning(CompanyAlias)
+
+    alias_row = db.execute(stmt).scalar_one()
+    db.commit()
+
+    # Best-effort: rebind affected products in the background.
+    background_tasks.add_task(backfill_products_for_alias, alias_name=alias_name, company_id=company_id)
+
+    return _ok(
+        {
+            'id': str(alias_row.id),
+            'alias_name': alias_row.alias_name,
+            'company_id': str(alias_row.company_id),
+            'company_name': company.name,
+            'confidence': float(getattr(alias_row, 'confidence', 0.0) or 0.0),
+            'source': str(getattr(alias_row, 'source', '') or ''),
+        }
+    )
+
+
+@app.get('/api/admin/pending')
+def admin_list_pending_records(
+    status: str = Query(default='open'),
+    limit: int = Query(default=100, ge=1, le=500),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    status_norm = str(status or 'open').strip().lower()
+    q = select(PendingRecord).order_by(desc(PendingRecord.created_at)).limit(int(limit))
+    if status_norm != 'all':
+        if status_norm not in {'open', 'resolved', 'ignored', 'pending'}:
+            raise HTTPException(status_code=400, detail='status must be open/resolved/ignored/pending/all')
+        q = q.where(PendingRecord.status == status_norm)
+    rows = db.scalars(q).all()
+    return _ok(
+        {
+            'items': [
+                {
+                    'id': str(r.id),
+                    'source_key': r.source_key,
+                    'source_run_id': int(r.source_run_id),
+                    'raw_document_id': str(r.raw_document_id),
+                    'reason_code': r.reason_code,
+                    'candidate_registry_no': r.candidate_registry_no,
+                    'candidate_company': r.candidate_company,
+                    'candidate_product_name': r.candidate_product_name,
+                    'status': r.status,
+                    'created_at': r.created_at,
+                    'updated_at': r.updated_at,
+                }
+                for r in rows
+            ],
+            'count': len(rows),
+            'status': status_norm,
+        }
+    )
+
+
+@app.post('/api/admin/pending/{pending_id}/resolve')
+def admin_resolve_pending_record(
+    pending_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    rec = db.get(PendingRecord, pending_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail='pending record not found')
+    if str(rec.status or '').lower() == 'resolved':
+        raise HTTPException(status_code=409, detail='pending record already resolved')
+
+    reg_no = normalize_registration_no(str(payload.get('registration_no') or '').strip())
+    if not reg_no:
+        raise HTTPException(status_code=400, detail='registration_no is required')
+
+    upsert_registration_with_contract(
+        db,
+        registration_no=reg_no,
+        incoming_fields={},
+        source='ADMIN_PENDING_RESOLVE',
+        source_run_id=int(rec.source_run_id),
+        evidence_grade='A',
+        source_priority=1,
+        observed_at=datetime.now(),
+        raw_source_record_id=None,
+        raw_payload={'pending_record_id': str(rec.id), 'source_key': rec.source_key},
+        write_change_log=True,
+    )
+
+    # Best-effort binding for UDI-like payloads: map DI to normalized registration_no when DI exists in reason.raw.
+    try:
+        parsed_reason = json.loads(rec.reason) if rec.reason else {}
+    except Exception:
+        parsed_reason = {}
+    raw_obj = parsed_reason.get('raw') if isinstance(parsed_reason, dict) else {}
+    di = None
+    if isinstance(raw_obj, dict):
+        di = str(raw_obj.get('di') or raw_obj.get('udi_di') or '').strip() or None
+    if di:
+        stmt = insert(ProductVariant).values(
+            di=di,
+            registry_no=reg_no,
+            product_id=None,
+            product_name=(rec.candidate_product_name or (raw_obj.get('product_name') if isinstance(raw_obj, dict) else None)),
+            model_spec=(raw_obj.get('model_spec') if isinstance(raw_obj, dict) else None),
+            packaging=(raw_obj.get('packaging') if isinstance(raw_obj, dict) else None),
+            manufacturer=(rec.candidate_company or (raw_obj.get('company_name') if isinstance(raw_obj, dict) else None)),
+            is_ivd=True,
+            ivd_category=(raw_obj.get('ivd_category') if isinstance(raw_obj, dict) else None),
+            ivd_version='source_runner_v1',
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ProductVariant.di],
+            set_={
+                'registry_no': stmt.excluded.registry_no,
+                'product_name': stmt.excluded.product_name,
+                'manufacturer': stmt.excluded.manufacturer,
+                'is_ivd': stmt.excluded.is_ivd,
+                'ivd_version': stmt.excluded.ivd_version,
+                'updated_at': text('NOW()'),
+            },
+        )
+        db.execute(stmt)
+
+    rec.candidate_registry_no = reg_no
+    rec.status = 'resolved'
+    rec.updated_at = datetime.now()
+    db.add(rec)
+    db.commit()
+
+    return _ok(
+        {
+            'id': str(rec.id),
+            'status': rec.status,
+            'source_key': rec.source_key,
+            'registration_no': reg_no,
+            'resolved_by': str(getattr(admin, 'email', '') or ''),
+            'updated_at': rec.updated_at,
+        }
+    )
+
+
+@app.get('/api/admin/udi/pending-links')
+def admin_list_pending_udi_links(
+    status: str = Query(default='PENDING'),
+    limit: int = Query(default=100, ge=1, le=500),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    status_norm = str(status or 'PENDING').strip().upper()
+    q = select(PendingUdiLink).order_by(PendingUdiLink.created_at.desc()).limit(int(limit))
+    if status_norm and status_norm != 'ALL':
+        q = q.where(PendingUdiLink.status == status_norm)
+    rows = db.scalars(q).all()
+
+    items: list[dict] = []
+    for p in rows:
+        raw_id = getattr(p, 'raw_source_record_id', None) or getattr(p, 'raw_id', None)
+        raw_rec = db.get(RawSourceRecord, raw_id) if raw_id else None
+        items.append(
+            {
+                'id': str(p.id),
+                'di': str(getattr(p, 'di', '') or ''),
+                'status': str(getattr(p, 'status', '') or ''),
+                'reason': str(getattr(p, 'reason', '') or ''),
+                'reason_code': (str(getattr(p, 'reason_code', '') or '') or None),
+                'raw_id': (str(getattr(p, 'raw_id', None)) if getattr(p, 'raw_id', None) else None),
+                'raw_source_record_id': (
+                    str(getattr(p, 'raw_source_record_id', None))
+                    if getattr(p, 'raw_source_record_id', None)
+                    else None
+                ),
+                'candidate_company_name': getattr(p, 'candidate_company_name', None),
+                'candidate_product_name': getattr(p, 'candidate_product_name', None),
+                'retry_count': int(getattr(p, 'retry_count', 0) or 0),
+                'next_retry_at': getattr(p, 'next_retry_at', None),
+                'resolved_at': getattr(p, 'resolved_at', None),
+                'resolved_by': getattr(p, 'resolved_by', None),
+                'created_at': getattr(p, 'created_at', None),
+                'updated_at': getattr(p, 'updated_at', None),
+                'raw_payload': (raw_rec.payload if raw_rec is not None else None),
+            }
+        )
+    return _ok({'items': items, 'count': len(items), 'status': status_norm})
+
+
+@app.post('/api/admin/udi/pending-links/{pending_id}/bind')
+def admin_bind_pending_udi_link(
+    pending_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    pending = db.get(PendingUdiLink, pending_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail='pending_udi_link not found')
+
+    reg_no = normalize_registration_no(str(payload.get('registration_no') or '').strip())
+    if not reg_no:
+        raise HTTPException(status_code=400, detail='registration_no is required')
+
+    di = str(getattr(pending, 'di', '') or '').strip()
+    if not di:
+        raise HTTPException(status_code=400, detail='di is required')
+
+    try:
+        confidence = float(payload.get('confidence', 0.95))
+    except Exception:
+        confidence = 0.95
+    confidence = max(0.0, min(1.0, confidence))
+
+    raw_id = getattr(pending, 'raw_source_record_id', None) or getattr(pending, 'raw_id', None)
+    reg_res = upsert_registration_with_contract(
+        db,
+        registration_no=reg_no,
+        incoming_fields={},
+        source='ADMIN_UDI_BIND',
+        source_run_id=None,
+        evidence_grade='A',
+        source_priority=1,
+        observed_at=datetime.now(),
+        raw_source_record_id=raw_id,
+        raw_payload={'manual_bind': True, 'pending_id': str(pending.id), 'di': di},
+        write_change_log=True,
+    )
+
+    # Keep DI tied to one canonical registration_no.
+    db.execute(
+        text("DELETE FROM product_udi_map WHERE di = :di AND registration_no <> :registration_no"),
+        {'di': di, 'registration_no': reg_res.registration_no},
+    )
+    stmt = insert(ProductUdiMap).values(
+        registration_no=reg_res.registration_no,
+        di=di,
+        source='ADMIN_UDI_BIND',
+        match_type='manual',
+        confidence=confidence,
+        raw_source_record_id=raw_id,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[ProductUdiMap.registration_no, ProductUdiMap.di],
+        set_={
+            'source': stmt.excluded.source,
+            'match_type': stmt.excluded.match_type,
+            'confidence': stmt.excluded.confidence,
+            'raw_source_record_id': stmt.excluded.raw_source_record_id,
+            'updated_at': text('NOW()'),
+        },
+    )
+    db.execute(stmt)
+
+    pending.status = 'RESOLVED'
+    pending.resolved_at = datetime.now()
+    pending.resolved_by = (str(getattr(admin, 'email', '') or '') or 'admin')
+    db.add(pending)
+    db.commit()
+
+    return _ok(
+        {
+            'pending_id': str(pending.id),
+            'di': di,
+            'registration_no': reg_res.registration_no,
+            'match_type': 'manual',
+            'confidence': confidence,
+            'status': pending.status,
+        }
+    )
+
+
+@app.get('/api/admin/registrations/{registration_no}/methodologies')
+def admin_get_registration_methodologies(
+    registration_no: str,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    reg_no = (registration_no or '').strip()
+    if not reg_no:
+        raise HTTPException(status_code=400, detail='registration_no is required')
+
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+    if not reg:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    rows = db.execute(
+        select(RegistrationMethodology, MethodologyNode)
+        .join(MethodologyNode, MethodologyNode.id == RegistrationMethodology.methodology_id)
+        .where(RegistrationMethodology.registration_id == reg.id)
+        .order_by(RegistrationMethodology.confidence.desc(), MethodologyNode.level.asc(), MethodologyNode.name.asc())
+    ).all()
+
+    items = []
+    for rm, mn in rows:
+        items.append(
+            {
+                'id': str(rm.id),
+                'registration_id': str(rm.registration_id),
+                'registration_no': reg.registration_no,
+                'methodology_id': str(mn.id),
+                'methodology_name': mn.name,
+                'parent_id': (str(mn.parent_id) if mn.parent_id else None),
+                'level': int(getattr(mn, 'level', 0) or 0),
+                'synonyms': (mn.synonyms if isinstance(getattr(mn, 'synonyms', None), list) else []),
+                'is_active': bool(getattr(mn, 'is_active', True)),
+                'confidence': float(getattr(rm, 'confidence', 0.0) or 0.0),
+                'source': str(getattr(rm, 'source', '') or ''),
+                'created_at': getattr(rm, 'created_at', None),
+                'updated_at': getattr(rm, 'updated_at', None),
+            }
+        )
+    return _ok({'items': items, 'count': len(items)})
+
+
+@app.post('/api/admin/registrations/{registration_no}/methodologies')
+def admin_set_registration_methodologies(
+    registration_no: str,
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    reg_no = (registration_no or '').strip()
+    if not reg_no:
+        raise HTTPException(status_code=400, detail='registration_no is required')
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+    if not reg:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    items = payload.get('items')
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail='payload.items must be a list')
+
+    delete_ids = payload.get('delete_methodology_ids')
+    if delete_ids is None:
+        delete_ids = []
+    if not isinstance(delete_ids, list):
+        raise HTTPException(status_code=400, detail='delete_methodology_ids must be a list')
+    delete_set = {str(x).strip() for x in delete_ids if str(x).strip()}
+
+    upserts = 0
+    deletes = 0
+
+    # Upsert rows.
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        mid_raw = str(it.get('methodology_id') or '').strip()
+        if not mid_raw:
+            continue
+        try:
+            mid = UUID(mid_raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f'invalid methodology_id: {mid_raw}')
+
+        node = db.get(MethodologyNode, mid)
+        if not node:
+            raise HTTPException(status_code=404, detail=f'methodology node not found: {mid_raw}')
+
+        try:
+            confidence = float(it.get('confidence', 0.8))
+        except Exception:
+            confidence = 0.8
+        confidence = max(0.0, min(1.0, confidence))
+
+        source = str(it.get('source') or 'manual').strip().lower() or 'manual'
+        if source not in {'rule', 'manual'}:
+            raise HTTPException(status_code=400, detail='source must be one of: rule/manual')
+
+        stmt = insert(RegistrationMethodology).values(
+            registration_id=reg.id,
+            methodology_id=mid,
+            confidence=confidence,
+            source=source,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[RegistrationMethodology.registration_id, RegistrationMethodology.methodology_id],
+            set_={
+                'confidence': stmt.excluded.confidence,
+                'source': stmt.excluded.source,
+                'updated_at': func.now(),
+            },
+        )
+        db.execute(stmt)
+        upserts += 1
+        if mid_raw in delete_set:
+            delete_set.discard(mid_raw)
+
+    # Delete requested mappings.
+    if delete_set:
+        for mid_raw in list(delete_set):
+            try:
+                mid = UUID(mid_raw)
+            except Exception:
+                continue
+            res = db.execute(
+                text(
+                    "DELETE FROM registration_methodologies WHERE registration_id = :rid AND methodology_id = :mid"
+                ),
+                {"rid": str(reg.id), "mid": str(mid)},
+            )
+            deletes += int(getattr(res, 'rowcount', 0) or 0)
+
+    db.commit()
+    return _ok({'ok': True, 'registration_no': reg.registration_no, 'upserts': upserts, 'deletes': deletes})
+
+
+@app.post('/api/admin/procurement/lots/{lot_id}/map-registration')
+def admin_map_procurement_lot_registration(
+    lot_id: str,
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    lot_id_s = (lot_id or '').strip()
+    if not lot_id_s:
+        raise HTTPException(status_code=400, detail='lot_id is required')
+    try:
+        lot_uuid = UUID(lot_id_s)
+    except Exception:
+        raise HTTPException(status_code=400, detail='lot_id must be a UUID')
+
+    lot = db.get(ProcurementLot, lot_uuid)
+    if lot is None:
+        raise HTTPException(status_code=404, detail='procurement lot not found')
+
+    reg_no = str(payload.get('registration_no') or '').strip()
+    if not reg_no:
+        raise HTTPException(status_code=400, detail='registration_no is required')
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no))
+    if reg is None:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    try:
+        confidence = float(payload.get('confidence', 0.95))
+    except Exception:
+        confidence = 0.95
+    confidence = max(0.0, min(1.0, confidence))
+
+    out = upsert_manual_registration_map(
+        db,
+        lot_id=lot_uuid,
+        registration_id=reg.id,
+        confidence=confidence,
+    )
+    out['registration_no'] = reg.registration_no
+    return _ok(out)
+
+
 def _ds_preview(cfg: dict) -> dict:
     return {
         'folder': cfg.get('folder') or '',
@@ -1480,11 +2447,22 @@ def _ds_preview(cfg: dict) -> dict:
         'sslmode': cfg.get('sslmode'),
         'source_table': cfg.get('source_table') or 'public.products',
         'source_query': cfg.get('source_query') or None,
+        'source_priority': int(cfg.get('source_priority') or 100),
+        'default_evidence_grade': str(cfg.get('default_evidence_grade') or 'C'),
+        'enforce_registration_anchor': bool(cfg.get('enforce_registration_anchor', True)),
+        'allow_without_registration_no': bool(cfg.get('allow_without_registration_no', False)),
+        'pending_queue_name': (str(cfg.get('pending_queue_name')).strip() if cfg.get('pending_queue_name') else None),
     }
 
 
 def _normalize_data_source_config(type_: str, cfg: dict) -> dict:
     if type_ == POSTGRES_SOURCE_TYPE:
+        grade_raw = str(cfg.get('default_evidence_grade') or 'C').strip().upper()
+        default_grade = grade_raw if grade_raw in {'A', 'B', 'C', 'D'} else 'C'
+        try:
+            source_priority = int(cfg.get('source_priority') or 100)
+        except Exception:
+            source_priority = 100
         return {
             'host': str(cfg.get('host') or '').strip(),
             'port': int(cfg.get('port') or 5432),
@@ -1494,6 +2472,11 @@ def _normalize_data_source_config(type_: str, cfg: dict) -> dict:
             'sslmode': (str(cfg.get('sslmode')).strip() if cfg.get('sslmode') not in {None, ''} else None),
             'source_table': str(cfg.get('source_table') or 'public.products').strip() or 'public.products',
             'source_query': (str(cfg.get('source_query')).strip() if cfg.get('source_query') not in {None, ''} else None),
+            'source_priority': source_priority,
+            'default_evidence_grade': default_grade,
+            'enforce_registration_anchor': bool(cfg.get('enforce_registration_anchor', True)),
+            'allow_without_registration_no': bool(cfg.get('allow_without_registration_no', False)),
+            'pending_queue_name': (str(cfg.get('pending_queue_name')).strip() if cfg.get('pending_queue_name') else None),
         }
     if type_ == LOCAL_REGISTRY_SOURCE_TYPE:
         folder = str(cfg.get('folder') or '').strip()
@@ -1516,6 +2499,168 @@ def _ds_out(ds, cfg: dict) -> dict:
         'is_active': bool(ds.is_active),
         'updated_at': ds.updated_at,
         'config_preview': _ds_preview(cfg),
+    }
+
+
+def _json_dict_or_400(v: object, *, field: str) -> dict:
+    if v is None:
+        return {}
+    if isinstance(v, dict):
+        return v
+    raise HTTPException(status_code=400, detail=f'{field} must be an object')
+
+
+def _source_item(defn: SourceDefinition, cfg: SourceConfig | None) -> dict:
+    if cfg is None:
+        config = {
+            'id': None,
+            'enabled': bool(defn.enabled_by_default),
+            'schedule_cron': None,
+            'fetch_params': {},
+            'parse_params': {},
+            'upsert_policy': {},
+            'last_run_at': None,
+            'last_status': None,
+            'last_error': None,
+            'created_at': None,
+            'updated_at': None,
+        }
+    else:
+        config = {
+            'id': str(cfg.id),
+            'enabled': bool(cfg.enabled),
+            'schedule_cron': cfg.schedule_cron,
+            'fetch_params': cfg.fetch_params if isinstance(cfg.fetch_params, dict) else {},
+            'parse_params': cfg.parse_params if isinstance(cfg.parse_params, dict) else {},
+            'upsert_policy': cfg.upsert_policy if isinstance(cfg.upsert_policy, dict) else {},
+            'last_run_at': cfg.last_run_at,
+            'last_status': cfg.last_status,
+            'last_error': cfg.last_error,
+            'created_at': cfg.created_at,
+            'updated_at': cfg.updated_at,
+        }
+    return {
+        'source_key': defn.source_key,
+        'display_name': defn.display_name,
+        'entity_scope': defn.entity_scope,
+        'default_evidence_grade': defn.default_evidence_grade,
+        'parser_key': defn.parser_key,
+        'enabled_by_default': bool(defn.enabled_by_default),
+        'config': config,
+    }
+
+
+def _source_binding_meta(source_key: str, cfg: SourceConfig | None) -> dict:
+    binding = SOURCE_REGISTRY_LEGACY_BINDINGS.get(str(source_key or '').upper()) or {}
+    fp = cfg.fetch_params if (cfg and isinstance(cfg.fetch_params, dict)) else {}
+    if not isinstance(fp, dict):
+        fp = {}
+    lg = fp.get('legacy_data_source') if isinstance(fp.get('legacy_data_source'), dict) else {}
+    legacy_name = str(lg.get('name') or binding.get('legacy_name') or '').strip()
+    legacy_type = str(lg.get('type') or binding.get('legacy_type') or '').strip().lower()
+    mode = str(lg.get('role') or binding.get('role') or 'mapped').strip().lower()
+    if legacy_type not in {POSTGRES_SOURCE_TYPE, LOCAL_REGISTRY_SOURCE_TYPE}:
+        legacy_type = ''
+    if not legacy_name or not legacy_type:
+        return {'bound': False, 'mode': 'none'}
+    return {
+        'bound': True,
+        'mode': mode or 'mapped',
+        'legacy_name': legacy_name,
+        'legacy_type': legacy_type,
+    }
+
+
+def _sync_source_config_to_legacy_data_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig) -> dict:
+    """Bridge Source Registry configs into legacy `data_sources` without changing worker logic."""
+    meta = _source_binding_meta(defn.source_key, cfg)
+    if not meta.get('bound'):
+        return {'synced': False, 'reason': 'no_binding'}
+
+    legacy_name = str(meta.get('legacy_name') or '').strip()
+    legacy_type = str(meta.get('legacy_type') or '').strip()
+    role = str(meta.get('mode') or 'mapped')
+    if not legacy_name or legacy_type not in {POSTGRES_SOURCE_TYPE, LOCAL_REGISTRY_SOURCE_TYPE}:
+        return {'synced': False, 'reason': 'invalid_binding'}
+
+    fp = cfg.fetch_params if isinstance(cfg.fetch_params, dict) else {}
+    if not isinstance(fp, dict):
+        fp = {}
+    legacy_block = fp.get('legacy_data_source') if isinstance(fp.get('legacy_data_source'), dict) else {}
+    raw_cfg = legacy_block.get('config') if isinstance(legacy_block.get('config'), dict) else None
+    if raw_cfg is None:
+        raw_cfg = fp.get('connection') if isinstance(fp.get('connection'), dict) else fp
+    if not isinstance(raw_cfg, dict):
+        raw_cfg = {}
+
+    rows = list_data_sources(db)
+    legacy_ds = next((x for x in rows if (x.name or '').strip() == legacy_name), None)
+    merged_cfg = dict(raw_cfg)
+    # Keep a single control plane: top-level fetch_params overrides legacy nested config.
+    top_level_overrides = [
+        'host', 'port', 'database', 'username', 'password', 'sslmode',
+        'source_table', 'source_query', 'batch_size', 'cutoff_window_hours',
+    ]
+    for key in top_level_overrides:
+        if key in fp and fp.get(key) not in {None, ''}:
+            merged_cfg[key] = fp.get(key)
+
+    # Keep old password if caller omits it.
+    if legacy_type == POSTGRES_SOURCE_TYPE and legacy_ds is not None:
+        old_cfg = decrypt_json(legacy_ds.config_encrypted)
+        if isinstance(old_cfg, dict):
+            if 'password' not in merged_cfg or not merged_cfg.get('password'):
+                if old_cfg.get('password'):
+                    merged_cfg['password'] = old_cfg.get('password')
+
+    try:
+        normalized_cfg = _normalize_data_source_config(legacy_type, merged_cfg)
+    except Exception as exc:
+        return {'synced': False, 'reason': f'legacy_config_invalid: {exc}'}
+
+    token = encrypt_json(normalized_cfg)
+    if legacy_ds is None:
+        legacy_ds = create_data_source(db, name=legacy_name, type_=legacy_type, config_encrypted=token)
+    else:
+        legacy_ds = update_data_source(
+            db,
+            int(legacy_ds.id),
+            name=legacy_name,
+            type_=legacy_type,
+            config_encrypted=token,
+        ) or legacy_ds
+
+    # Keep primary source active state aligned with source_config.enabled.
+    if role == 'primary':
+        if bool(cfg.enabled):
+            activate_data_source(db, int(legacy_ds.id))
+        else:
+            db.execute(update(DataSource).where(DataSource.id == int(legacy_ds.id)).values(is_active=False))
+            db.commit()
+            db.refresh(legacy_ds)
+
+    return {
+        'synced': True,
+        'legacy_data_source_id': int(legacy_ds.id),
+        'legacy_name': legacy_name,
+        'legacy_type': legacy_type,
+        'legacy_active': bool(getattr(legacy_ds, 'is_active', False)),
+        'role': role,
+    }
+
+
+def _legacy_binding_runtime_status(db: Session, source_key: str, cfg: SourceConfig | None) -> dict:
+    meta = _source_binding_meta(source_key, cfg)
+    if not meta.get('bound'):
+        return {'bound': False}
+    legacy_name = str(meta.get('legacy_name') or '').strip()
+    rows = list_data_sources(db)
+    ds = next((x for x in rows if (x.name or '').strip() == legacy_name), None)
+    return {
+        'bound': True,
+        'legacy_exists': bool(ds is not None),
+        'legacy_data_source_id': (int(ds.id) if ds is not None else None),
+        'legacy_is_active': (bool(ds.is_active) if ds is not None else False),
     }
 
 
@@ -1713,6 +2858,143 @@ def admin_delete_data_source_api(
         raise HTTPException(status_code=409, detail='Cannot delete active data source')
     ok = delete_data_source(db, data_source_id)
     return _ok({'deleted': ok})
+
+
+@app.get('/api/admin/sources')
+def admin_list_sources_api(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    defs = list(db.scalars(select(SourceDefinition).order_by(SourceDefinition.source_key.asc())).all())
+    cfg_map = {x.source_key: x for x in db.scalars(select(SourceConfig)).all()}
+    items = []
+    for d in defs:
+        cfg = cfg_map.get(d.source_key)
+        row = _source_item(d, cfg)
+        row['compat'] = {**_source_binding_meta(d.source_key, cfg), **_legacy_binding_runtime_status(db, d.source_key, cfg)}
+        items.append(row)
+    return _ok({'items': items, 'count': len(items)})
+
+
+@app.post('/api/admin/sources')
+def admin_create_source_config_api(
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    source_key = str(payload.get('source_key') or '').strip().upper()
+    if not source_key:
+        raise HTTPException(status_code=400, detail='source_key is required')
+
+    defn = db.get(SourceDefinition, source_key)
+    if defn is None:
+        # Allow creating new source definition from admin payload to reduce code touch for new sources.
+        display_name = str(payload.get('display_name') or '').strip()
+        entity_scope = str(payload.get('entity_scope') or '').strip().upper()
+        parser_key = str(payload.get('parser_key') or '').strip()
+        default_grade = str(payload.get('default_evidence_grade') or 'C').strip().upper()
+        if not display_name or not entity_scope or not parser_key:
+            raise HTTPException(
+                status_code=404,
+                detail='source definition not found; provide display_name/entity_scope/parser_key to create one',
+            )
+        if default_grade not in {'A', 'B', 'C', 'D'}:
+            default_grade = 'C'
+        defn = SourceDefinition(
+            source_key=source_key,
+            display_name=display_name,
+            entity_scope=entity_scope,
+            default_evidence_grade=default_grade,
+            parser_key=parser_key,
+            enabled_by_default=bool(payload.get('enabled_by_default', True)),
+        )
+        db.add(defn)
+        db.flush()
+
+    exists = db.scalar(select(SourceConfig).where(SourceConfig.source_key == source_key))
+    if exists is not None:
+        raise HTTPException(status_code=409, detail='source config already exists; use PATCH')
+
+    enabled = bool(payload.get('enabled', defn.enabled_by_default))
+    schedule_cron = str(payload.get('schedule_cron')).strip() if payload.get('schedule_cron') not in {None, ''} else None
+    fetch_params = _json_dict_or_400(payload.get('fetch_params'), field='fetch_params')
+    parse_params = _json_dict_or_400(payload.get('parse_params'), field='parse_params')
+    upsert_policy = _json_dict_or_400(payload.get('upsert_policy'), field='upsert_policy')
+
+    cfg = SourceConfig(
+        source_key=source_key,
+        enabled=enabled,
+        schedule_cron=schedule_cron,
+        fetch_params=fetch_params,
+        parse_params=parse_params,
+        upsert_policy=upsert_policy,
+    )
+    db.add(cfg)
+    db.commit()
+    db.refresh(cfg)
+    compat = _sync_source_config_to_legacy_data_source(db, defn=defn, cfg=cfg)
+    item = _source_item(defn, cfg)
+    item['compat'] = {**_source_binding_meta(defn.source_key, cfg), **compat}
+    return _ok({'item': item})
+
+
+@app.patch('/api/admin/sources')
+def admin_patch_source_config_api(
+    payload: dict,
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    source_key = str(payload.get('source_key') or '').strip().upper()
+    if not source_key:
+        raise HTTPException(status_code=400, detail='source_key is required')
+
+    defn = db.get(SourceDefinition, source_key)
+    if defn is None:
+        raise HTTPException(status_code=404, detail='source definition not found')
+
+    cfg = db.scalar(select(SourceConfig).where(SourceConfig.source_key == source_key))
+    if cfg is None:
+        cfg = SourceConfig(
+            source_key=source_key,
+            enabled=bool(defn.enabled_by_default),
+            fetch_params={},
+            parse_params={},
+            upsert_policy={},
+        )
+        db.add(cfg)
+        db.flush()
+
+    if 'enabled' in payload:
+        cfg.enabled = bool(payload.get('enabled'))
+    if 'schedule_cron' in payload:
+        cfg.schedule_cron = (str(payload.get('schedule_cron')).strip() if payload.get('schedule_cron') not in {None, ''} else None)
+    if 'fetch_params' in payload:
+        cfg.fetch_params = _json_dict_or_400(payload.get('fetch_params'), field='fetch_params')
+    if 'parse_params' in payload:
+        cfg.parse_params = _json_dict_or_400(payload.get('parse_params'), field='parse_params')
+    if 'upsert_policy' in payload:
+        cfg.upsert_policy = _json_dict_or_400(payload.get('upsert_policy'), field='upsert_policy')
+    if 'last_status' in payload:
+        cfg.last_status = (str(payload.get('last_status')).strip() if payload.get('last_status') not in {None, ''} else None)
+    if 'last_error' in payload:
+        cfg.last_error = (str(payload.get('last_error')).strip() if payload.get('last_error') not in {None, ''} else None)
+    if 'last_run_at' in payload:
+        raw = payload.get('last_run_at')
+        if raw in {None, ''}:
+            cfg.last_run_at = None
+        else:
+            try:
+                cfg.last_run_at = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+            except Exception:
+                raise HTTPException(status_code=400, detail='last_run_at must be ISO datetime')
+
+    db.add(cfg)
+    db.commit()
+    db.refresh(cfg)
+    compat = _sync_source_config_to_legacy_data_source(db, defn=defn, cfg=cfg)
+    item = _source_item(defn, cfg)
+    item['compat'] = {**_source_binding_meta(defn.source_key, cfg), **compat}
+    return _ok({'item': item})
 
 
 @app.get('/api/admin/users', response_model=ApiResponseAdminUsers)

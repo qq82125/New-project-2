@@ -27,6 +27,18 @@ class Company(Base):
     products: Mapped[List['Product']] = relationship('Product', back_populates='company')
 
 
+class CompanyAlias(Base):
+    __tablename__ = 'company_aliases'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    alias_name: Mapped[str] = mapped_column(Text, nullable=False, index=True, unique=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('companies.id'), nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    source: Mapped[str] = mapped_column(Text, nullable=False, default='rule')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class Registration(Base):
     __tablename__ = 'registrations'
 
@@ -129,6 +141,104 @@ class RawDocument(Base):
     parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     parse_log: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class RawSourceRecord(Base):
+    __tablename__ = 'raw_source_records'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_grade: Mapped[str] = mapped_column(String(1), nullable=False, default='C')
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    parse_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProductUdiMap(Base):
+    __tablename__ = 'product_udi_map'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_no: Mapped[str] = mapped_column(
+        String(120), ForeignKey('registrations.registration_no'), nullable=False, index=True
+    )
+    di: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    match_type: Mapped[str] = mapped_column(String(20), nullable=False, default='direct', index=True)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UdiDiMaster(Base):
+    __tablename__ = 'udi_di_master'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    di: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    payload_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PendingUdiLink(Base):
+    __tablename__ = 'pending_udi_links'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    di: Mapped[str] = mapped_column(String(128), ForeignKey('udi_di_master.di'), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='PENDING', index=True)
+    raw_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True
+    )
+    raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
+    )
+    candidate_company_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidate_product_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    resolved_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PendingRecord(Base):
+    __tablename__ = 'pending_records'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    source_run_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=False, index=True)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=False
+    )
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=False)
+    registration_no_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidate_registry_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    candidate_company: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    candidate_product_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='open', index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ProductVariant(Base):
@@ -258,9 +368,208 @@ class ChangeLogArchive(Base):
     changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     change_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class NmpaSnapshot(Base):
+    __tablename__ = 'nmpa_snapshots'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True, index=False
+    )
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FieldDiff(Base):
+    __tablename__ = 'field_diffs'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('nmpa_snapshots.id'), nullable=False, index=True
+    )
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    field_name: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    change_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MethodologyNode(Base):
+    __tablename__ = 'methodology_nodes'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('methodology_nodes.id'), nullable=True, index=True
+    )
+    level: Mapped[int] = mapped_column(Integer, nullable=False, default=1, index=True)
+    synonyms: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class RegistrationMethodology(Base):
+    __tablename__ = 'registration_methodologies'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    methodology_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('methodology_nodes.id'), nullable=False, index=True
+    )
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    source: Mapped[str] = mapped_column(Text, nullable=False, default='rule')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class RegistrationEvent(Base):
+    __tablename__ = 'registration_events'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, index=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True)
+    snapshot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('nmpa_snapshots.id'), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     cleanup_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     archive_batch_id: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
     archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class RegistrationConflictAudit(Base):
+    __tablename__ = 'registration_conflict_audit'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    registration_no: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    incoming_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    final_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    existing_meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    incoming_meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=True, index=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConflictQueue(Base):
+    __tablename__ = 'conflicts_queue'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_no: Mapped[str] = mapped_column(
+        String(120), ForeignKey('registrations.registration_no'), nullable=False, index=True
+    )
+    registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=True, index=False
+    )
+    field_name: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    candidates: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='open', index=True)
+    winner_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    winner_source_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    resolved_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProcurementProject(Base):
+    __tablename__ = 'procurement_projects'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    province: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    publish_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True
+    )
+    source_run_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProcurementLot(Base):
+    __tablename__ = 'procurement_lots'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('procurement_projects.id'), nullable=False, index=True
+    )
+    lot_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    catalog_item_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    catalog_item_std: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProcurementResult(Base):
+    __tablename__ = 'procurement_results'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('procurement_lots.id'), nullable=False, index=True
+    )
+    win_company_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('companies.id'), nullable=True, index=True
+    )
+    win_company_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    bid_price: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    publish_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, index=True)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProcurementRegistrationMap(Base):
+    __tablename__ = 'procurement_registration_map'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    lot_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('procurement_lots.id'), nullable=False, index=True
+    )
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    match_type: Mapped[str] = mapped_column(Text, nullable=False, default='rule')
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Subscription(Base):
@@ -336,6 +645,36 @@ class DataSource(Base):
     type: Mapped[str] = mapped_column(String(20), index=True)
     config_encrypted: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SourceDefinition(Base):
+    __tablename__ = 'source_definitions'
+
+    source_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    entity_scope: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    default_evidence_grade: Mapped[str] = mapped_column(String(1), nullable=False, default='C')
+    parser_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    enabled_by_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SourceConfig(Base):
+    __tablename__ = 'source_configs'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_key: Mapped[str] = mapped_column(String(80), ForeignKey('source_definitions.source_key'), nullable=False, unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    schedule_cron: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fetch_params: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    parse_params: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    upsert_policy: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -55,8 +55,22 @@ class SyncResult:
 
 
 def _pick_primary_source(db) -> DataSource | None:
+    # Primary postgres source is optional and policy-controlled.
+    # Default behavior should remain official NMPA-UDI package ingestion.
+    cfg = get_admin_config(db, 'ivd_scope_policy')
+    policy = cfg.config_value if cfg and isinstance(cfg.config_value, dict) else {}
+    sync_mode = str(policy.get('sync_mode') or 'nmpa_udi').strip().lower()
+    if sync_mode not in {'postgres_primary', 'nmpa_udi'}:
+        sync_mode = 'nmpa_udi'
+    if sync_mode != 'postgres_primary':
+        return None
+
     try:
-        rows = [x for x in db.scalars(select(DataSource).order_by(DataSource.id.asc())).all() if (x.type or '').strip() == 'postgres']
+        rows = [
+            x
+            for x in db.scalars(select(DataSource).order_by(DataSource.id.asc())).all()
+            if (x.type or '').strip() == 'postgres' and bool(getattr(x, 'is_active', False))
+        ]
     except Exception:
         return None
     if not rows:
@@ -72,11 +86,7 @@ def _pick_primary_source(db) -> DataSource | None:
                     return ds
     except Exception:
         pass
-    # 2) Prefer active source.
-    active = next((x for x in rows if bool(getattr(x, 'is_active', False))), None)
-    if active:
-        return active
-    # 3) Fallback by name hint.
+    # 2) Fallback by name hint among active sources.
     return next((x for x in rows if '主数据源' in (x.name or '') or '注册产品库' in (x.name or '')), None)
 
 
@@ -338,6 +348,12 @@ def sync_nmpa_ivd(
                 'ivd_true': variant_result.ivd_true,
                 'ivd_false': variant_result.ivd_false,
                 'linked_products': variant_result.linked_products,
+                'reg_no_backfilled': variant_result.reg_no_backfilled,
+                'registration_linked': variant_result.registration_linked,
+                'contract_raw_written': variant_result.contract_raw_written,
+                'contract_map_written': variant_result.contract_map_written,
+                'contract_pending_written': variant_result.contract_pending_written,
+                'contract_failed': variant_result.contract_failed,
             }
         except Exception as exc:
             variant_report = {'error': str(exc)}
@@ -379,7 +395,7 @@ def sync_nmpa_ivd(
             message='downloaded, extracted and ingested',
             records_total=stats['total'],
             records_success=stats['success'],
-            records_failed=stats['failed'],
+            records_failed=int(stats.get('failed', 0) or 0) + int(stats.get('diff_failed', 0) or 0),
             added_count=stats['added'],
             updated_count=stats['updated'],
             removed_count=stats['removed'],
@@ -388,6 +404,8 @@ def sync_nmpa_ivd(
             source_notes={
                 'ingest_filtered_non_ivd': int(stats['filtered']),
                 'raw_document_id': str(raw_doc_id),
+                'nmpa_shadow_diff_failed': int(stats.get('diff_failed', 0) or 0),
+                'nmpa_shadow_diffs_written': int(stats.get('diff_written', 0) or 0),
                 'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
                 'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
                 'variant_report': variant_report,

@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import Product, ProductVariant
+from app.models import Product, ProductVariant, Registration
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.sources.nmpa_udi.mapper import map_to_variant
+from app.services.normalize_keys import normalize_registration_no
+from app.services.source_contract import write_udi_contract_record
 
 
 @dataclass
@@ -21,7 +23,58 @@ class VariantUpsertResult:
     ivd_true: int
     ivd_false: int
     linked_products: int
+    reg_no_backfilled: int
+    registration_linked: int
+    contract_raw_written: int
+    contract_map_written: int
+    contract_pending_written: int
+    contract_failed: int
     notes: dict[str, Any]
+
+
+def _resolve_registration_by_no(
+    db: Session,
+    registry_no: str | None,
+    *,
+    exact_cache: dict[str, Registration | None],
+    norm_cache: dict[str, Registration | None],
+) -> Registration | None:
+    raw = str(registry_no or "").strip()
+    if not raw:
+        return None
+    if raw in exact_cache:
+        return exact_cache[raw]
+    reg = db.scalar(select(Registration).where(Registration.registration_no == raw))
+    exact_cache[raw] = reg
+    if reg is not None:
+        return reg
+
+    norm = normalize_registration_no(raw)
+    if not norm:
+        return None
+    if norm in norm_cache:
+        return norm_cache[norm]
+    rid = db.execute(
+        text(
+            """
+            SELECT id
+            FROM registrations
+            WHERE regexp_replace(upper(coalesce(registration_no, '')), '[^0-9A-Z一-龥]+', '', 'g') = :n
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        ),
+        {"n": norm},
+    ).scalar_one_or_none()
+    if rid is None:
+        norm_cache[norm] = None
+        return None
+    try:
+        reg = db.get(Registration, UUID(str(rid)))
+    except Exception:
+        reg = None
+    norm_cache[norm] = reg
+    return reg
 
 
 def _classification_code_hint(row: dict[str, Any]) -> str:
@@ -46,6 +99,14 @@ def upsert_product_variants(
     ivd_true = 0
     ivd_false = 0
     linked_products = 0
+    reg_no_backfilled = 0
+    registration_linked = 0
+    contract_raw_written = 0
+    contract_map_written = 0
+    contract_pending_written = 0
+    contract_failed = 0
+    exact_cache: dict[str, Registration | None] = {}
+    norm_cache: dict[str, Registration | None] = {}
 
     # Cache products by DI to avoid N queries.
     di_list = [str(r.get('udi_di') or r.get('di') or '').strip() for r in rows]
@@ -57,6 +118,28 @@ def upsert_product_variants(
 
     for raw in rows:
         total += 1
+        # Source Contract shadow write (non-blocking): raw -> parse/normalize -> udi map|pending queue.
+        try:
+            contract_result = write_udi_contract_record(
+                db,
+                row=raw,
+                source='NMPA_UDI',
+                source_run_id=source_run_id,
+                source_url=None,
+                evidence_grade='A',
+                confidence=0.80,
+            )
+            if contract_result.raw_record_id is not None:
+                contract_raw_written += 1
+            if contract_result.map_written:
+                contract_map_written += 1
+            if contract_result.pending_written:
+                contract_pending_written += 1
+            if contract_result.error:
+                contract_failed += 1
+        except Exception:
+            contract_failed += 1
+
         mapped = map_to_variant(raw)
         di = (mapped.get('di') or '').strip()
         if not di:
@@ -69,6 +152,27 @@ def upsert_product_variants(
             is_ivd = True
             category = bound.ivd_category
             product_id = bound.id
+            registry_no = (str(mapped.get('registry_no') or '').strip() or None)
+            if registry_no and not str(getattr(bound, 'reg_no', '') or '').strip():
+                bound.reg_no = registry_no
+                db.add(bound)
+                reg_no_backfilled += 1
+            if not getattr(bound, 'registration_id', None):
+                candidate_no = (str(getattr(bound, 'reg_no', '') or '').strip() or registry_no)
+                reg = _resolve_registration_by_no(
+                    db,
+                    candidate_no,
+                    exact_cache=exact_cache,
+                    norm_cache=norm_cache,
+                )
+                if reg is not None:
+                    bound.registration_id = reg.id
+                    # Canonicalize to registrations.registration_no once resolved.
+                    if not str(getattr(bound, 'reg_no', '') or '').strip():
+                        bound.reg_no = reg.registration_no
+                        reg_no_backfilled += 1
+                    db.add(bound)
+                    registration_linked += 1
             # variants.ivd_version is VARCHAR; store the facade version string for consistency.
             ivd_version = IVD_CLASSIFIER_VERSION
         else:
@@ -126,6 +230,12 @@ def upsert_product_variants(
     notes: dict[str, Any] = {
         'raw_document_id': (str(raw_document_id) if raw_document_id else None),
         'source_run_id': (int(source_run_id) if source_run_id is not None else None),
+        'source_contract': {
+            'raw_written': contract_raw_written,
+            'map_written': contract_map_written,
+            'pending_written': contract_pending_written,
+            'failed': contract_failed,
+        },
     }
     return VariantUpsertResult(
         total=total,
@@ -134,5 +244,11 @@ def upsert_product_variants(
         ivd_true=ivd_true,
         ivd_false=ivd_false,
         linked_products=linked_products,
+        reg_no_backfilled=reg_no_backfilled,
+        registration_linked=registration_linked,
+        contract_raw_written=contract_raw_written,
+        contract_map_written=contract_map_written,
+        contract_pending_written=contract_pending_written,
+        contract_failed=contract_failed,
         notes=notes,
     )

@@ -4,25 +4,30 @@ import csv
 import hashlib
 import json
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import func
 from sqlalchemy.orm import Session
 from bs4 import BeautifulSoup
 
-from app.models import ChangeLog, Company, Product, ProductRejected
+from app.models import ChangeLog, Company, ConflictQueue, Product, ProductRejected
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.services.mapping import ProductRecord, diff_fields, map_raw_record
+from app.services.nmpa_assets import record_shadow_diff_failure, shadow_write_nmpa_snapshot_and_diffs
+from app.services.normalize_keys import normalize_registration_no
+from app.services.source_contract import apply_field_policy, upsert_registration_with_contract
 
 TRACKED_FIELDS = (
     'status',
     'expiry_date',
     'approved_date',
     'company_id',
+    'registration_id',
     'name',
     'reg_no',
     'udi_di',
@@ -108,9 +113,44 @@ def get_or_create_company(db: Session, record: ProductRecord) -> Company | None:
     return company
 
 
-def find_existing_product(db: Session, record: ProductRecord) -> Product | None:
-    stmt = select(Product).where(or_(Product.udi_di == record.udi_di, Product.reg_no == record.reg_no))
-    return db.scalar(stmt)
+def find_existing_product(
+    db: Session,
+    record: ProductRecord,
+    *,
+    registration_id: UUID | None,
+) -> Product | None:
+    di = str(getattr(record, 'udi_di', '') or '').strip()
+    reg = str(getattr(record, 'reg_no', '') or '').strip()
+
+    if registration_id is not None:
+        # Registration anchor is canonical; DI is only the variant identifier.
+        if di:
+            by_di = db.scalar(select(Product).where(Product.udi_di == di))
+            if by_di is not None:
+                return by_di
+        if reg:
+            by_anchor = db.scalar(
+                select(Product)
+                .where(Product.registration_id == registration_id, Product.reg_no == reg)
+                .order_by(Product.updated_at.desc())
+                .limit(1)
+            )
+            if by_anchor is not None:
+                return by_anchor
+        return db.scalar(
+            select(Product)
+            .where(Product.registration_id == registration_id)
+            .order_by(Product.updated_at.desc())
+            .limit(1)
+        )
+
+    if di:
+        # Fallback path for legacy rows without registration anchor.
+        return db.scalar(select(Product).where(Product.udi_di == di))
+
+    if reg:
+        return db.scalar(select(Product).where(Product.reg_no == reg))
+    return None
 
 
 def _product_state(product: Product) -> dict[str, Any]:
@@ -119,6 +159,7 @@ def _product_state(product: Product) -> dict[str, Any]:
         'expiry_date': product.expiry_date.isoformat() if product.expiry_date else None,
         'approved_date': product.approved_date.isoformat() if product.approved_date else None,
         'company_id': str(product.company_id) if product.company_id else None,
+        'registration_id': str(product.registration_id) if product.registration_id else None,
         'name': product.name,
         'reg_no': product.reg_no,
         'udi_di': product.udi_di,
@@ -136,9 +177,29 @@ def _detect_change_type(after: Product, changed: dict[str, dict[str, Any]]) -> s
     return 'noop'
 
 
-def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int | None) -> tuple[str, Product]:
+def upsert_product_record(
+    db: Session,
+    record: ProductRecord,
+    source_run_id: int | None,
+    *,
+    source_key: str = 'UNKNOWN',
+) -> tuple[str, Product, dict[str, Any] | None, dict[str, Any] | None]:
+    registration_id = getattr(record, 'registration_id', None)
+    if registration_id is None:
+        raise ValueError('registration_id is required for product upsert')
+
     company = get_or_create_company(db, record)
-    existing = find_existing_product(db, record)
+    existing = find_existing_product(db, record, registration_id=registration_id)
+    rec_di = str(getattr(record, 'udi_di', '') or '').strip()
+    if (
+        existing is not None
+        and rec_di
+        and str(getattr(existing, 'udi_di', '') or '').strip()
+        and str(getattr(existing, 'udi_di', '') or '').strip() != rec_di
+    ):
+        # Defensive guard: never mutate an existing product into another DI.
+        # Different DI should become a separate product row (variant-level distinction).
+        existing = None
 
     ivd_meta = record.raw.get('_ivd') if isinstance(record.raw, dict) else None
 
@@ -170,6 +231,7 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
                 if isinstance(ivd_meta, dict) and ivd_meta.get('confidence') is not None
                 else None
             ),
+            registration_id=registration_id,
             company_id=company.id if company else None,
             raw=dict(record.raw),
             raw_json=dict(record.raw),
@@ -192,16 +254,94 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
                 source_run_id=source_run_id,
             )
         )
-        return 'added', product
+        return 'added', product, None, after_state
 
     before_state = _product_state(existing)
-    existing.name = record.name
-    existing.reg_no = record.reg_no
-    existing.udi_di = record.udi_di
-    existing.status = record.status
-    existing.approved_date = record.approved_date
-    existing.expiry_date = record.expiry_date
-    existing.class_name = record.class_name
+    existing_raw_json = dict(existing.raw_json) if isinstance(existing.raw_json, dict) else {}
+    provenance = (
+        dict(existing_raw_json.get('_field_provenance'))
+        if isinstance(existing_raw_json.get('_field_provenance'), dict)
+        else {}
+    )
+    queue_reg_no = normalize_registration_no(record.reg_no or existing.reg_no or '')
+
+    def _queue_unresolved(field_name: str, old_value: Any, new_value: Any, decision_meta: dict[str, Any]) -> None:
+        if not queue_reg_no:
+            return
+        candidates = [
+            {
+                'source_key': str((provenance.get(field_name, {}) or {}).get('source_key') or 'UNKNOWN'),
+                'value': (str(old_value) if old_value is not None else None),
+                'observed_at': str((provenance.get(field_name, {}) or {}).get('observed_at') or ''),
+            },
+            {
+                'source_key': str(decision_meta.get('source_key') or source_key),
+                'value': (str(new_value) if new_value is not None else None),
+                'observed_at': str(decision_meta.get('observed_at') or ''),
+                'evidence_grade': str(decision_meta.get('evidence_grade') or ''),
+                'source_priority': decision_meta.get('source_priority'),
+            },
+        ]
+        open_row = db.scalar(
+            select(ConflictQueue).where(
+                ConflictQueue.registration_no == queue_reg_no,
+                ConflictQueue.field_name == field_name,
+                ConflictQueue.status == 'open',
+            )
+        )
+        if open_row is None:
+            db.add(
+                ConflictQueue(
+                    registration_no=queue_reg_no,
+                    registration_id=registration_id,
+                    field_name=field_name,
+                    candidates=candidates,
+                    status='open',
+                    source_run_id=source_run_id,
+                )
+            )
+            return
+        existing_candidates = open_row.candidates if isinstance(open_row.candidates, list) else []
+        existing_candidates.extend(candidates)
+        open_row.candidates = existing_candidates
+        open_row.updated_at = datetime.now(timezone.utc)
+        db.add(open_row)
+
+    def _apply(field_name: str, old_value: Any, new_value: Any) -> bool:
+        decision = apply_field_policy(
+            db,
+            field_name=field_name,
+            old_value=old_value,
+            new_value=new_value,
+            source_key=source_key,
+            observed_at=datetime.now(timezone.utc),
+            existing_meta=(provenance.get(field_name) if isinstance(provenance.get(field_name), dict) else None),
+            source_run_id=source_run_id,
+            raw_source_record_id=None,
+        )
+        if decision.action == 'apply':
+            provenance[field_name] = decision.incoming_meta
+            return True
+        if decision.action == 'conflict':
+            _queue_unresolved(field_name, old_value, new_value, decision.incoming_meta)
+        return False
+
+    if _apply('name', existing.name, record.name):
+        existing.name = record.name
+    if _apply('reg_no', existing.reg_no, record.reg_no):
+        existing.reg_no = record.reg_no
+    if _apply('udi_di', existing.udi_di, record.udi_di):
+        existing.udi_di = record.udi_di
+    if _apply('registration_id', existing.registration_id, registration_id):
+        existing.registration_id = registration_id
+    if _apply('status', existing.status, record.status):
+        existing.status = record.status
+    if _apply('approved_date', existing.approved_date, record.approved_date):
+        existing.approved_date = record.approved_date
+    if _apply('expiry_date', existing.expiry_date, record.expiry_date):
+        existing.expiry_date = record.expiry_date
+    if _apply('class', existing.class_name, record.class_name):
+        existing.class_name = record.class_name
     if isinstance(ivd_meta, dict):
         existing.is_ivd = bool(ivd_meta.get('is_ivd'))
         existing.ivd_category = str(ivd_meta.get('ivd_category')) if ivd_meta.get('ivd_category') is not None else None
@@ -216,14 +356,17 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
         existing.ivd_confidence = float(ivd_meta.get('confidence')) if ivd_meta.get('confidence') is not None else None
     if company:
         # Never wipe an existing company link when incoming row has no company info.
-        existing.company_id = company.id
+        if _apply('company_id', existing.company_id, company.id):
+            existing.company_id = company.id
     existing.raw = dict(record.raw)
-    existing.raw_json = dict(record.raw)
+    raw_json = dict(record.raw)
+    raw_json['_field_provenance'] = provenance
+    existing.raw_json = raw_json
     after_state = _product_state(existing)
 
     changed = diff_fields(before_state, after_state, TRACKED_FIELDS)
     if not changed:
-        return 'unchanged', existing
+        return 'unchanged', existing, before_state, after_state
 
     change_type = _detect_change_type(existing, changed)
     db.add(
@@ -242,8 +385,8 @@ def upsert_product_record(db: Session, record: ProductRecord, source_run_id: int
     )
 
     if change_type in {'cancel', 'expire'}:
-        return 'removed', existing
-    return 'updated', existing
+        return 'removed', existing, before_state, after_state
+    return 'updated', existing, before_state, after_state
 
 
 def ingest_staging_records(
@@ -255,7 +398,18 @@ def ingest_staging_records(
     raw_document_id: UUID | None = None,
     reject_audit: bool = True,
 ) -> dict[str, int]:
-    stats = {'total': len(records), 'success': 0, 'failed': 0, 'filtered': 0, 'added': 0, 'updated': 0, 'removed': 0}
+    stats = {
+        'total': len(records),
+        'success': 0,
+        'failed': 0,
+        'filtered': 0,
+        'added': 0,
+        'updated': 0,
+        'removed': 0,
+        # Shadow-write counters (do not block main ingest).
+        'diff_failed': 0,
+        'diff_written': 0,
+    }
 
     def _extract_classification_code(raw: dict[str, Any], record: ProductRecord) -> str:
         for key in ('classification_code', 'class_code', 'flbm', 'cplb', '类别', '管理类别', 'class', 'class_name'):
@@ -358,6 +512,43 @@ def ingest_staging_records(
                     )
                 stats['filtered'] += 1
                 continue
+
+            reg_no_norm = normalize_registration_no(record.reg_no)
+            if not reg_no_norm:
+                if reject_audit:
+                    src_key = _reject_source_key(record=record, raw=raw)
+                    _upsert_rejected(
+                        src=str(source or 'unknown'),
+                        src_key=src_key,
+                        raw_doc_id=raw_document_id,
+                        reason={
+                            'error_code': 'MISSING_REGISTRATION_NO',
+                            'message': 'registration_no is required before structured upsert',
+                        },
+                        ivd_version=str(decision.get('version') or IVD_CLASSIFIER_VERSION),
+                    )
+                stats['filtered'] += 1
+                continue
+
+            record.reg_no = reg_no_norm
+            reg_upsert = upsert_registration_with_contract(
+                db,
+                registration_no=reg_no_norm,
+                incoming_fields={
+                    'approval_date': record.approved_date,
+                    'expiry_date': record.expiry_date,
+                    'status': record.status,
+                },
+                source=str(source or 'UNKNOWN'),
+                source_run_id=source_run_id,
+                evidence_grade='A',
+                source_priority=100,
+                observed_at=None,
+                raw_source_record_id=None,
+                raw_payload=raw,
+                write_change_log=True,
+            )
+            record.reg_no = reg_upsert.registration_no
             # Persist explainable IVD classification metadata with each accepted record.
             record.raw['_ivd'] = {
                 'is_ivd': True,
@@ -371,7 +562,13 @@ def ingest_staging_records(
                 'source': decision.get('source') or 'RULE',
                 'confidence': decision.get('confidence', 0.5),
             }
-            action, _ = upsert_product_record(db, record, source_run_id)
+            setattr(record, 'registration_id', reg_upsert.registration_id)
+            action, product, before_state, after_state = upsert_product_record(
+                db,
+                record,
+                source_run_id,
+                source_key=str(source or 'UNKNOWN'),
+            )
             stats['success'] += 1
             if action == 'added':
                 stats['added'] += 1
@@ -379,6 +576,45 @@ def ingest_staging_records(
                 stats['updated'] += 1
             elif action == 'removed':
                 stats['removed'] += 1
+
+            if str(source or '') == 'NMPA_UDI':
+                # Shadow write: NMPA snapshots + field diffs (registration-centric SSOT).
+                # Must not change main ingest semantics (IVD-only products) and must not block.
+                try:
+                    res = shadow_write_nmpa_snapshot_and_diffs(
+                        db,
+                        record=record,
+                        product_before=before_state,
+                        product_after=after_state,
+                        source_run_id=source_run_id,
+                        raw_document_id=raw_document_id,
+                    )
+                    if not res.ok:
+                        stats['diff_failed'] += 1
+                        try:
+                            record_shadow_diff_failure(
+                                db,
+                                raw_document_id=raw_document_id,
+                                source_run_id=source_run_id,
+                                registration_no=getattr(record, "reg_no", None),
+                                error=str(res.error or "shadow diff returned ok=false"),
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        stats['diff_written'] += int(res.diffs_written or 0)
+                except Exception as exc:
+                    stats['diff_failed'] += 1
+                    try:
+                        record_shadow_diff_failure(
+                            db,
+                            raw_document_id=raw_document_id,
+                            source_run_id=source_run_id,
+                            registration_no=getattr(record, "reg_no", None),
+                            error=str(exc),
+                        )
+                    except Exception:
+                        pass
         except Exception:
             # A failed flush leaves the transaction in failed state; rollback and continue.
             db.rollback()

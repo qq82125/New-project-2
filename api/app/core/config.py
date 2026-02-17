@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # PR-E: data sources encryption key (symmetric). This must be kept secret.
     # Any string is accepted; we derive a proper key from it.
     data_sources_crypto_key: str = 'change-me-data-sources-key'
+    use_registration_anchor: bool = False
 
 
 @lru_cache

@@ -10,16 +10,19 @@ from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
-from app.models import DataSource, Product
+from app.models import DataSource, Product, SourceConfig
 from app.repositories.radar import get_admin_config, upsert_admin_config
 from app.repositories.source_runs import finish_source_run, start_source_run
 from app.services.crypto import decrypt_json
 from app.services.local_registry_supplement import run_local_registry_supplement
+from app.services.normalize_keys import normalize_registration_no
+from app.services.source_contract import upsert_registration_with_contract, write_udi_contract_record
 
 SUPPLEMENT_SCHEDULE_KEY = 'source_supplement_schedule'
 SUPPLEMENT_LAST_KEY = 'source_supplement_last_run'
 NMPA_QUERY_LAST_KEY = 'source_nmpa_query_last_run'
-DEFAULT_SUPPLEMENT_SOURCE_NAME = 'UDI补充数据源（规格/DI/包装/GTIN）'
+DEFAULT_SUPPLEMENT_SOURCE_NAME = 'UDI注册证关联增强源（DI/GTIN/包装）'
+DEFAULT_SUPPLEMENT_SOURCE_KEY = 'UDI_DI'
 DEFAULT_NMPA_QUERY_URL = 'https://www.nmpa.gov.cn/datasearch/home-index.html?itemId=2c9ba384759c957701759ccef50f032b#category=ylqx'
 
 
@@ -49,6 +52,23 @@ def _pick_supplement_source(db: Session, source_name: str | None = None) -> Data
     return None
 
 
+def _pick_supplement_source_by_key(db: Session, source_key: str | None = None) -> DataSource | None:
+    key = str(source_key or '').strip().upper()
+    if not key:
+        return None
+    cfg = db.scalar(select(SourceConfig).where(SourceConfig.source_key == key))
+    if cfg is None:
+        return None
+    fp = cfg.fetch_params if isinstance(getattr(cfg, 'fetch_params', None), dict) else {}
+    if not isinstance(fp, dict):
+        fp = {}
+    legacy = fp.get('legacy_data_source') if isinstance(fp.get('legacy_data_source'), dict) else {}
+    name = str(legacy.get('name') or '').strip()
+    if not name:
+        return None
+    return db.scalar(select(DataSource).where(DataSource.name == name))
+
+
 def _dsn_from_config(cfg: dict[str, Any]) -> URL:
     query = {}
     sslmode = cfg.get('sslmode')
@@ -73,6 +93,23 @@ def _is_blank(value: Any) -> bool:
     return False
 
 
+def _ensure_supplement_query_columns(columns: set[str]) -> None:
+    """Validate minimum contract for supplement source_query results.
+
+    Contract:
+    - Must expose `updated_at` (for recent-window semantics and observability).
+    - Must expose at least one DI identifier: `udi_di` or `di`.
+    - Must expose at least one registration identifier: `reg_no` or `registry_no`.
+    """
+    cols = {str(c).strip().lower() for c in columns if str(c).strip()}
+    if 'updated_at' not in cols:
+        raise RuntimeError("supplement source_query must include column: updated_at")
+    if not ({'udi_di', 'di'} & cols):
+        raise RuntimeError("supplement source_query must include one of: udi_di, di")
+    if not ({'reg_no', 'registry_no'} & cols):
+        raise RuntimeError("supplement source_query must include one of: reg_no, registry_no")
+
+
 def _plan_config(db: Session) -> dict[str, Any]:
     cfg = get_admin_config(db, SUPPLEMENT_SCHEDULE_KEY)
     raw = cfg.config_value if cfg and isinstance(cfg.config_value, dict) else {}
@@ -81,6 +118,7 @@ def _plan_config(db: Session) -> dict[str, Any]:
         'interval_hours': max(1, int(raw.get('interval_hours', 24) or 24)),
         'batch_size': max(50, min(5000, int(raw.get('batch_size', 1000) or 1000))),
         'recent_hours': max(1, int(raw.get('recent_hours', 72) or 72)),
+        'source_key': str(raw.get('source_key') or '').strip().upper() or DEFAULT_SUPPLEMENT_SOURCE_KEY,
         'source_name': str(raw.get('source_name') or '').strip() or DEFAULT_SUPPLEMENT_SOURCE_NAME,
         'nmpa_query_enabled': bool(raw.get('nmpa_query_enabled', True)),
         'nmpa_query_interval_hours': max(1, int(raw.get('nmpa_query_interval_hours', 24) or 24)),
@@ -170,6 +208,10 @@ def run_nmpa_query_supplement_now(db: Session, *, reason: str = 'manual') -> dic
         'updated': 0,
         'blocked_412': 0,
         'failed': 0,
+        'contract_raw_written': 0,
+        'contract_map_written': 0,
+        'contract_pending_written': 0,
+        'contract_failed': 0,
         'message': '',
         'run_id': int(run.id),
     }
@@ -281,7 +323,7 @@ def run_nmpa_query_supplement_now(db: Session, *, reason: str = 'manual') -> dic
 
 def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str, Any]:
     conf = _plan_config(db)
-    source = _pick_supplement_source(db, conf.get('source_name'))
+    source = _pick_supplement_source_by_key(db, conf.get('source_key')) or _pick_supplement_source(db, conf.get('source_name'))
     started_at = _utcnow()
     run = start_source_run(
         db,
@@ -296,19 +338,25 @@ def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str,
         'started_at': _to_iso(started_at),
         'finished_at': None,
         'status': 'failed',
+        'source_key': str(conf.get('source_key') or ''),
         'source_name': source.name if source else None,
         'source_id': int(source.id) if source else None,
         'scanned': 0,
         'matched': 0,
+        'matched_by_udi_di': 0,
+        'matched_by_reg_no': 0,
         'updated': 0,
+        'updated_by_udi_di': 0,
+        'updated_by_reg_no': 0,
         'missing_local': 0,
+        'missing_identifier': 0,
         'failed': 0,
         'message': '',
         'run_id': int(run.id),
     }
 
     if source is None:
-        msg = 'Supplement source not found. Configure source_name or create a source with 补全/纠错 in its name.'
+        msg = 'Supplement source not found. Configure source_key(UDI_DI) or source_name.'
         finish_source_run(
             db,
             run,
@@ -434,44 +482,125 @@ def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str,
 
     batch_size = int(conf['batch_size'])
     recent_hours = int(conf['recent_hours'])
+    source_priority = int(source_cfg.get('source_priority') or 100)
+    default_evidence_grade = str(source_cfg.get('default_evidence_grade') or 'C').strip().upper()
+    if default_evidence_grade not in {'A', 'B', 'C', 'D'}:
+        default_evidence_grade = 'C'
+    source_query = str(source_cfg.get('source_query') or '').strip()
+    source_table = str(source_cfg.get('source_table') or '').strip() or 'public.products'
+    sql = (
+        source_query
+        if source_query
+        else (
+            """
+            select udi_di, reg_no, name, model, specification, category, status,
+                   approved_date, expiry_date, class, raw_json, raw, updated_at
+            from public.products
+            where updated_at >= :cutoff
+            order by updated_at desc
+            limit :batch_size
+            """
+        )
+    )
     ext_engine = create_engine(_dsn_from_config(source_cfg), pool_pre_ping=True, poolclass=NullPool)
     cutoff = _utcnow() - timedelta(hours=recent_hours)
 
     try:
         with ext_engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    """
-                    select udi_di, reg_no, name, model, specification, category, status,
-                           approved_date, expiry_date, class, raw_json, raw, updated_at
-                    from public.products
-                    where updated_at >= :cutoff
-                    order by updated_at desc
-                    limit :batch_size
-                    """
-                ),
-                {'cutoff': cutoff, 'batch_size': batch_size},
-            ).mappings()
+            result = conn.execute(text(sql), {'cutoff': cutoff, 'batch_size': batch_size})
+            _ensure_supplement_query_columns(set(result.keys()))
+            rows = result.mappings()
 
             for row in rows:
                 report['scanned'] += 1
-                udi_di = row.get('udi_di')
-                if _is_blank(udi_di):
-                    report['failed'] += 1
-                    continue
-                local = db.scalar(
-                    select(Product).where(Product.udi_di == str(udi_di), Product.is_ivd.is_(True)).limit(1)
-                )
+                raw_source_record_id = None
+                try:
+                    contract_result = write_udi_contract_record(
+                        db,
+                        row=dict(row),
+                        source='SUPPLEMENT_POSTGRES',
+                        source_run_id=int(run.id),
+                        source_url=None,
+                        evidence_grade=default_evidence_grade,
+                        confidence=0.70,
+                    )
+                    raw_source_record_id = contract_result.raw_record_id
+                    if contract_result.raw_record_id is not None:
+                        report['contract_raw_written'] += 1
+                    if contract_result.map_written:
+                        report['contract_map_written'] += 1
+                    if contract_result.pending_written:
+                        report['contract_pending_written'] += 1
+                    if contract_result.error:
+                        report['contract_failed'] += 1
+                except Exception:
+                    report['contract_failed'] += 1
+
+                udi_di = row.get('udi_di') or row.get('di')
+                reg_no_ext = row.get('reg_no') or row.get('registry_no')
+                if not _is_blank(reg_no_ext):
+                    try:
+                        upsert_registration_with_contract(
+                            db,
+                            registration_no=str(reg_no_ext),
+                            incoming_fields={
+                                'approval_date': row.get('approved_date'),
+                                'expiry_date': row.get('expiry_date'),
+                                'status': row.get('status'),
+                            },
+                            source='SUPPLEMENT_POSTGRES',
+                            source_run_id=int(run.id),
+                            evidence_grade=default_evidence_grade,
+                            source_priority=source_priority,
+                            observed_at=_utcnow(),
+                            raw_source_record_id=raw_source_record_id,
+                            raw_payload=dict(row),
+                            write_change_log=True,
+                        )
+                    except Exception:
+                        report['contract_failed'] += 1
+                local = None
+                match_strategy: str | None = None
+                if not _is_blank(udi_di):
+                    local = db.scalar(
+                        select(Product).where(Product.udi_di == str(udi_di), Product.is_ivd.is_(True)).limit(1)
+                    )
+                    if local is not None:
+                        match_strategy = 'udi_di'
+                if local is None and not _is_blank(reg_no_ext):
+                    reg_no_norm = normalize_registration_no(str(reg_no_ext))
+                    if reg_no_norm:
+                        local = db.scalar(
+                            select(Product)
+                            .where(
+                                Product.is_ivd.is_(True),
+                                text(
+                                    "regexp_replace(upper(coalesce(reg_no, '')), '[^0-9A-Z一-龥]+', '', 'g') = :n"
+                                ),
+                            )
+                            .params(n=reg_no_norm)
+                            .order_by(Product.updated_at.desc())
+                            .limit(1)
+                        )
+                        if local is not None:
+                            match_strategy = 'reg_no'
                 if local is None:
+                    if _is_blank(udi_di) and _is_blank(reg_no_ext):
+                        report['missing_identifier'] += 1
+                        continue
                     report['missing_local'] += 1
                     continue
                 report['matched'] += 1
+                if match_strategy == 'udi_di':
+                    report['matched_by_udi_di'] += 1
+                elif match_strategy == 'reg_no':
+                    report['matched_by_reg_no'] += 1
 
                 changed = False
                 fill_map = {
-                    'reg_no': row.get('reg_no'),
-                    'model': row.get('model'),
-                    'specification': row.get('specification'),
+                    'reg_no': reg_no_ext,
+                    'model': row.get('model') or row.get('model_spec'),
+                    'specification': row.get('specification') or row.get('model_spec'),
                     'category': row.get('category'),
                     'status': row.get('status'),
                     'approved_date': row.get('approved_date'),
@@ -500,11 +629,16 @@ def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str,
                 if changed:
                     db.add(local)
                     report['updated'] += 1
+                    if match_strategy == 'udi_di':
+                        report['updated_by_udi_di'] += 1
+                    elif match_strategy == 'reg_no':
+                        report['updated_by_reg_no'] += 1
 
         db.commit()
         msg = (
             f"supplement sync ok: scanned={report['scanned']}, matched={report['matched']}, "
-            f"updated={report['updated']}, missing_local={report['missing_local']}"
+            f"updated={report['updated']}, missing_local={report['missing_local']}, "
+            f"match_by_udi={report['matched_by_udi_di']}, match_by_reg={report['matched_by_reg_no']}"
         )
         finish_source_run(
             db,
@@ -513,11 +647,31 @@ def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str,
             message=msg,
             records_total=int(report['scanned']),
             records_success=int(report['matched']),
-            records_failed=int(report['failed']),
+            records_failed=int(report['failed'] + report['missing_identifier']),
             updated_count=int(report['updated']),
+            source_notes={
+                'source_name': report.get('source_name'),
+                'source_id': report.get('source_id'),
+                'source_table': source_table,
+                'source_query_used': bool(source_query),
+                'matched_by_udi_di': int(report['matched_by_udi_di']),
+                'matched_by_reg_no': int(report['matched_by_reg_no']),
+                'updated_by_udi_di': int(report['updated_by_udi_di']),
+                'updated_by_reg_no': int(report['updated_by_reg_no']),
+                'missing_identifier': int(report['missing_identifier']),
+                'missing_local': int(report['missing_local']),
+                'source_priority': source_priority,
+                'default_evidence_grade': default_evidence_grade,
+                'contract_raw_written': int(report['contract_raw_written']),
+                'contract_map_written': int(report['contract_map_written']),
+                'contract_pending_written': int(report['contract_pending_written']),
+                'contract_failed': int(report['contract_failed']),
+            },
         )
         report['status'] = 'success'
         report['message'] = msg
+        report['source_table'] = source_table
+        report['source_query_used'] = bool(source_query)
         report['finished_at'] = _to_iso(_utcnow())
         upsert_admin_config(db, SUPPLEMENT_LAST_KEY, report)
         return report
@@ -531,8 +685,26 @@ def run_supplement_sync_now(db: Session, *, reason: str = 'manual') -> dict[str,
             message=msg,
             records_total=int(report['scanned']),
             records_success=int(report['matched']),
-            records_failed=max(1, int(report['failed'])),
+            records_failed=max(1, int(report['failed'] + report['missing_identifier'])),
             updated_count=int(report['updated']),
+            source_notes={
+                'source_name': report.get('source_name'),
+                'source_id': report.get('source_id'),
+                'source_table': source_table,
+                'source_query_used': bool(source_query),
+                'matched_by_udi_di': int(report.get('matched_by_udi_di', 0)),
+                'matched_by_reg_no': int(report.get('matched_by_reg_no', 0)),
+                'updated_by_udi_di': int(report.get('updated_by_udi_di', 0)),
+                'updated_by_reg_no': int(report.get('updated_by_reg_no', 0)),
+                'missing_identifier': int(report.get('missing_identifier', 0)),
+                'missing_local': int(report.get('missing_local', 0)),
+                'source_priority': source_priority,
+                'default_evidence_grade': default_evidence_grade,
+                'contract_raw_written': int(report.get('contract_raw_written', 0)),
+                'contract_map_written': int(report.get('contract_map_written', 0)),
+                'contract_pending_written': int(report.get('contract_pending_written', 0)),
+                'contract_failed': int(report.get('contract_failed', 0)),
+            },
         )
         report['status'] = 'failed'
         report['message'] = msg
