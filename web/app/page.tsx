@@ -151,7 +151,7 @@ export default async function DashboardPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>Dashboard</CardTitle>
+          <CardTitle>仪表盘</CardTitle>
           <CardDescription>聚合近 30 天关键指标、趋势与榜单。</CardDescription>
         </CardHeader>
         <CardContent className="grid" style={{ gap: 10 }}>

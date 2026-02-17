@@ -8,10 +8,13 @@ import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
+import { Modal } from '../ui/modal';
 import { Select } from '../ui/select';
 import { Skeleton } from '../ui/skeleton';
 import { Table, TableWrap } from '../ui/table';
+import { Textarea } from '../ui/textarea';
 import { toast } from '../ui/use-toast';
+import { ADMIN_PENDING_STATUS_ZH } from '../../constants/admin-i18n';
 
 type PendingRecordItem = {
   id: string;
@@ -55,6 +58,34 @@ type PendingStatsResp = {
 
 const PAGE_SIZE = 50;
 
+function formatApiError(body: unknown, fallback: string): string {
+  const unknownError = fallback || '请求失败';
+  if (!body || typeof body !== 'object') return unknownError;
+  const obj = body as Record<string, unknown>;
+  const code = (obj.code ? String(obj.code) : '');
+  const message = (obj.message ? String(obj.message) : '');
+  const detail = obj.detail;
+  if (detail && typeof detail === 'object') {
+    const d = detail as Record<string, unknown>;
+    const dCode = d.code ? String(d.code) : '';
+    const dMsg = d.message ? String(d.message) : '';
+    if (dCode || dMsg) return [dCode, dMsg].filter(Boolean).join(' - ');
+  }
+  if (typeof detail === 'string' && detail.trim()) {
+    return [code, message, detail].filter(Boolean).join(' - ');
+  }
+  if (code || message) return [code, message].filter(Boolean).join(' - ');
+  return unknownError;
+}
+
+function statusBadgeVariant(status: string): 'muted' | 'success' | 'warning' | 'danger' {
+  const s = String(status || '').toLowerCase();
+  if (s === 'open' || s === 'pending') return 'warning';
+  if (s === 'resolved') return 'success';
+  if (s === 'ignored') return 'muted';
+  return 'danger';
+}
+
 export default function PendingRecordsManager({
   initialItems,
   initialTotal,
@@ -73,6 +104,12 @@ export default function PendingRecordsManager({
   const [query, setQuery] = useState<string>('');
   const [offset, setOffset] = useState<number>(0);
   const [loading, setLoading] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [selected, setSelected] = useState<PendingRecordItem | null>(null);
+  const [resolveRegNo, setResolveRegNo] = useState('');
+  const [ignoreReason, setIgnoreReason] = useState('');
+  const [actionLoading, setActionLoading] = useState<'' | 'resolve' | 'ignore'>('');
+  const [actionError, setActionError] = useState('');
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -100,6 +137,79 @@ export default function PendingRecordsManager({
     const body = (await res.json()) as PendingStatsResp;
     if (body.code !== 0 || !body.data) throw new Error(body.message || '加载统计失败');
     setStats(body.data);
+  }
+
+  function openDetail(item: PendingRecordItem) {
+    setSelected(item);
+    setResolveRegNo(String(item.candidate_registry_no || '').trim());
+    setIgnoreReason('');
+    setActionError('');
+    setDetailOpen(true);
+  }
+
+  async function resolveSelected() {
+    if (!selected) return;
+    const registrationNo = resolveRegNo.trim();
+    if (!registrationNo) {
+      setActionError('E_NO_REG_NO - registration_no is required');
+      return;
+    }
+    setActionLoading('resolve');
+    setActionError('');
+    try {
+      const res = await fetch(`/api/admin/pending/${encodeURIComponent(selected.id)}/resolve`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ registration_no: registrationNo }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || Number((body as any)?.code) !== 0) {
+        const msg = formatApiError(body, `HTTP ${res.status}`);
+        setActionError(msg);
+        toast({ variant: 'destructive', title: '解决失败', description: msg });
+        return;
+      }
+      toast({ title: '解决成功', description: `pending_id=${selected.id}` });
+      await refresh(offset);
+      setDetailOpen(false);
+    } catch (e) {
+      const msg = String((e as Error)?.message || e || '网络错误');
+      setActionError(msg);
+      toast({ variant: 'destructive', title: '解决失败', description: msg });
+    } finally {
+      setActionLoading('');
+    }
+  }
+
+  async function ignoreSelected() {
+    if (!selected) return;
+    setActionLoading('ignore');
+    setActionError('');
+    try {
+      const res = await fetch(`/api/admin/pending/${encodeURIComponent(selected.id)}/ignore`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: ignoreReason.trim() || null }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || Number((body as any)?.code) !== 0) {
+        const msg = formatApiError(body, `HTTP ${res.status}`);
+        setActionError(msg);
+        toast({ variant: 'destructive', title: '忽略失败', description: msg });
+        return;
+      }
+      toast({ title: '忽略成功', description: `pending_id=${selected.id}` });
+      await refresh(offset);
+      setDetailOpen(false);
+    } catch (e) {
+      const msg = String((e as Error)?.message || e || '网络错误');
+      setActionError(msg);
+      toast({ variant: 'destructive', title: '忽略失败', description: msg });
+    } finally {
+      setActionLoading('');
+    }
   }
 
   async function refresh(nextOffset?: number) {
@@ -139,11 +249,11 @@ export default function PendingRecordsManager({
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>Pending 统计</CardTitle>
+          <CardTitle>待处理统计</CardTitle>
           <CardDescription>基于 `/api/admin/pending/stats` 的 backlog/source/reason 聚合。</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Badge variant="muted">Open 总数: {Number(stats?.backlog?.open_total || 0)}</Badge>
+          <Badge variant="muted">待处理总数: {Number(stats?.backlog?.open_total || 0)}</Badge>
           <Badge variant="muted">24h 已处理: {Number(stats?.backlog?.resolved_last_24h || 0)}</Badge>
           <Badge variant="muted">7d 已处理: {Number(stats?.backlog?.resolved_last_7d || 0)}</Badge>
           <Button onClick={() => void refresh()} disabled={loading}>
@@ -153,11 +263,11 @@ export default function PendingRecordsManager({
         <CardContent style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ minWidth: 360, flex: 1 }}>
             <div className="muted" style={{ marginBottom: 6 }}>
-              by_source_key
+              按来源统计
             </div>
             {(stats?.by_source_key || []).slice(0, 8).map((x) => (
               <div key={x.source_key} style={{ fontSize: 13, marginBottom: 4 }}>
-                <b>{x.source_key}</b> · open {x.open} / resolved {x.resolved} / ignored {x.ignored}
+                <b>{x.source_key}</b> · 待处理 {x.open} / 已解决 {x.resolved} / 已忽略 {x.ignored}
                 <span className="muted"> · </span>
                 <Link
                   href={`/admin/data-sources?source_key=${encodeURIComponent(x.source_key)}`}
@@ -171,11 +281,11 @@ export default function PendingRecordsManager({
           </div>
           <div style={{ minWidth: 320, flex: 1 }}>
             <div className="muted" style={{ marginBottom: 6 }}>
-              by_reason_code (open)
+              按原因码统计（待处理）
             </div>
             {(stats?.by_reason_code || []).slice(0, 8).map((x) => (
               <div key={x.reason_code} style={{ fontSize: 13, marginBottom: 4 }}>
-                <b>{x.reason_code || '(empty)'}</b> · {x.open}
+                <b>{x.reason_code || '（空）'}</b> · {x.open}
               </div>
             ))}
           </div>
@@ -184,7 +294,7 @@ export default function PendingRecordsManager({
 
       <Card>
         <CardHeader>
-          <CardTitle>Pending 列表</CardTitle>
+          <CardTitle>待处理列表</CardTitle>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <Select
@@ -196,14 +306,14 @@ export default function PendingRecordsManager({
             }}
             style={{ minWidth: 180 }}
           >
-            <option value="open">open</option>
-            <option value="resolved">resolved</option>
-            <option value="ignored">ignored</option>
-            <option value="pending">pending</option>
-            <option value="all">all</option>
+            <option value="open">open（{ADMIN_PENDING_STATUS_ZH.open}）</option>
+            <option value="resolved">resolved（{ADMIN_PENDING_STATUS_ZH.resolved}）</option>
+            <option value="ignored">ignored（{ADMIN_PENDING_STATUS_ZH.ignored}）</option>
+            <option value="pending">pending（{ADMIN_PENDING_STATUS_ZH.pending}）</option>
+            <option value="all">all（{ADMIN_PENDING_STATUS_ZH.all}）</option>
           </Select>
           <Input
-            placeholder="source_key"
+            placeholder="来源（source_key）"
             value={sourceKey}
             onChange={(e) => {
               setSourceKey(e.target.value);
@@ -212,7 +322,7 @@ export default function PendingRecordsManager({
             style={{ minWidth: 220 }}
           />
           <Input
-            placeholder="reason_code"
+            placeholder="原因码（reason_code）"
             value={reasonCode}
             onChange={(e) => {
               setReasonCode(e.target.value);
@@ -260,16 +370,17 @@ export default function PendingRecordsManager({
               <Table>
                 <thead>
                   <tr>
-                    <th>source_key</th>
-                    <th>reason_code</th>
-                    <th>status</th>
+                    <th>来源</th>
+                    <th>原因码</th>
+                    <th>状态</th>
                     <th>候选信息</th>
                     <th>created_at</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.map((it) => (
-                    <tr key={it.id}>
+                    <tr key={it.id} onClick={() => openDetail(it)} style={{ cursor: 'pointer' }}>
                       <td>
                         <Link
                           href={`/admin/data-sources?source_key=${encodeURIComponent(it.source_key)}`}
@@ -281,7 +392,7 @@ export default function PendingRecordsManager({
                       </td>
                       <td>{it.reason_code}</td>
                       <td>
-                        <Badge variant="muted">{it.status}</Badge>
+                        <Badge variant={statusBadgeVariant(it.status)}>{it.status}</Badge>
                       </td>
                       <td>
                         <div>{it.candidate_product_name || '-'}</div>
@@ -289,6 +400,14 @@ export default function PendingRecordsManager({
                         <div className="muted" style={{ fontSize: 12 }}>{it.candidate_registry_no || '-'}</div>
                       </td>
                       <td>{it.created_at || '-'}</td>
+                      <td>
+                        <Button size="sm" variant="secondary" onClick={(e) => {
+                          e.stopPropagation();
+                          openDetail(it);
+                        }}>
+                          查看详情
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -297,6 +416,91 @@ export default function PendingRecordsManager({
           )}
         </CardContent>
       </Card>
+
+      <Modal
+        open={detailOpen}
+        title="待处理详情"
+        onClose={() => setDetailOpen(false)}
+        footer={
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button
+              variant="secondary"
+              onClick={() => void ignoreSelected()}
+              disabled={actionLoading !== ''}
+            >
+              {actionLoading === 'ignore' ? '忽略中...' : '忽略'}
+            </Button>
+            <Button
+              onClick={() => void resolveSelected()}
+              disabled={actionLoading !== ''}
+            >
+              {actionLoading === 'resolve' ? '处理中...' : '解决'}
+            </Button>
+          </div>
+        }
+      >
+        {!selected ? (
+          <div className="muted">未选择记录</div>
+        ) : (
+          <div className="grid" style={{ gap: 10 }}>
+            {actionError ? (
+              <div className="card" style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}>
+                {actionError}
+              </div>
+            ) : null}
+              <div className="columns-2">
+              <div>
+                <div className="muted">来源（source_key）</div>
+                <div>{selected.source_key}</div>
+              </div>
+              <div>
+                <div className="muted">原因码（reason_code）</div>
+                <div>{selected.reason_code}</div>
+              </div>
+              <div>
+                <div className="muted">created_at</div>
+                <div>{selected.created_at || '-'}</div>
+              </div>
+              <div>
+                <div className="muted">raw_document_id</div>
+                <div style={{ wordBreak: 'break-all' }}>{selected.raw_document_id || '-'}</div>
+              </div>
+              <div>
+                <div className="muted">candidate_product_name</div>
+                <div>{selected.candidate_product_name || '-'}</div>
+              </div>
+              <div>
+                <div className="muted">candidate_company</div>
+                <div>{selected.candidate_company || '-'}</div>
+              </div>
+              <div>
+                <div className="muted">candidate_registry_no</div>
+                <div>{selected.candidate_registry_no || '-'}</div>
+              </div>
+              <div>
+                <div className="muted">status</div>
+                <div>{selected.status}</div>
+              </div>
+            </div>
+            <div>
+              <div className="muted" style={{ marginBottom: 4 }}>解决：registration_no</div>
+              <Input
+                value={resolveRegNo}
+                onChange={(e) => setResolveRegNo(e.target.value)}
+                placeholder="输入 registration_no"
+              />
+            </div>
+            <div>
+              <div className="muted" style={{ marginBottom: 4 }}>忽略：原因（可选）</div>
+              <Textarea
+                value={ignoreReason}
+                onChange={(e) => setIgnoreReason(e.target.value)}
+                placeholder="忽略原因（可选）"
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

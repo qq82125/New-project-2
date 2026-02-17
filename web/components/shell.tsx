@@ -9,6 +9,11 @@ import { useAuth } from './auth/use-auth';
 import ProNavGroup from './plan/ProNavGroup';
 
 function AppHeader() {
+  const auth = useAuth();
+  const pathname = usePathname();
+  const isAdminRoute = pathname.startsWith('/admin');
+  const isAdmin = !auth.loading && auth.user?.role === 'admin';
+
   return (
     <header className="app-header">
       <div className="app-header__inner">
@@ -17,11 +22,16 @@ function AppHeader() {
             <span />
           </div>
           <div className="app-brand__text">
-            <div className="app-brand__name">IVD产品雷达</div>
-            <div className="app-brand__tag">Dashboard / 搜索 / 状态</div>
+            <div className="app-brand__name">IVD智慧大脑</div>
+            <div className="app-brand__tag">仪表盘 / 搜索 / 状态</div>
           </div>
         </div>
         <nav className="app-header__actions">
+          {isAdmin && !isAdminRoute ? (
+            <Link href="/admin" className="app-authlink">
+              管理后台
+            </Link>
+          ) : null}
           <AuthNav />
         </nav>
       </div>
@@ -32,7 +42,7 @@ function AppHeader() {
 function SideNav({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const items: Array<{ href: string; label: string }> = [
-    { href: '/', label: 'Dashboard' },
+    { href: '/', label: '仪表盘' },
     { href: '/search', label: '搜索' },
     { href: '/status', label: '状态' },
     { href: '/account', label: '用户中心' },
@@ -56,46 +66,6 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       <ProNavGroup />
-
-      <div className="app-sidenav__footer">
-        {isAdmin ? (
-          <>
-            <Link
-              href="/admin"
-              className={cn('app-sidenav__item', pathname === '/admin' ? 'is-active' : undefined)}
-            >
-              管理后台
-            </Link>
-            <Link
-              href="/admin/data-sources"
-              className={cn(
-                'app-sidenav__item',
-                pathname.startsWith('/admin/data-sources') ? 'is-active' : undefined
-              )}
-            >
-              数据源管理
-            </Link>
-            <Link
-              href="/admin/users"
-              className={cn('app-sidenav__item', pathname.startsWith('/admin/users') ? 'is-active' : undefined)}
-            >
-              用户与会员
-            </Link>
-            <Link
-              href="/admin/contact"
-              className={cn('app-sidenav__item', pathname.startsWith('/admin/contact') ? 'is-active' : undefined)}
-            >
-              联系信息
-            </Link>
-            <Link
-              href="/admin/udi-links"
-              className={cn('app-sidenav__item', pathname.startsWith('/admin/udi-links') ? 'is-active' : undefined)}
-            >
-              UDI待映射
-            </Link>
-          </>
-        ) : null}
-      </div>
     </aside>
   );
 }
@@ -105,6 +75,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const auth = useAuth();
   const isAdmin = !auth.loading && auth.user?.role === 'admin';
   const pathname = usePathname();
+  const isAdminRoute = pathname.startsWith('/admin');
 
   // First-time onboarding redirect:
   // - after registration (explicit redirect), and also any time onboarded=false
@@ -125,9 +96,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <AppHeader />
-      <div className="app-body">
-        <SideNav isAdmin={isAdmin} />
-        <main className="app-main">{children}</main>
+      <div className={cn('app-body', isAdminRoute ? 'app-body--single' : undefined)}>
+        {!isAdminRoute ? <SideNav isAdmin={isAdmin} /> : null}
+        <main className={cn('app-main', isAdminRoute ? 'app-main--full' : undefined)}>{children}</main>
       </div>
     </div>
   );
@@ -138,10 +109,10 @@ function AuthShell({ children }: { children: React.ReactNode }) {
     <div className="auth-shell">
       <div className="auth-shell__inner">
         <Link href="/" className="auth-shell__brand">
-          IVD产品雷达
+          IVD智慧大脑
         </Link>
         {children}
-        <p className="auth-shell__hint">登录后可查看 Dashboard、搜索与状态页。</p>
+        <p className="auth-shell__hint">登录后可查看仪表盘、搜索与状态页。</p>
       </div>
     </div>
   );

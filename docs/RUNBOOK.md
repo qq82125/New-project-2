@@ -84,3 +84,81 @@ python -m app.cli nmpa:snapshots --since 2026-02-01
 ```bash
 python -m app.cli nmpa:diffs --date 2026-02-08
 ```
+
+## Admin Pending 手工验收（PR-F1）
+
+启动：
+```bash
+docker compose up -d --build
+```
+
+验收步骤（浏览器）：
+1. 打开 `http://localhost:3000/admin/pending`
+2. 点击任意一行或“查看详情”，弹出详情窗口
+3. 确认详情字段展示完整：
+   - `candidate_product_name/candidate_company/candidate_registry_no`
+   - `raw_document_id/source_key/reason_code/created_at`
+4. Resolve 流程：
+   - 输入 `registration_no`
+   - 点击 `Resolve`
+   - 成功后窗口关闭，列表和统计自动刷新
+5. Ignore 流程：
+   - 输入可选 `reason`
+   - 点击 `Ignore`
+   - 成功后窗口关闭，列表和统计自动刷新
+6. 错误展示：
+   - 触发失败时，窗口内必须显示后端返回的 `code/message/detail`
+   - toast 同步显示同一错误内容（不是泛化“失败”提示）
+
+说明：
+- 若后端环境尚未提供 `/api/admin/pending/{id}/ignore`，前端会展示后端原始错误信息（通常为 404 或 detail）。
+
+## Admin Conflicts 手工验收（PR-F2）
+
+启动：
+```bash
+docker compose up -d --build
+```
+
+验收步骤（浏览器）：
+1. 打开 `http://localhost:3000/admin/conflicts`
+2. 默认视图应为 `grouped`，可切换到 `raw-list`
+3. grouped 模式：
+   - 按 `registration_no` 分组展示
+   - 每组可看到 `field_name` 与 `candidates`
+4. resolve 必填 reason：
+   - 不填写 reason 点击裁决，应提示 `E_REASON_REQUIRED`（或后端同类错误）
+   - 填写 `winner_value + reason` 后裁决成功，列表自动刷新
+5. 失败提示：
+   - 页面内错误行显示后端返回 `code/message/detail`
+   - toast 显示相同错误信息
+
+## Admin Sources 手工验收（PR-F3）
+
+启动：
+```bash
+docker compose up -d --build
+```
+
+验收步骤（浏览器）：
+1. 打开 `http://localhost:3000/admin/sources`
+2. 页面应展示 Source 列表，且包含字段：
+   - `source_key/display_name/entity_scope`
+   - `parser_key/default_evidence_grade/priority/enabled`
+3. 点击任意一条 `编辑`，在弹层修改以下任一字段并保存：
+   - `enabled`
+   - `schedule_cron`
+   - `upsert_policy.priority`
+   - `parse_params.parser_key`
+   - `parse_params.default_evidence_grade`
+4. 保存成功后：
+   - 弹层关闭
+   - 列表自动刷新并展示最新值
+5. 失败路径验证：
+   - 输入非法值（例如 `priority` 非数字）触发前端校验
+   - 或制造后端失败，确认页面与 toast 均显示后端 `code/message/detail`
+
+回滚方式：
+```bash
+git restore --source=HEAD~1 web/app/admin/sources/page.tsx web/components/admin/SourcesRegistryManager.tsx docs/RUNBOOK.md
+```

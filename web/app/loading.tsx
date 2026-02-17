@@ -6,7 +6,7 @@ export default function Loading() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>Dashboard</CardTitle>
+          <CardTitle>仪表盘</CardTitle>
         </CardHeader>
         <CardContent>
           <Skeleton height={14} width={220} />

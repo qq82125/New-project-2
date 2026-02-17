@@ -1,14 +1,9 @@
-import { headers } from 'next/headers';
-import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
-
 import ConflictsQueueManager from '../../../components/admin/ConflictsQueueManager';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 
-import { apiBase } from '../../../lib/api-server';
+import { adminFetchJson } from '../../../lib/admin';
+import { ADMIN_TEXT } from '../../../constants/admin-i18n';
 
-type AdminMe = { id: number; email: string; role: string };
-type AdminMeResp = { code: number; message: string; data: AdminMe };
 type ConflictItem = {
   id: string;
   registration_no: string;
@@ -32,67 +27,22 @@ type ConflictsResp = {
 
 export const dynamic = 'force-dynamic';
 
-async function getAdminMe(): Promise<AdminMe> {
-  const API_BASE = apiBase();
-  const cookie = (await headers()).get('cookie') || '';
-  const res = await fetch(`${API_BASE}/api/admin/me`, {
-    method: 'GET',
-    headers: cookie ? { cookie } : undefined,
-    cache: 'no-store',
-  });
-
-  if (res.status === 401) redirect('/login');
-  if (res.status === 403) notFound();
-  if (!res.ok) throw new Error(`admin/me failed: ${res.status}`);
-
-  const body = (await res.json()) as AdminMeResp;
-  if (body.code !== 0) throw new Error(body.message || 'admin/me returned error');
-  return body.data;
-}
-
 async function getConflicts(): Promise<ConflictItem[]> {
-  const API_BASE = apiBase();
-  const cookie = (await headers()).get('cookie') || '';
-
-  const tryFetch = async (path: string) => {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: 'GET',
-      headers: cookie ? { cookie } : undefined,
-      cache: 'no-store',
-    });
-    return res;
-  };
-
-  let res = await tryFetch('/api/admin/conflicts?status=open&limit=200');
-  if (res.status === 404) {
-    res = await tryFetch('/api/admin/conflicts-queue?status=open&limit=200');
-  }
-  if (res.status === 401) redirect('/login');
-  if (res.status === 403) notFound();
-  if (!res.ok) throw new Error(`admin/conflicts failed: ${res.status}`);
-
-  const body = (await res.json()) as ConflictsResp;
-  if (body.code !== 0) throw new Error(body.message || 'admin/conflicts returned error');
-  return body.data?.items || [];
+  const data = await adminFetchJson<ConflictsResp['data']>('/api/admin/conflicts?status=open&limit=200');
+  return data?.items || [];
 }
 
 export default async function AdminConflictsPage() {
-  const [me, items] = await Promise.all([getAdminMe(), getConflicts()]);
+  const items = await getConflicts();
   return (
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>冲突队列管理</CardTitle>
-          <CardDescription>仅 admin 可访问。默认使用新接口 `/api/admin/conflicts`。</CardDescription>
+          <CardTitle>{ADMIN_TEXT.modules.conflicts.title}</CardTitle>
+          <CardDescription>{ADMIN_TEXT.modules.conflicts.description}</CardDescription>
         </CardHeader>
-        <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="muted">当前：</span>
-          <span className="muted">{me.email}</span>
-          <span className="muted">({me.role})</span>
-          <span className="muted">·</span>
-          <Link href="/admin" className="muted">
-            返回管理后台
-          </Link>
+        <CardContent>
+          <span className="muted">支持按注册证聚合查看冲突，人工裁决后写入可追溯审计链。</span>
         </CardContent>
       </Card>
 

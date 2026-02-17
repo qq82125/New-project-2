@@ -11,6 +11,7 @@ import { Select } from '../ui/select';
 import { Skeleton } from '../ui/skeleton';
 import { Table, TableWrap } from '../ui/table';
 import { toast } from '../ui/use-toast';
+import { ADMIN_UDI_LINK_STATUS_ZH } from '../../constants/admin-i18n';
 
 type PendingItem = {
   id: string;
@@ -91,7 +92,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
   async function bindOne(item: PendingItem) {
     const regNo = (bindInputById[item.id] || '').trim();
     if (!regNo) {
-      toast({ variant: 'destructive', title: '缺少注册证号', description: `请先填写 ${item.di} 的 registration_no` });
+      toast({ variant: 'destructive', title: '缺少注册证号', description: `请先填写 ${item.di} 关联的注册证号（registration_no）` });
       return;
     }
     setSubmittingId(item.id);
@@ -123,7 +124,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
       <Card>
         <CardHeader>
           <CardTitle>UDI 待映射队列</CardTitle>
-          <CardDescription>处理自动解析失败的 DI，手动绑定到 registration_no 后将写入 product_udi_map（manual）。</CardDescription>
+          <CardDescription>处理自动解析失败的 DI，手动绑定到注册证号后将写入 product_udi_map（manual）。</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <Select
@@ -135,10 +136,10 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             }}
             style={{ minWidth: 180 }}
           >
-            <option value="PENDING">PENDING</option>
-            <option value="RETRYING">RETRYING</option>
-            <option value="RESOLVED">RESOLVED</option>
-            <option value="ALL">ALL</option>
+            <option value="PENDING">PENDING（{ADMIN_UDI_LINK_STATUS_ZH.PENDING}）</option>
+            <option value="RETRYING">RETRYING（{ADMIN_UDI_LINK_STATUS_ZH.RETRYING}）</option>
+            <option value="RESOLVED">RESOLVED（{ADMIN_UDI_LINK_STATUS_ZH.RESOLVED}）</option>
+            <option value="ALL">ALL（{ADMIN_UDI_LINK_STATUS_ZH.ALL}）</option>
           </Select>
           <Input
             placeholder="按 DI / 候选公司 / 候选产品过滤"
@@ -171,7 +172,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                     <th>状态</th>
                     <th>原因</th>
                     <th>候选信息</th>
-                    <th>手动绑定 registration_no</th>
+                    <th>手动绑定注册证号</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -179,7 +180,12 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                     <tr key={it.id}>
                       <td>{it.di}</td>
                       <td>
-                        <Badge variant="muted">{it.status}</Badge>
+                        <Badge variant="muted">
+                          {it.status}
+                          {ADMIN_UDI_LINK_STATUS_ZH[it.status as keyof typeof ADMIN_UDI_LINK_STATUS_ZH]
+                            ? `（${ADMIN_UDI_LINK_STATUS_ZH[it.status as keyof typeof ADMIN_UDI_LINK_STATUS_ZH]}）`
+                            : ''}
+                        </Badge>
                       </td>
                       <td>
                         <div>{it.reason_code || it.reason}</div>
@@ -218,4 +224,3 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
     </div>
   );
 }
-

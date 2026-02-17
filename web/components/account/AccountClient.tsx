@@ -189,7 +189,7 @@ export default function AccountClient({ initialMe }: { initialMe: MeData | null 
                 刷新状态
               </Button>
               <Button variant="ghost" type="button" onClick={() => (window.location.href = '/')} disabled={loading}>
-                返回 Dashboard
+                返回仪表盘
               </Button>
             </div>
           </CardContent>
@@ -209,7 +209,7 @@ export default function AccountClient({ initialMe }: { initialMe: MeData | null 
                 </div>
                 <div className="muted">到期日：以订阅为准/待配置</div>
                 <div className="muted">权益简述：</div>
-                <div className="muted">· 可浏览 Dashboard</div>
+                <div className="muted">· 可浏览仪表盘</div>
                 <div className="muted">· 不含行业周报</div>
                 <div className="muted">· 订阅数量有限</div>
                 <div className="grid" style={{ gap: 6 }}>

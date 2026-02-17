@@ -6,7 +6,7 @@ import { getMe } from '../lib/getMe';
 import { PlanProvider } from '../components/plan/PlanContext';
 
 export const metadata: Metadata = {
-  title: 'IVD产品雷达',
+  title: 'IVD智慧大脑',
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
