@@ -142,7 +142,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             <option value="ALL">{ADMIN_UDI_LINK_STATUS_ZH.ALL}</option>
           </Select>
           <Input
-            placeholder="按 DI / 候选公司 / 候选产品过滤"
+            placeholder="按 UDI-DI / 候选公司 / 候选产品过滤"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ minWidth: 320 }}
@@ -168,7 +168,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
               <Table>
                 <thead>
                   <tr>
-                    <th>DI</th>
+                    <th>UDI-DI</th>
                     <th>状态</th>
                     <th>原因</th>
                     <th>候选信息</th>
@@ -195,7 +195,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                       <td>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <Input
-                            placeholder="如：国械注准2026xxxx"
+                            placeholder="如：国械注准2026xxxx（用于人工绑定）"
                             value={bindInputById[it.id] || ''}
                             onChange={(e) =>
                               setBindInputById((prev) => ({ ...prev, [it.id]: e.target.value }))

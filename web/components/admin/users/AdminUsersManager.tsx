@@ -104,7 +104,7 @@ export default function AdminUsersManager() {
               setQuery(e.target.value);
               setOffset(0);
             }}
-            placeholder="搜索 email（模糊匹配）"
+            placeholder="搜索邮箱（支持模糊匹配）"
             style={{ minWidth: 320 }}
             disabled={loading}
           />
@@ -157,7 +157,7 @@ export default function AdminUsersManager() {
             <Table>
               <thead>
                 <tr>
-                  <th>Email</th>
+                  <th>邮箱</th>
                   <th style={{ width: 140 }}>会员计划</th>
                   <th style={{ width: 140 }}>会员状态</th>
                   <th style={{ width: 200 }}>到期时间</th>

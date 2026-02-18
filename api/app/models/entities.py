@@ -187,6 +187,10 @@ class UdiDiMaster(Base):
     di: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     payload_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    has_cert: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    registration_no_norm: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    packaging_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    storage_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(

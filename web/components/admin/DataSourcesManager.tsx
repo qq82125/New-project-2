@@ -1074,7 +1074,7 @@ export default function DataSourcesManager({
             <Input
               value={supplementSchedule.nmpa_query_url || ''}
               onChange={(e) => setSupplementSchedule((p) => ({ ...p, nmpa_query_url: e.target.value }))}
-              placeholder="NMPA查询URL"
+              placeholder="NMPA 查询地址（选填）"
             />
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1294,38 +1294,38 @@ export default function DataSourcesManager({
             <Input
               value={form.source_key}
               onChange={(e) => setForm((p) => ({ ...p, source_key: e.target.value.toUpperCase() }))}
-              placeholder="来源编码（如 NMPA_REG / UDI_DI）"
+              placeholder="来源编码（必填，例如 NMPA_REG / UDI_DI）"
               disabled={editingId != null}
             />
             <Input
               value={form.display_name}
               onChange={(e) => setForm((p) => ({ ...p, display_name: e.target.value }))}
-              placeholder="展示名称（创建新 source 时必填）"
+              placeholder="展示名称（必填，用于页面展示）"
             />
             <Input
               value={form.parser_key}
               onChange={(e) => setForm((p) => ({ ...p, parser_key: e.target.value }))}
-              placeholder="解析器标识（创建新来源必填）"
+              placeholder="解析器标识（必填，对应后端解析器）"
             />
             <Select
               value={form.entity_scope}
               onChange={(e) => setForm((p) => ({ ...p, entity_scope: e.target.value }))}
             >
-              <option value="REGISTRATION">REGISTRATION</option>
-              <option value="UDI">UDI</option>
-              <option value="PROCUREMENT">PROCUREMENT</option>
-              <option value="NHSA">NHSA</option>
+              <option value="REGISTRATION">注册证</option>
+              <option value="UDI">UDI 标识</option>
+              <option value="PROCUREMENT">招采数据</option>
+              <option value="NHSA">国家医保</option>
             </Select>
             <Input
               value={form.name}
               onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              placeholder="连接名称（兼容旧链路）"
+              placeholder="连接名称（建议填写，兼容旧链路）"
             />
             <Select
               value={form.type}
               onChange={(e) => setForm((p) => ({ ...p, type: e.target.value as 'postgres' | 'local_registry' }))}
             >
-              <option value="postgres">PostgreSQL</option>
+              <option value="postgres">PostgreSQL 数据库</option>
               <option value="local_registry">本地注册库目录</option>
             </Select>
             <Select
@@ -1340,7 +1340,7 @@ export default function DataSourcesManager({
                 <Input
                   value={form.folder}
                   onChange={(e) => setForm((p) => ({ ...p, folder: e.target.value }))}
-                  placeholder="目录路径（包含 .xlsx/.zip）"
+                  placeholder="目录路径（必填，需包含 .xlsx/.zip 文件）"
                 />
                 <Select
                   value={form.ingest_new ? 'yes' : 'no'}
@@ -1352,7 +1352,7 @@ export default function DataSourcesManager({
                 <Input
                   value={form.ingest_chunk_size}
                   onChange={(e) => setForm((p) => ({ ...p, ingest_chunk_size: e.target.value }))}
-                  placeholder="导入批量（默认 2000）"
+                  placeholder="导入批量（选填，默认 2000）"
                   inputMode="numeric"
                 />
               </>
@@ -1361,28 +1361,28 @@ export default function DataSourcesManager({
                 <Input
                   value={form.host}
                   onChange={(e) => setForm((p) => ({ ...p, host: e.target.value }))}
-                  placeholder="主机地址"
+                  placeholder="主机地址（必填，例如 127.0.0.1）"
                 />
                 <Input
                   value={form.port}
                   onChange={(e) => setForm((p) => ({ ...p, port: e.target.value }))}
-                  placeholder="端口"
+                  placeholder="端口（必填，例如 5432）"
                   inputMode="numeric"
                 />
                 <Input
                   value={form.database}
                   onChange={(e) => setForm((p) => ({ ...p, database: e.target.value }))}
-                  placeholder="数据库名"
+                  placeholder="数据库名（必填）"
                 />
                 <Input
                   value={form.username}
                   onChange={(e) => setForm((p) => ({ ...p, username: e.target.value }))}
-                  placeholder="用户名"
+                  placeholder="用户名（必填）"
                 />
                 <Input
                   value={form.password}
                   onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))}
-                  placeholder={editing ? '密码（留空表示不修改）' : '密码'}
+                  placeholder={editing ? '密码（留空表示不修改）' : '密码（必填）'}
                   type="password"
                 />
                 <Select value={form.sslmode} onChange={(e) => setForm((p) => ({ ...p, sslmode: e.target.value }))}>
@@ -1393,12 +1393,12 @@ export default function DataSourcesManager({
                 <Input
                   value={form.source_table}
                   onChange={(e) => setForm((p) => ({ ...p, source_table: e.target.value }))}
-                  placeholder="主源表（默认 public.products）"
+                  placeholder="主源表（选填，默认 public.products）"
                 />
                 <Input
                   value={form.source_query}
                   onChange={(e) => setForm((p) => ({ ...p, source_query: e.target.value }))}
-                  placeholder="主源SQL（可选，优先于主源表）"
+                  placeholder="主源 SQL（选填，优先于主源表）"
                 />
               </>
             )}

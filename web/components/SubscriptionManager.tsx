@@ -65,15 +65,15 @@ export function SubscriptionManager({
       body = null;
     }
 
-      if (!res.ok) {
-        if (body?.error === 'SUBSCRIPTION_LIMIT') {
-          toast({
-            variant: 'destructive',
-            title: '订阅数量达到上限',
-            description: body?.message || '请升级专业版或联系开通。',
-          });
-          return;
-        }
+    if (!res.ok) {
+      if (body?.error === 'SUBSCRIPTION_LIMIT') {
+        toast({
+          variant: 'destructive',
+          title: '订阅数量达到上限',
+          description: body?.message || '请升级专业版或联系开通。',
+        });
+        return;
+      }
       toast({ variant: 'destructive', title: '创建失败', description: `请求失败 (${res.status})` });
       return;
     }

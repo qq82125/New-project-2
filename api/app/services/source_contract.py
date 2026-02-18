@@ -8,7 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -63,6 +63,91 @@ def _pick_text(payload: dict[str, Any], *keys: str) -> str | None:
             if s:
                 return s
     return None
+
+
+def _parse_bool_zh(v: Any) -> bool | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    if s in {"是", "Y", "YES", "True", "TRUE", "1"}:
+        return True
+    if s in {"否", "N", "NO", "False", "FALSE", "0"}:
+        return False
+    return None
+
+
+def _parse_packaging_json(row: dict[str, Any]) -> dict[str, Any] | None:
+    raw = row.get("packingList")
+    items: list[dict[str, Any]] = []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict):
+        raw = raw.get("packings") or raw.get("packing") or raw.get("items")
+    if isinstance(raw, list):
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            package_di = _pick_text(it, "bzcpbs", "package_di")
+            if not package_di:
+                continue
+            items.append(
+                {
+                    "package_di": package_di,
+                    "package_level": _pick_text(it, "cpbzjb", "package_level"),
+                    "contains_qty": _pick_text(it, "bznhxyjcpbssl", "contains_qty"),
+                    "child_di": _pick_text(it, "bznhxyjbzcpbs", "child_di"),
+                }
+            )
+    if not items:
+        return None
+    return {"packings": items}
+
+
+def _parse_storage_json(row: dict[str, Any]) -> dict[str, Any] | None:
+    raw = row.get("storageList")
+    items: list[dict[str, Any]] = []
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict):
+        raw = raw.get("storages") or raw.get("storage") or raw.get("items")
+    if isinstance(raw, list):
+        for it in raw:
+            if not isinstance(it, dict):
+                continue
+            t = _pick_text(it, "cchcztj", "type")
+            mn = _pick_text(it, "zdz", "min")
+            mx = _pick_text(it, "zgz", "max")
+            unit = _pick_text(it, "jldw", "unit")
+            if not any([t, mn, mx, unit]):
+                continue
+            rng = _pick_text(it, "range")
+            if not rng:
+                if mn and mx and unit:
+                    rng = f"{mn}-{mx}{unit}"
+                elif mn and mx:
+                    rng = f"{mn}-{mx}"
+                else:
+                    rng = (mn or mx or "") + (unit or "")
+                    rng = rng.strip() or None
+            items.append({"type": t, "min": mn, "max": mx, "unit": unit, "range": rng})
+
+    # Fallback: many UDI XML exports carry text storage conditions under <tscchcztj>.
+    if not items:
+        txt = _pick_text(row, "tscchcztj")
+        if txt:
+            items.append({"type": "TEXT", "range": txt})
+
+    if not items:
+        return None
+    return {"storages": items}
 
 
 _GRADE_RANK: dict[str, int] = {"A": 4, "B": 3, "C": 2, "D": 1}
@@ -744,11 +829,14 @@ def write_udi_contract_record(
       - registration_no resolved -> product_udi_map
       - registration_no missing -> udi_di_master + pending_udi_links
     """
-    di = str(row.get("udi_di") or row.get("di") or "").strip() or None
+    di = _pick_text(row, "udi_di", "di", "zxxsdycpbs", "UDI_DI", "primary_di")
     raw_reg_no = (
-        str(row.get("registry_no") or row.get("reg_no") or row.get("registration_no") or "").strip() or None
+        _pick_text(row, "registry_no", "reg_no", "registration_no", "zczbhhzbapzbh")
     )
     reg_norm = normalize_registration_no(raw_reg_no)
+    has_cert = _parse_bool_zh(_pick_text(row, "sfyzcbayz", "has_cert"))
+    packaging_json = _parse_packaging_json(row)
+    storage_json = _parse_storage_json(row)
 
     parse_error: str | None = None
     if not di:
@@ -799,6 +887,10 @@ def write_udi_contract_record(
             di=di,
             payload_hash=payload_hash,
             source=str(source or "UNKNOWN"),
+            has_cert=has_cert,
+            registration_no_norm=(reg_norm or None),
+            packaging_json=(_json_payload(packaging_json) if packaging_json else None),
+            storage_json=(_json_payload(storage_json) if storage_json else None),
             first_seen_at=now,
             last_seen_at=now,
             raw_source_record_id=raw_id,
@@ -808,6 +900,10 @@ def write_udi_contract_record(
             set_={
                 "payload_hash": master_stmt.excluded.payload_hash,
                 "source": master_stmt.excluded.source,
+                "has_cert": master_stmt.excluded.has_cert,
+                "registration_no_norm": func.coalesce(master_stmt.excluded.registration_no_norm, UdiDiMaster.registration_no_norm),
+                "packaging_json": func.coalesce(master_stmt.excluded.packaging_json, UdiDiMaster.packaging_json),
+                "storage_json": func.coalesce(master_stmt.excluded.storage_json, UdiDiMaster.storage_json),
                 "last_seen_at": master_stmt.excluded.last_seen_at,
                 "raw_source_record_id": master_stmt.excluded.raw_source_record_id,
                 "updated_at": text("NOW()"),

@@ -214,9 +214,9 @@ export default async function StatusPage({ searchParams }: { searchParams: Promi
               #{run.id} <span className="muted">{run.source}</span>
             </CardTitle>
             <CardDescription>
-              <span className="muted">started:</span> {new Date(run.started_at).toLocaleString()}
+              <span className="muted">开始时间：</span> {new Date(run.started_at).toLocaleString()}
               {' · '}
-              <span className="muted">finished:</span> {run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}
+              <span className="muted">结束时间：</span> {run.finished_at ? new Date(run.finished_at).toLocaleString() : '-'}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid">
@@ -231,7 +231,7 @@ export default async function StatusPage({ searchParams }: { searchParams: Promi
                 新增/变更/移除: {run.added_count}/{run.updated_count}/{run.removed_count}
               </Badge>
             </div>
-            <div className="muted">message: {run.message || '-'}</div>
+            <div className="muted">运行信息：{run.message || '-'}</div>
           </CardContent>
         </Card>
       ))}

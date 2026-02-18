@@ -63,9 +63,23 @@ def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
                     continue
                 row: dict[str, Any] = {}
                 for child in list(elem):
-                    # Keep flat scalar fields only; ignore nested lists/objects such as contactList.
+                    # Keep flat scalar fields; selectively retain nested lists we need for UDI contract.
                     if len(child) == 0:
                         row[child.tag] = (child.text or '').strip()
+                        continue
+                    if child.tag in {"packingList", "storageList"}:
+                        items: list[dict[str, Any]] = []
+                        for item in list(child):
+                            if len(item) == 0:
+                                continue
+                            d: dict[str, Any] = {}
+                            for leaf in list(item):
+                                if len(leaf) == 0:
+                                    d[leaf.tag] = (leaf.text or "").strip()
+                            if d:
+                                items.append(d)
+                        if items:
+                            row[child.tag] = items
                 if row:
                     out.append(row)
                 elem.clear()
@@ -77,9 +91,21 @@ def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
             for dev in soup.find_all('device'):
                 row: dict[str, Any] = {}
                 for child in dev.find_all(recursive=False):
-                    if child.find(True, recursive=False) is not None:
+                    if child.find(True, recursive=False) is None:
+                        row[child.name] = child.get_text(strip=True)
                         continue
-                    row[child.name] = child.get_text(strip=True)
+                    if child.name in {"packingList", "storageList"}:
+                        items: list[dict[str, Any]] = []
+                        for item in child.find_all(recursive=False):
+                            d: dict[str, Any] = {}
+                            for leaf in item.find_all(recursive=False):
+                                if leaf.find(True, recursive=False) is not None:
+                                    continue
+                                d[str(leaf.name)] = leaf.get_text(strip=True)
+                            if d:
+                                items.append(d)
+                        if items:
+                            row[child.name] = items
                 if row:
                     out.append(row)
         return out

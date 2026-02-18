@@ -57,14 +57,14 @@ export default function LoginPage() {
         <form onSubmit={onSubmit} className="grid">
           <Input
           type="email"
-          placeholder="邮箱"
+          placeholder="邮箱（必填，例如 name@company.com）"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
           />
           <Input
           type="password"
-          placeholder="密码"
+          placeholder="密码（必填）"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
