@@ -14,6 +14,7 @@ from sqlalchemy.pool import NullPool
 
 from app.common.errors import IngestErrorCode
 from app.models import (
+    PendingDocument,
     PendingRecord,
     Product,
     ProductVariant,
@@ -26,6 +27,7 @@ from app.models import (
 from app.pipeline.ingest import save_raw_document
 from app.repositories.source_runs import finish_source_run, start_source_run
 from app.services.normalize_keys import normalize_registration_no
+from app.services.pending_mode import should_enqueue_pending_documents, should_enqueue_pending_records
 from app.services.source_contract import upsert_registration_with_contract
 
 
@@ -349,6 +351,32 @@ def _enqueue_pending_record(
     db.execute(stmt)
 
 
+def _enqueue_pending_document(
+    db: Session,
+    *,
+    raw_document_id: Any,
+    source_run_id: int | None,
+    reason_code: str,
+) -> None:
+    """Document-level pending queue for raw_documents that failed the registration anchor gate."""
+    stmt = insert(PendingDocument).values(
+        raw_document_id=raw_document_id,
+        source_run_id=(int(source_run_id) if source_run_id is not None else None),
+        reason_code=str(reason_code or "NO_REG_NO"),
+        status="pending",
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[PendingDocument.raw_document_id],
+        set_={
+            "source_run_id": stmt.excluded.source_run_id,
+            "reason_code": stmt.excluded.reason_code,
+            "status": "pending",
+            "updated_at": text("NOW()"),
+        },
+    )
+    db.execute(stmt)
+
+
 def _ensure_product_snapshot_for_registration(
     db: Session,
     *,
@@ -659,17 +687,25 @@ def _run_one_source(db: Session, *, defn: SourceDefinition, cfg: SourceConfig, e
                     source_run_id=int(run.id),
                     payload_hash=row_hash,
                 )
-                _enqueue_pending_record(
-                    db,
-                    source_key=str(defn.source_key),
-                    raw_document_id=raw_document_id,
-                    registration_no_raw=_pick_text(row, "registration_no", "reg_no", "registry_no"),
-                    raw_row=row,
-                    payload_hash=row_hash,
-                    source_run_id=int(run.id),
-                    reason_code=(gate.reason_code or "PARSE_ERROR"),
-                    reason=(gate.reason or "registration anchor gate failed"),
-                )
+                if should_enqueue_pending_documents():
+                    _enqueue_pending_document(
+                        db,
+                        raw_document_id=raw_document_id,
+                        source_run_id=int(run.id),
+                        reason_code=str(gate.reason_code or "NO_REG_NO"),
+                    )
+                if should_enqueue_pending_records():
+                    _enqueue_pending_record(
+                        db,
+                        source_key=str(defn.source_key),
+                        raw_document_id=raw_document_id,
+                        registration_no_raw=_pick_text(row, "registration_no", "reg_no", "registry_no"),
+                        raw_row=row,
+                        payload_hash=row_hash,
+                        source_run_id=int(run.id),
+                        reason_code=(gate.reason_code or "PARSE_ERROR"),
+                        reason=(gate.reason or "registration anchor gate failed"),
+                    )
                 continue
 
             _set_raw_parse_log(

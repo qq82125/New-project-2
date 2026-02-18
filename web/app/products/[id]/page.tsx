@@ -11,6 +11,7 @@ import { getMe } from '../../../lib/getMe';
 import ProUpgradeHint from '../../../components/plan/ProUpgradeHint';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../../constants/pro';
 import { IVD_CATEGORY_ZH, STATUS_ZH, labelFrom } from '../../../constants/display';
+import LriCard from '../../../components/lri/LriCard';
 
 type ProductData = {
   id: string;
@@ -43,6 +44,32 @@ type ProductParamsData = {
   items: ProductParamItem[];
 };
 
+type ProductLriScore = {
+  registration_id: string;
+  product_id?: string | null;
+  methodology_code?: string | null;
+  methodology_name_cn?: string | null;
+  tte_days?: number | null;
+  renewal_count?: number | null;
+  competitive_count?: number | null;
+  gp_new_12m?: number | null;
+  tte_score?: number | null;
+  rh_score?: number | null;
+  cd_score?: number | null;
+  gp_score?: number | null;
+  lri_total?: number | null;
+  lri_norm: number;
+  risk_level: string;
+  model_version: string;
+  calculated_at: string;
+};
+
+type ProductLriData = {
+  product_id: string;
+  registration_id?: string | null;
+  score?: ProductLriScore | null;
+};
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -58,6 +85,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const res = await apiGet<ProductData>(`/api/products/${id}`);
   const paramsRes = isPro ? await apiGet<ProductParamsData>(`/api/products/${id}/params`) : { data: null, error: null };
+  const lriRes = await apiGet<ProductLriData>(`/api/products/${id}/lri`);
 
   if (res.error) {
     return <ErrorState text={`产品加载失败：${res.error}`} />;
@@ -124,6 +152,8 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
           ctaHref={PRO_TRIAL_HREF}
         />
       ) : null}
+
+      <LriCard score={lriRes.data?.score || null} isPro={isPro} loadingError={lriRes.error} />
 
       {isPro ? (
         <Card>

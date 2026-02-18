@@ -104,7 +104,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
       <Card>
         <CardHeader>
           <CardTitle>完整产品库</CardTitle>
-          <CardDescription>Pro 全量视图，仅展示 IVD 范围产品（22 / 6840 / 07(IVD) / 21(IVD)）。</CardDescription>
+          <CardDescription>专业版全量视图，仅展示 IVD 范围产品（22 / 6840 / 07(IVD) / 21(IVD)）。</CardDescription>
         </CardHeader>
         <CardContent>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
@@ -113,7 +113,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
                 <a className="ui-btn" href={exportHref}>
                   导出 CSV
                 </a>
-                <Badge variant="success">Pro</Badge>
+                <Badge variant="success">专业版</Badge>
               </>
             ) : (
               <ProUpgradeHint text={PRO_COPY.search_free_hint} ctaHref={PRO_TRIAL_HREF} />

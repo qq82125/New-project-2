@@ -65,15 +65,15 @@ export function SubscriptionManager({
       body = null;
     }
 
-    if (!res.ok) {
-      if (body?.error === 'SUBSCRIPTION_LIMIT') {
-        toast({
-          variant: 'destructive',
-          title: '订阅数量达到上限',
-          description: body?.message || '请升级或联系开通 Pro。',
-        });
-        return;
-      }
+      if (!res.ok) {
+        if (body?.error === 'SUBSCRIPTION_LIMIT') {
+          toast({
+            variant: 'destructive',
+            title: '订阅数量达到上限',
+            description: body?.message || '请升级专业版或联系开通。',
+          });
+          return;
+        }
       toast({ variant: 'destructive', title: '创建失败', description: `请求失败 (${res.status})` });
       return;
     }
@@ -104,8 +104,8 @@ export function SubscriptionManager({
             <option value="registration">证照</option>
             <option value="keyword">关键词</option>
           </select>
-          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="订阅目标" />
-          <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="Webhook URL（可选）" />
+          <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="订阅目标（如企业名/注册证号/关键词）" />
+          <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="回调地址（Webhook，可选，用于接收推送）" />
           <button onClick={createSub} disabled={loading}>
             {loading ? '提交中...' : '订阅'}
           </button>
@@ -117,7 +117,7 @@ export function SubscriptionManager({
         {quota ? (
           <>
             {' '}
-            · 配额：{activeCount}/{quota}（{plan === 'pro_annual' ? 'Pro' : 'Free'}）
+            · 配额：{activeCount}/{quota}（{plan === 'pro_annual' ? '专业版（年度）' : '免费版'}）
           </>
         ) : null}
         {' '}
@@ -129,9 +129,9 @@ export function SubscriptionManager({
           <h3>
             #{sub.id} {sub.subscription_type} / {sub.target_value}
           </h3>
-          <p>状态: {sub.is_active ? 'ACTIVE' : 'INACTIVE'}</p>
+          <p>状态: {sub.is_active ? '启用' : '未启用'}</p>
           <p>最近汇总: {sub.last_digest_date || '-'}</p>
-          <p>Webhook: {sub.webhook_url || '-'}</p>
+          <p>回调地址: {sub.webhook_url || '-'}</p>
           {sub.is_active && <button onClick={() => deactivate(sub.id)}>停用</button>}
         </div>
       ))}

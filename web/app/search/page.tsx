@@ -100,10 +100,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
               </a>
             ) : (
               <>
-                <Button type="button" disabled title="Pro 才支持导出">
+                <Button type="button" disabled title="专业版才支持导出">
                   导出 CSV
                 </Button>
-                <Badge variant="muted">Pro</Badge>
+                <Badge variant="muted">专业版</Badge>
                 <Link href="/contact?intent=pro" className="muted">
                   联系开通
                 </Link>

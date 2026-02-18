@@ -32,6 +32,7 @@ services:
       DATA_SOURCES_CRYPTO_KEY: ${DATA_SOURCES_CRYPTO_KEY:-local-dev-data-sources-key}
       STAGING_DIR: ${STAGING_DIR:-/app/staging}
       USE_REGISTRATION_ANCHOR: ${USE_REGISTRATION_ANCHOR:-false}
+      PENDING_QUEUE_MODE: ${PENDING_QUEUE_MODE:-document_only}
     depends_on:
       db:
         condition: service_healthy
@@ -68,6 +69,7 @@ services:
       NMPA_UDI_DOWNLOAD_PAGE: ${NMPA_UDI_DOWNLOAD_PAGE:-https://udi.nmpa.gov.cn/download.html}
       DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-https://udi.nmpa.gov.cn}
       USE_REGISTRATION_ANCHOR: ${USE_REGISTRATION_ANCHOR:-false}
+      PENDING_QUEUE_MODE: ${PENDING_QUEUE_MODE:-document_only}
     depends_on:
       db:
         condition: service_healthy
@@ -85,6 +87,7 @@ services:
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
       API_BASE_URL: ${API_BASE_URL:-http://api:8000}
+      PENDING_QUEUE_MODE: ${PENDING_QUEUE_MODE:-document_only}
     depends_on:
       api:
         condition: service_healthy

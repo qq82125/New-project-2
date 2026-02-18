@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui
 import { toast } from '../ui/use-toast';
 import { refreshAuth, useAuth } from '../auth/use-auth';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
-import { PLAN_STATUS_ZH, ROLE_ZH, labelFrom } from '../../constants/display';
+import { PLAN_STATUS_ZH, PLAN_ZH, ROLE_ZH, labelFrom } from '../../constants/display';
 
 type MeData = {
   id?: number;
@@ -81,7 +81,7 @@ export default function AccountClient({ initialMe }: { initialMe: MeData | null 
 
   const planStatus = (me?.plan_status || 'inactive').toLowerCase();
   const isPro = Boolean(me?.is_pro || me?.is_admin || (me?.plan || '').toLowerCase().includes('pro'));
-  const planLabel = isPro ? 'Pro' : 'Free';
+  const planLabel = isPro ? labelFrom(PLAN_ZH, 'pro') : labelFrom(PLAN_ZH, 'free');
   const expiresAt = me?.plan_expires_at || null;
   const remainingDays = useMemo(() => {
     if (!expiresAt) return null;
@@ -248,7 +248,7 @@ export default function AccountClient({ initialMe }: { initialMe: MeData | null 
                 {remainingDays !== null ? <div className="muted">剩余天数：{`${remainingDays} 天`}</div> : null}
                 <div className="grid" style={{ gap: 6 }}>
                   <Button type="button" onClick={() => (window.location.href = '/contact?intent=pro')} disabled={loading}>
-                    联系恢复 Pro 会员
+                    联系恢复专业版
                   </Button>
                   {contactInfo}
                 </div>

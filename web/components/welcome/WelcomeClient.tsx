@@ -58,7 +58,7 @@ export default function WelcomeClient() {
       <Card>
         <CardHeader>
           <CardTitle>欢迎使用 IVD智慧大脑</CardTitle>
-          <CardDescription>您当前为 Free 用户，以下是您可用的功能与升级选项</CardDescription>
+          <CardDescription>您当前为免费版用户，以下是您可用的功能与升级选项</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {auth.user ? (
@@ -77,7 +77,7 @@ export default function WelcomeClient() {
       <Card>
         <CardHeader>
           <CardTitle>权益对比</CardTitle>
-          <CardDescription>Free 与 Pro 年度会员的能力差异（后端强校验）。</CardDescription>
+          <CardDescription>免费版与专业版（年度）的能力差异（后端强校验）。</CardDescription>
         </CardHeader>
         <CardContent>
           <TableWrap>
@@ -85,8 +85,8 @@ export default function WelcomeClient() {
               <thead>
                 <tr>
                   <th>功能</th>
-                  <th style={{ width: 160 }}>Free</th>
-                  <th style={{ width: 200 }}>Pro 年度会员</th>
+                  <th style={{ width: 160 }}>免费版</th>
+                  <th style={{ width: 200 }}>专业版（年度）</th>
                 </tr>
               </thead>
               <tbody>
@@ -134,7 +134,7 @@ export default function WelcomeClient() {
         <CardContent className="grid" style={{ gap: 10 }}>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <Button type="button" onClick={onContact} disabled={marking || auth.loading || !auth.user}>
-              联系开通 Pro 年度会员
+              联系开通专业版（年度）
             </Button>
             <Button type="button" variant="secondary" onClick={onTrial} disabled={marking || auth.loading || !auth.user}>
               申请试用

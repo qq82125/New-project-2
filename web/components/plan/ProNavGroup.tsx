@@ -87,7 +87,7 @@ export default function ProNavGroup() {
         }}
       >
         <span>高级分析</span>
-        <Badge variant="muted">Pro</Badge>
+        <Badge variant="muted">专业版</Badge>
       </div>
 
       {items.map((it) => {
@@ -137,7 +137,7 @@ export default function ProNavGroup() {
           >
             <span>{it.label}</span>
             <span className="muted" style={{ fontSize: 12 }}>
-              {isImplemented ? 'Pro' : PRO_COPY.toast.coming_soon_title}
+              {isImplemented ? '专业版' : PRO_COPY.toast.coming_soon_title}
             </span>
           </Link>
         );

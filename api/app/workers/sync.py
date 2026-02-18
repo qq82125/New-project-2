@@ -36,6 +36,7 @@ from app.services.ingest import ingest_staging_records, load_staging_records
 from app.services.ivd_classifier import VERSION as IVD_CLASSIFIER_VERSION
 from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 from app.services.metrics import generate_daily_metrics
+from app.services.lri_v1 import compute_lri_v1_if_due
 from app.services.subscriptions import dispatch_daily_subscription_digest
 from app.pipeline.ingest import save_raw_document_from_path
 from app.models import RawDocument
@@ -277,6 +278,14 @@ def sync_nmpa_ivd(
                 },
             )
             generate_daily_metrics(db)
+            try:
+                compute_lri_v1_if_due(db)
+            except Exception:
+                # Never block sync on LRI compute.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             dispatch_daily_subscription_digest(db)
             return SyncResult(
                 run_id=run.id,
@@ -412,6 +421,13 @@ def sync_nmpa_ivd(
             },
         )
         generate_daily_metrics(db)
+        try:
+            compute_lri_v1_if_due(db)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         dispatch_daily_subscription_digest(db)
         return SyncResult(
             run_id=run.id,

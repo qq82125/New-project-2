@@ -6,7 +6,18 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import ChangeLog, DailyMetric, DailyUdiMetric, PendingUdiLink, Product, ProductUdiMap, SourceRun, Subscription, UdiDiMaster
+from app.models import (
+    ChangeLog,
+    DailyMetric,
+    DailyUdiMetric,
+    PendingDocument,
+    PendingUdiLink,
+    Product,
+    ProductUdiMap,
+    SourceRun,
+    Subscription,
+    UdiDiMaster,
+)
 
 
 def _count_change_type(db: Session, metric_date: date, change_type: str) -> int:
@@ -79,6 +90,49 @@ def _count_unmapped_di_pending(db: Session) -> int:
         )
     except Exception:
         return 0
+
+
+def _count_pending_documents(db: Session) -> int:
+    try:
+        return int(db.scalar(select(func.count(PendingDocument.id)).where(PendingDocument.status == 'pending')) or 0)
+    except Exception:
+        return 0
+
+
+def upsert_daily_lri_quality_metrics(
+    db: Session,
+    *,
+    metric_date: date,
+    lri_computed_count: int,
+    lri_missing_methodology_count: int,
+    risk_level_distribution: dict[str, int] | None,
+) -> None:
+    # Ensure stable shape for dashboards/digests.
+    dist0 = {k: int((risk_level_distribution or {}).get(k, 0) or 0) for k in ("LOW", "MID", "HIGH", "CRITICAL")}
+    pending_count = _count_pending_documents(db)
+
+    stmt = insert(DailyMetric).values(
+        metric_date=metric_date,
+        new_products=0,
+        updated_products=0,
+        cancelled_products=0,
+        expiring_in_90d=0,
+        active_subscriptions=0,
+        pending_count=int(pending_count),
+        lri_computed_count=int(lri_computed_count),
+        lri_missing_methodology_count=int(lri_missing_methodology_count),
+        risk_level_distribution=dist0,
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[DailyMetric.metric_date],
+        set_={
+            'pending_count': int(pending_count),
+            'lri_computed_count': int(lri_computed_count),
+            'lri_missing_methodology_count': int(lri_missing_methodology_count),
+            'risk_level_distribution': dist0,
+        },
+    )
+    db.execute(stmt)
 
 
 def generate_daily_metrics(db: Session, metric_date: date | None = None) -> DailyMetric:

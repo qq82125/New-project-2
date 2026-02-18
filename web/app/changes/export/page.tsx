@@ -89,7 +89,7 @@ export default async function ChangesExportPage({ searchParams }: { searchParams
             <a className="ui-btn" href={exportHref}>
               导出变化 CSV
             </a>
-            <Badge variant="success">Pro</Badge>
+            <Badge variant="success">专业版</Badge>
           </div>
           <div className="muted" style={{ marginBottom: 12 }}>
             导出字段：变化ID、变化类型、变化时间、产品ID、产品名称、注册证号、UDI-DI、IVD分类、企业名称。

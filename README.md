@@ -80,6 +80,9 @@ NMPA 快照/diff 迁移（幂等）：
 回滚（手工执行，对现有 batch rollback 逻辑无影响）：
 - `scripts/rollback/0019_add_nmpa_snapshots_down.sql`
 - `scripts/rollback/0020_add_field_diffs_down.sql`
+- `scripts/rollback/0034_add_daily_udi_metrics_down.sql`
+- `scripts/rollback/0039_add_lri_query_indexes_down.sql`
+- `scripts/rollback/0040_add_daily_lri_quality_metrics_down.sql`
 
 ## 常用命令（容器内）
 一次同步：

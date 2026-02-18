@@ -241,6 +241,84 @@ class PendingRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class PendingDocument(Base):
+    __tablename__ = 'pending_documents'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, unique=True, index=True
+    )
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    reason_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='pending', index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MethodologyMaster(Base):
+    __tablename__ = 'methodology_master'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(Text, nullable=False, unique=True, index=True)
+    name_cn: Mapped[str] = mapped_column(Text, nullable=False)
+    name_en: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    aliases: Mapped[Optional[list[str]]] = mapped_column(ARRAY(Text), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProductMethodologyMap(Base):
+    __tablename__ = 'product_methodology_map'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('products.id', ondelete='CASCADE'), nullable=False, index=True
+    )
+    methodology_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('methodology_master.id'), nullable=False, index=True
+    )
+    evidence_raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True
+    )
+    evidence_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class LriScore(Base):
+    __tablename__ = 'lri_scores'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    registration_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=False, index=True
+    )
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey('products.id'), nullable=True)
+    methodology_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('methodology_master.id'), nullable=True
+    )
+
+    tte_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    renewal_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    competitive_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gp_new_12m: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    tte_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rh_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cd_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gp_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lri_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lri_norm: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0)
+
+    risk_level: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    model_version: Mapped[str] = mapped_column(String(40), nullable=False, default='lri_v1', index=True)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=True)
+
+
 class ProductVariant(Base):
     __tablename__ = 'product_variants'
 
@@ -451,8 +529,17 @@ class RegistrationEvent(Base):
     )
     event_type: Mapped[str] = mapped_column(Text, nullable=False, index=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    event_seq: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=False)
+    effective_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True)
+    raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True, index=False
+    )
+    diff_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     snapshot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('nmpa_snapshots.id'), nullable=True
     )
@@ -688,6 +775,10 @@ class DailyMetric(Base):
     cancelled_products: Mapped[int] = mapped_column(Integer, default=0)
     expiring_in_90d: Mapped[int] = mapped_column(Integer, default=0)
     active_subscriptions: Mapped[int] = mapped_column(Integer, default=0)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0)
+    lri_computed_count: Mapped[int] = mapped_column(Integer, default=0)
+    lri_missing_methodology_count: Mapped[int] = mapped_column(Integer, default=0)
+    risk_level_distribution: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey('source_runs.id'), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

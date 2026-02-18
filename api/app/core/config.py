@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     data_sources_crypto_key: str = 'change-me-data-sources-key'
     use_registration_anchor: bool = False
 
+    # Pending queues behavior when canonical key (registration_no) is missing.
+    # - both: write pending_records (row-level) + pending_documents (document-level)
+    # - document_only: write pending_documents only (avoid duplicate backlog)
+    # - record_only: write pending_records only (legacy mode)
+    pending_queue_mode: str = 'document_only'
+
 
 @lru_cache
 def get_settings() -> Settings:

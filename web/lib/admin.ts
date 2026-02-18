@@ -28,7 +28,7 @@ export async function adminFetch(path: string, init?: AdminFetchInit): Promise<R
 
   if (res.status === 401) redirect('/login');
   if (res.status === 403) notFound();
-  if (!allowNotOk && !res.ok) throw new Error(`admin api failed: ${path} (${res.status})`);
+  if (!allowNotOk && !res.ok) throw new Error(`管理接口请求失败：${path}（HTTP ${res.status}）`);
   return res;
 }
 
@@ -36,7 +36,7 @@ export async function adminFetchJson<T>(path: string, init?: AdminFetchInit): Pr
   const res = await adminFetch(path, init);
   const body = (await res.json()) as ApiEnvelope<T>;
   if (body.code !== 0) {
-    throw new Error(body.message || `admin api returned error: ${path}`);
+    throw new Error(body.message || `管理接口返回错误：${path}`);
   }
   return body.data;
 }
@@ -44,4 +44,3 @@ export async function adminFetchJson<T>(path: string, init?: AdminFetchInit): Pr
 export async function getAdminMe(): Promise<AdminMe> {
   return adminFetchJson<AdminMe>('/api/admin/me');
 }
-

@@ -175,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
     date_group.add_argument('--date', default=None, help='YYYY-MM-DD (snapshot_date)')
     date_group.add_argument('--since', default=None, help='YYYY-MM-DD (snapshot_date >= since)')
 
+    derive_ev = sub.add_parser('derive-registration-events', help='Time Engine V1: derive registration_events from field_diffs')
+    derive_ev_mode = derive_ev.add_mutually_exclusive_group()
+    derive_ev_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    derive_ev_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    derive_ev.add_argument('--since', required=True, help='YYYY-MM-DD (snapshot_date/created_at >= since)')
+
     source_run = sub.add_parser('source:run', help='Run unified ingest runner for one source_key')
     source_run.add_argument('--source_key', required=True, help='source_definitions.source_key')
     source_run_mode = source_run.add_mutually_exclusive_group()
@@ -191,6 +197,20 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
+
+    prod_meth = sub.add_parser('methodology:map-products', help='Ontology V1: map products to methodology_master (rules-based)')
+    prod_meth_mode = prod_meth.add_mutually_exclusive_group()
+    prod_meth_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    prod_meth_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    prod_meth.add_argument('--limit', type=int, default=None, help='Optional limit of products to scan')
+
+    lri = sub.add_parser('lri-compute', help='Compute LRI V1 scores into lri_scores')
+    lri_mode = lri.add_mutually_exclusive_group()
+    lri_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    lri_mode.add_argument('--execute', action='store_true', help='Write to DB')
+    lri.add_argument('--date', default=None, help='YYYY-MM-DD (default: today UTC)')
+    lri.add_argument('--model-version', default='lri_v1')
+    lri.add_argument('--upsert', action='store_true', help='Delete existing scores for the same day+model before insert')
     return parser
 
 
@@ -511,6 +531,21 @@ def _run_registration_events(*, dry_run: bool, date_str: str | None, since_str: 
 
         res = generate_registration_events(db, target_date=target_date, since=since, dry_run=bool(dry_run))
         print(json.dumps(res.__dict__, ensure_ascii=True))
+        return 0 if res.ok else 1
+    finally:
+        db.close()
+
+
+def _run_derive_registration_events(*, dry_run: bool, since_str: str) -> int:
+    from datetime import date as dt_date
+
+    since = dt_date.fromisoformat(str(since_str).strip())
+    db = SessionLocal()
+    try:
+        from app.services.time_engine_v1 import derive_registration_events_v1
+
+        res = derive_registration_events_v1(db, since=since, dry_run=bool(dry_run))
+        print(json.dumps(res.__dict__, ensure_ascii=True, default=str))
         return 0 if res.ok else 1
     finally:
         db.close()
@@ -1084,12 +1119,48 @@ def main() -> None:
                 since_str=(str(args.since).strip() if getattr(args, 'since', None) else None),
             )
         )
+    if args.cmd == 'derive-registration-events':
+        raise SystemExit(
+            _run_derive_registration_events(
+                dry_run=(not bool(args.execute)),
+                since_str=str(args.since),
+            )
+        )
     if args.cmd == 'source:run':
         raise SystemExit(_run_source_runner(args))
     if args.cmd == 'source:run-all':
         raise SystemExit(_run_source_runner_all(args))
     if args.cmd == 'udi:audit':
         raise SystemExit(_run_udi_audit(args))
+    if args.cmd == 'methodology:map-products':
+        db = SessionLocal()
+        try:
+            from app.services.ontology_v1_methodology import map_products_methodologies_v1
+
+            res = map_products_methodologies_v1(db, dry_run=(not bool(args.execute)), limit=(int(args.limit) if args.limit else None))
+            print(json.dumps(res.__dict__, ensure_ascii=True, default=str))
+            raise SystemExit(0 if res.ok else 1)
+        finally:
+            db.close()
+    if args.cmd == 'lri-compute':
+        from datetime import date as dt_date
+
+        target = dt_date.fromisoformat(str(args.date)) if getattr(args, 'date', None) else None
+        db = SessionLocal()
+        try:
+            from app.services.lri_v1 import compute_lri_v1
+
+            res = compute_lri_v1(
+                db,
+                asof=target,
+                dry_run=(not bool(args.execute)),
+                model_version=str(getattr(args, 'model_version', 'lri_v1')),
+                upsert_mode=bool(getattr(args, 'upsert', False)),
+            )
+            print(json.dumps(res.__dict__, ensure_ascii=True, default=str))
+            raise SystemExit(0 if res.ok else 1)
+        finally:
+            db.close()
     if args.cmd == 'loop':
         from app.workers.loop import main as loop_main
 

@@ -6,20 +6,23 @@ import { usePathname } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { cn } from '../ui/cn';
-import { ADMIN_NAV_GROUPS, ADMIN_ROLE_ZH, ADMIN_TEXT, getAdminBreadcrumb } from '../../constants/admin-i18n';
+import { ADMIN_ROLE_ZH, ADMIN_TEXT, getAdminBreadcrumb, getAdminNavGroups, type PendingQueueMode } from '../../constants/admin-i18n';
 
 type AdminMe = { id: number; email: string; role: string };
 
 export default function AdminWorkspaceShell({
   me,
+  pendingQueueMode,
   children,
 }: {
   me: AdminMe;
+  pendingQueueMode: PendingQueueMode;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const leaf = getAdminBreadcrumb(pathname || '/admin');
   const roleLabel = ADMIN_ROLE_ZH[me.role] || me.role;
+  const navGroups = getAdminNavGroups(pendingQueueMode);
 
   return (
     <div className="grid">
@@ -45,7 +48,7 @@ export default function AdminWorkspaceShell({
             <CardTitle>{ADMIN_TEXT.menuTitle}</CardTitle>
           </CardHeader>
           <CardContent className="admin-nav">
-            {ADMIN_NAV_GROUPS.map((group) => (
+            {navGroups.map((group) => (
               <div key={group.title} className="admin-nav__group">
                 <div className="admin-nav__group-title">{group.title}</div>
                 <div className="admin-nav__items">

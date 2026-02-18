@@ -306,14 +306,14 @@ export default function PendingRecordsManager({
             }}
             style={{ minWidth: 180 }}
           >
-            <option value="open">open（{ADMIN_PENDING_STATUS_ZH.open}）</option>
-            <option value="resolved">resolved（{ADMIN_PENDING_STATUS_ZH.resolved}）</option>
-            <option value="ignored">ignored（{ADMIN_PENDING_STATUS_ZH.ignored}）</option>
-            <option value="pending">pending（{ADMIN_PENDING_STATUS_ZH.pending}）</option>
-            <option value="all">all（{ADMIN_PENDING_STATUS_ZH.all}）</option>
+            <option value="open">{ADMIN_PENDING_STATUS_ZH.open}</option>
+            <option value="resolved">{ADMIN_PENDING_STATUS_ZH.resolved}</option>
+            <option value="ignored">{ADMIN_PENDING_STATUS_ZH.ignored}</option>
+            <option value="pending">{ADMIN_PENDING_STATUS_ZH.pending}</option>
+            <option value="all">{ADMIN_PENDING_STATUS_ZH.all}</option>
           </Select>
           <Input
-            placeholder="来源（source_key）"
+            placeholder="来源（可选，如 NMPA_REG / UDI_DI）"
             value={sourceKey}
             onChange={(e) => {
               setSourceKey(e.target.value);
@@ -322,7 +322,7 @@ export default function PendingRecordsManager({
             style={{ minWidth: 220 }}
           />
           <Input
-            placeholder="原因码（reason_code）"
+            placeholder="原因码（可选，如 E_NO_REG_NO）"
             value={reasonCode}
             onChange={(e) => {
               setReasonCode(e.target.value);
@@ -392,7 +392,9 @@ export default function PendingRecordsManager({
                       </td>
                       <td>{it.reason_code}</td>
                       <td>
-                        <Badge variant={statusBadgeVariant(it.status)}>{it.status}</Badge>
+                        <Badge variant={statusBadgeVariant(it.status)} title={it.status}>
+                          {ADMIN_PENDING_STATUS_ZH[it.status as keyof typeof ADMIN_PENDING_STATUS_ZH] || it.status}
+                        </Badge>
                       </td>
                       <td>
                         <div>{it.candidate_product_name || '-'}</div>
@@ -462,33 +464,36 @@ export default function PendingRecordsManager({
                 <div>{selected.created_at || '-'}</div>
               </div>
               <div>
-                <div className="muted">raw_document_id</div>
+                <div className="muted">原始文档 raw_document_id</div>
                 <div style={{ wordBreak: 'break-all' }}>{selected.raw_document_id || '-'}</div>
               </div>
               <div>
-                <div className="muted">candidate_product_name</div>
+                <div className="muted">候选产品名 candidate_product_name</div>
                 <div>{selected.candidate_product_name || '-'}</div>
               </div>
               <div>
-                <div className="muted">candidate_company</div>
+                <div className="muted">候选企业 candidate_company</div>
                 <div>{selected.candidate_company || '-'}</div>
               </div>
               <div>
-                <div className="muted">candidate_registry_no</div>
+                <div className="muted">候选注册证号 candidate_registry_no</div>
                 <div>{selected.candidate_registry_no || '-'}</div>
               </div>
               <div>
-                <div className="muted">status</div>
+                <div className="muted">状态 status</div>
                 <div>{selected.status}</div>
               </div>
             </div>
             <div>
-              <div className="muted" style={{ marginBottom: 4 }}>解决：registration_no</div>
+              <div className="muted" style={{ marginBottom: 4 }}>解决：注册证号（registration_no）</div>
               <Input
                 value={resolveRegNo}
                 onChange={(e) => setResolveRegNo(e.target.value)}
-                placeholder="输入 registration_no"
+                placeholder="输入注册证号（如：国械注准2020XXXX 或 粤械注准2014XXXX）"
               />
+              <div className="muted" style={{ marginTop: 6 }}>
+                只填注册证号即可；系统会归一化并按 canonical key 写入 registrations，然后补齐关联。
+              </div>
             </div>
             <div>
               <div className="muted" style={{ marginBottom: 4 }}>忽略：原因（可选）</div>

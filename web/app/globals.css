@@ -119,6 +119,11 @@ button {
   cursor: pointer;
 }
 
+.ui-btn.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;

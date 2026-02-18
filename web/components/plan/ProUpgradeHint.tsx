@@ -17,7 +17,7 @@ export default function ProUpgradeHint({
       <CardContent className="grid" style={{ gap: 10 }}>
         <div className="muted">{text}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Badge variant="muted">Pro</Badge>
+          <Badge variant="muted">专业版</Badge>
           <Link className="ui-btn ui-btn--default ui-btn--sm" href={ctaHref}>
             {ctaLabel}
           </Link>

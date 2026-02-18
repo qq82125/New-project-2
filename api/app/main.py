@@ -27,7 +27,10 @@ from app.models import (
     CompanyAlias,
     ConflictQueue,
     MethodologyNode,
+    MethodologyMaster,
+    LriScore,
     NmpaSnapshot,
+    PendingDocument,
     PendingRecord,
     PendingUdiLink,
     ProcurementLot,
@@ -45,6 +48,7 @@ from app.models import (
     SourceDefinition,
     User,
 )
+from app.pipeline.doc_reader import read_file_bytes
 from app.repositories.dashboard import get_admin_stats, get_breakdown, get_radar, get_rankings, get_summary, get_trend
 from app.repositories.data_sources import (
     activate_data_source,
@@ -84,6 +88,7 @@ from app.schemas.api import (
     ApiResponsePublicContactInfo,
     ApiResponseProduct,
     ApiResponseProductParams,
+    ApiResponseProductLri,
     ApiResponseChangeStats,
     ApiResponseChangesList,
     ApiResponseChangeDetail,
@@ -91,6 +96,8 @@ from app.schemas.api import (
     ApiResponseRadar,
     ApiResponseRankings,
     ApiResponseBreakdown,
+    ApiResponseDashboardLriTop,
+    ApiResponseDashboardLriMap,
     ApiResponseSearch,
     ApiResponseStatus,
     ApiResponseSummary,
@@ -105,6 +112,10 @@ from app.schemas.api import (
     DashboardTrendItem,
     DashboardBreakdownData,
     DashboardBreakdownItem,
+    DashboardLriTopData,
+    DashboardLriTopItemOut,
+    DashboardLriMapData,
+    DashboardLriMapItemOut,
     AdminStatsData,
     ProductOut,
     ProductParamOut,
@@ -148,6 +159,11 @@ from app.schemas.api import (
     ParamsExtractResultOut,
     ParamsRollbackResultOut,
     ProductRejectedOut,
+    ProductLriData,
+    LriScoreOut,
+    ApiResponseAdminLriList,
+    AdminLriListData,
+    AdminLriItemOut,
 )
 from app.services.auth import (
     create_session_token,
@@ -902,6 +918,219 @@ def dashboard_breakdown(
     return _ok(data)
 
 
+@app.get('/api/dashboard/lri/top', response_model=ApiResponseDashboardLriTop)
+def dashboard_lri_top(
+    limit: int = Query(default=10, ge=1, le=50),
+    offset: int = Query(default=0, ge=0, le=1000000),
+    model_version: str = Query(default='lri_v1'),
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseDashboardLriTop:
+    """High-risk certificate TopN (sellable).
+
+    Pagination is mandatory to avoid full-table scans in UI.
+    For free users, pro-only fields are redacted to null.
+    """
+    plan_is_pro = _is_pro_user(current_user, db)
+
+    total = int(
+        db.execute(
+            text(
+                """
+                WITH latest AS (
+                  SELECT DISTINCT ON (s.registration_id)
+                    s.registration_id,
+                    s.product_id,
+                    s.lri_norm
+                  FROM lri_scores s
+                  WHERE s.model_version = :mv
+                  ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+                )
+                SELECT COUNT(1)
+                FROM latest l
+                JOIN products p ON p.id = l.product_id
+                WHERE p.is_ivd IS TRUE
+                """
+            ),
+            {'mv': str(model_version)},
+        ).scalar()
+        or 0
+    )
+
+    rows = db.execute(
+        text(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (s.registration_id)
+                s.registration_id,
+                s.product_id,
+                s.tte_days,
+                s.competitive_count,
+                s.gp_new_12m,
+                s.tte_score,
+                s.rh_score,
+                s.cd_score,
+                s.gp_score,
+                s.lri_norm,
+                s.risk_level,
+                s.calculated_at
+              FROM lri_scores s
+              WHERE s.model_version = :mv
+              ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+            )
+            SELECT
+              p.id AS product_id,
+              p.name AS product_name,
+              l.risk_level,
+              l.lri_norm,
+              l.tte_days,
+              l.competitive_count,
+              l.gp_new_12m,
+              l.tte_score,
+              l.rh_score,
+              l.cd_score,
+              l.gp_score,
+              l.calculated_at
+            FROM latest l
+            JOIN products p ON p.id = l.product_id
+            WHERE p.is_ivd IS TRUE
+            ORDER BY l.lri_norm DESC NULLS LAST, l.calculated_at DESC, p.id ASC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {'mv': str(model_version), 'limit': int(limit), 'offset': int(offset)},
+    ).mappings().all()
+
+    items = [
+        DashboardLriTopItemOut(
+            product_id=r['product_id'],
+            product_name=str(r.get('product_name') or ''),
+            risk_level=str(r.get('risk_level') or ''),
+            lri_norm=float(r.get('lri_norm') or 0),
+            tte_days=(int(r.get('tte_days')) if r.get('tte_days') is not None else None),
+            competitive_count=(int(r.get('competitive_count') or 0) if plan_is_pro else None),
+            gp_new_12m=(int(r.get('gp_new_12m') or 0) if plan_is_pro else None),
+            tte_score=(int(r.get('tte_score') or 0) if plan_is_pro else None),
+            rh_score=(int(r.get('rh_score') or 0) if plan_is_pro else None),
+            cd_score=(int(r.get('cd_score') or 0) if plan_is_pro else None),
+            gp_score=(int(r.get('gp_score') or 0) if plan_is_pro else None),
+            calculated_at=(r.get('calculated_at') if plan_is_pro else None),
+        )
+        for r in rows
+    ]
+
+    return _ok(DashboardLriTopData(total=total, limit=int(limit), offset=int(offset), items=items))
+
+
+@app.get('/api/dashboard/lri/map', response_model=ApiResponseDashboardLriMap)
+def dashboard_lri_map(
+    limit: int = Query(default=30, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=1000000),
+    model_version: str = Query(default='lri_v1'),
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseDashboardLriMap:
+    """Track risk map (methodology + ivd_category).
+
+    For free users, gp_new_12m is redacted (sellable detail).
+    """
+    plan_is_pro = _is_pro_user(current_user, db)
+
+    total = int(
+        db.execute(
+            text(
+                """
+                WITH latest AS (
+                  SELECT DISTINCT ON (s.registration_id)
+                    s.registration_id,
+                    s.product_id,
+                    s.methodology_id,
+                    s.lri_norm,
+                    s.risk_level,
+                    s.gp_new_12m
+                  FROM lri_scores s
+                  WHERE s.model_version = :mv
+                  ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+                )
+                SELECT COUNT(1)
+                FROM (
+                  SELECT
+                    l.methodology_id,
+                    COALESCE(NULLIF(btrim(p.ivd_category), ''), NULLIF(btrim(p.category), ''), 'unknown') AS ivd_category
+                  FROM latest l
+                  JOIN products p ON p.id = l.product_id
+                  WHERE p.is_ivd IS TRUE
+                  GROUP BY 1, 2
+                ) x
+                """
+            ),
+            {'mv': str(model_version)},
+        ).scalar()
+        or 0
+    )
+
+    rows = db.execute(
+        text(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (s.registration_id)
+                s.registration_id,
+                s.product_id,
+                s.methodology_id,
+                s.lri_norm,
+                s.risk_level,
+                s.gp_new_12m
+              FROM lri_scores s
+              WHERE s.model_version = :mv
+              ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+            ),
+            dim AS (
+              SELECT
+                l.methodology_id,
+                COALESCE(NULLIF(btrim(p.ivd_category), ''), NULLIF(btrim(p.category), ''), 'unknown') AS ivd_category,
+                l.lri_norm,
+                l.risk_level,
+                l.gp_new_12m
+              FROM latest l
+              JOIN products p ON p.id = l.product_id
+              WHERE p.is_ivd IS TRUE
+            )
+            SELECT
+              d.methodology_id,
+              m.code AS methodology_code,
+              m.name_cn AS methodology_name_cn,
+              d.ivd_category,
+              COUNT(1)::int AS total_count,
+              COUNT(1) FILTER (WHERE d.risk_level IN ('HIGH', 'CRITICAL'))::int AS high_risk_count,
+              COALESCE(AVG(d.lri_norm), 0)::float AS avg_lri_norm,
+              COALESCE(MAX(d.gp_new_12m), 0)::int AS gp_new_12m
+            FROM dim d
+            LEFT JOIN methodology_master m ON m.id = d.methodology_id
+            GROUP BY 1, 2, 3, 4
+            ORDER BY high_risk_count DESC, avg_lri_norm DESC, total_count DESC, ivd_category ASC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {'mv': str(model_version), 'limit': int(limit), 'offset': int(offset)},
+    ).mappings().all()
+
+    items = [
+        DashboardLriMapItemOut(
+            methodology_id=r.get('methodology_id'),
+            methodology_code=r.get('methodology_code'),
+            methodology_name_cn=r.get('methodology_name_cn'),
+            ivd_category=str(r.get('ivd_category') or 'unknown'),
+            total_count=int(r.get('total_count') or 0),
+            high_risk_count=int(r.get('high_risk_count') or 0),
+            avg_lri_norm=float(r.get('avg_lri_norm') or 0),
+            gp_new_12m=(int(r.get('gp_new_12m') or 0) if plan_is_pro else None),
+        )
+        for r in rows
+    ]
+
+    return _ok(DashboardLriMapData(total=total, limit=int(limit), offset=int(offset), items=items))
+
+
 @app.get('/api/search', response_model=ApiResponseSearch)
 def search(
     q: str | None = Query(default=None, description='fuzzy query on name/reg_no/udi_di/company'),
@@ -1019,6 +1248,73 @@ def admin_stats(
         by_source=[DashboardBreakdownItem(key=k, value=int(v)) for k, v in (raw.get('by_source') or [])],
     )
     return _ok(data)
+
+
+@app.get('/api/admin/home-summary')
+def admin_home_summary(
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Fast-path summary for /admin home.
+
+    Keep this endpoint cheap: avoid heavy GROUP BY / JSON extraction queries so
+    the Admin Workbench can render quickly even on cold caches.
+    """
+    pending_docs = int(
+        db.execute(text("SELECT COUNT(1) FROM pending_documents WHERE status = 'pending'")).scalar() or 0
+    )
+    conflicts_open = int(
+        db.execute(text("SELECT COUNT(1) FROM conflicts_queue WHERE status = 'open'")).scalar() or 0
+    )
+    udi_pending = int(
+        db.execute(text("SELECT COUNT(1) FROM pending_udi_links WHERE status = 'PENDING'")).scalar() or 0
+    )
+
+    row = db.execute(
+        text(
+            """
+            SELECT
+              metric_date,
+              pending_count,
+              lri_computed_count,
+              lri_missing_methodology_count,
+              risk_level_distribution,
+              updated_at
+            FROM daily_metrics
+            ORDER BY metric_date DESC
+            LIMIT 1
+            """
+        )
+    ).mappings().first()
+    if not row:
+        lri_quality = {
+            'metric_date': None,
+            'pending_count': 0,
+            'lri_computed_count': 0,
+            'lri_missing_methodology_count': 0,
+            'risk_level_distribution': {'LOW': 0, 'MID': 0, 'HIGH': 0, 'CRITICAL': 0},
+            'updated_at': None,
+        }
+    else:
+        dist = row.get('risk_level_distribution') or {}
+        out_dist = {k: int(dist.get(k, 0) or 0) for k in ('LOW', 'MID', 'HIGH', 'CRITICAL')}
+        lri_quality = {
+            'metric_date': row.get('metric_date'),
+            'pending_count': int(row.get('pending_count') or 0),
+            'lri_computed_count': int(row.get('lri_computed_count') or 0),
+            'lri_missing_methodology_count': int(row.get('lri_missing_methodology_count') or 0),
+            'risk_level_distribution': out_dist,
+            'updated_at': row.get('updated_at'),
+        }
+
+    return _ok(
+        {
+            'pending_documents_pending_total': pending_docs,
+            'conflicts_open_total': conflicts_open,
+            'udi_pending_total': udi_pending,
+            'lri_quality': lri_quality,
+        }
+    )
 
 
 @app.get('/api/admin/rejected-products', response_model=ApiResponseAdminRejectedProducts)
@@ -1363,6 +1659,86 @@ def product_timeline(
         ],
     )
     return _ok(out)
+
+
+@app.get('/api/products/{product_id}/lri', response_model=ApiResponseProductLri)
+def product_lri_score(
+    product_id: str,
+    model_version: str = Query(default='lri_v1'),
+    current_user: User = Depends(_require_current_user),
+    db: Session = Depends(get_db),
+) -> ApiResponseProductLri:
+    plan_is_pro = _is_pro_user(current_user, db)
+    product = get_product(db, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail='Product not found')
+
+    reg_id = getattr(product, 'registration_id', None)
+    if not reg_id:
+        return _ok(ProductLriData(product_id=UUID(str(product.id)), registration_id=None, score=None))
+
+    row = db.execute(
+        text(
+            """
+            SELECT
+              s.registration_id,
+              s.product_id,
+              s.methodology_id,
+              m.code AS methodology_code,
+              m.name_cn AS methodology_name_cn,
+              s.tte_days,
+              s.renewal_count,
+              s.competitive_count,
+              s.gp_new_12m,
+              s.tte_score,
+              s.rh_score,
+              s.cd_score,
+              s.gp_score,
+              s.lri_total,
+              s.lri_norm,
+              s.risk_level,
+              s.model_version,
+              s.calculated_at
+            FROM lri_scores s
+            LEFT JOIN methodology_master m ON m.id = s.methodology_id
+            WHERE s.registration_id = :rid AND s.model_version = :mv
+            ORDER BY s.calculated_at DESC, s.id ASC
+            LIMIT 1
+            """
+        ),
+        {'rid': reg_id, 'mv': str(model_version)},
+    ).mappings().first()
+
+    score = None
+    if row:
+        score = LriScoreOut(
+            registration_id=row['registration_id'],
+            product_id=row.get('product_id'),
+            methodology_id=row.get('methodology_id'),
+            methodology_code=row.get('methodology_code'),
+            methodology_name_cn=row.get('methodology_name_cn'),
+            tte_days=row.get('tte_days'),
+            renewal_count=(int(row.get('renewal_count') or 0) if plan_is_pro else None),
+            competitive_count=(int(row.get('competitive_count') or 0) if plan_is_pro else None),
+            gp_new_12m=(int(row.get('gp_new_12m') or 0) if plan_is_pro else None),
+            tte_score=(int(row.get('tte_score') or 0) if plan_is_pro else None),
+            rh_score=(int(row.get('rh_score') or 0) if plan_is_pro else None),
+            cd_score=(int(row.get('cd_score') or 0) if plan_is_pro else None),
+            gp_score=(int(row.get('gp_score') or 0) if plan_is_pro else None),
+            lri_total=(int(row.get('lri_total') or 0) if plan_is_pro else None),
+            lri_norm=float(row.get('lri_norm') or 0),
+            risk_level=str(row.get('risk_level') or ''),
+            model_version=str(row.get('model_version') or ''),
+            calculated_at=row.get('calculated_at'),
+        )
+
+    return _ok(
+        ProductLriData(
+            product_id=UUID(str(product.id)),
+            registration_id=reg_id,
+            score=score,
+        )
+    )
 
 
 @app.get('/api/companies/{company_id}', response_model=ApiResponseCompany)
@@ -2513,6 +2889,312 @@ def admin_resolve_pending_record(
     )
 
 
+@app.get('/api/admin/pending-documents')
+def admin_list_pending_documents(
+    status: str = Query(default='pending'),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    order_by: str = Query(default='created_at desc'),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    status_norm = str(status or 'pending').strip().lower()
+    order_by_norm = ' '.join(str(order_by or '').strip().lower().split())
+    if not order_by_norm:
+        order_by_norm = 'created_at desc'
+    if order_by_norm not in {'created_at desc', 'created_at asc'}:
+        raise HTTPException(status_code=400, detail='order_by must be one of: created_at desc / created_at asc')
+
+    filters = []
+    if status_norm != 'all':
+        if status_norm not in {'pending', 'resolved', 'ignored'}:
+            raise HTTPException(status_code=400, detail='status must be pending/resolved/ignored/all')
+        filters.append(PendingDocument.status == status_norm)
+
+    q = select(PendingDocument)
+    q_total = select(func.count(PendingDocument.id))
+    if filters:
+        q = q.where(*filters)
+        q_total = q_total.where(*filters)
+
+    q = q.order_by(
+        desc(PendingDocument.created_at) if order_by_norm == 'created_at desc' else PendingDocument.created_at.asc()
+    ).offset(int(offset)).limit(int(limit))
+
+    rows = db.scalars(q).all()
+    total = int(db.scalar(q_total) or 0)
+    return _ok(
+        {
+            'items': [
+                {
+                    'id': str(r.id),
+                    'raw_document_id': str(r.raw_document_id),
+                    'source_run_id': (int(r.source_run_id) if r.source_run_id is not None else None),
+                    'reason_code': str(r.reason_code or ''),
+                    'status': str(r.status or ''),
+                    'created_at': r.created_at,
+                    'updated_at': r.updated_at,
+                }
+                for r in rows
+            ],
+            'total': total,
+            'limit': int(limit),
+            'offset': int(offset),
+            'order_by': order_by_norm,
+            'count': len(rows),
+            'status': status_norm,
+        }
+    )
+
+
+@app.get('/api/admin/pending-documents/stats')
+def admin_pending_documents_stats(
+    resolved_24h_hours: int = Query(default=24, ge=1, le=24 * 30),
+    resolved_7d_days: int = Query(default=7, ge=1, le=365),
+    _admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    # by_source_key: pending/resolved/ignored counters (grouped by raw_documents.source)
+    source_rows = db.execute(
+        text(
+            """
+            SELECT
+              rd.source AS source_key,
+              COUNT(*) FILTER (WHERE pd.status = 'pending') AS pending_count,
+              COUNT(*) FILTER (WHERE pd.status = 'resolved') AS resolved_count,
+              COUNT(*) FILTER (WHERE pd.status = 'ignored') AS ignored_count
+            FROM pending_documents pd
+            JOIN raw_documents rd ON rd.id = pd.raw_document_id
+            WHERE pd.status IN ('pending', 'resolved', 'ignored')
+            GROUP BY rd.source
+            ORDER BY rd.source ASC
+            """
+        )
+    ).mappings().all()
+
+    # by_reason_code: pending counters to locate parser/anchor defects
+    reason_rows = db.execute(
+        text(
+            """
+            SELECT
+              reason_code,
+              COUNT(*) AS pending_count
+            FROM pending_documents
+            WHERE status = 'pending'
+            GROUP BY reason_code
+            ORDER BY pending_count DESC, reason_code ASC
+            """
+        )
+    ).mappings().all()
+
+    backlog_row = db.execute(
+        text(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'pending') AS pending_total,
+              COUNT(*) FILTER (
+                WHERE status = 'resolved'
+                  AND updated_at >= NOW() - (:h || ' hours')::interval
+              ) AS resolved_last_24h,
+              COUNT(*) FILTER (
+                WHERE status = 'resolved'
+                  AND updated_at >= NOW() - (:d || ' days')::interval
+              ) AS resolved_last_7d
+            FROM pending_documents
+            """
+        ),
+        {"h": int(resolved_24h_hours), "d": int(resolved_7d_days)},
+    ).mappings().one()
+
+    return _ok(
+        {
+            "by_source_key": [
+                {
+                    "source_key": str(r.get("source_key") or ""),
+                    "pending": int(r.get("pending_count") or 0),
+                    "resolved": int(r.get("resolved_count") or 0),
+                    "ignored": int(r.get("ignored_count") or 0),
+                }
+                for r in source_rows
+            ],
+            "by_reason_code": [
+                {
+                    "reason_code": str(r.get("reason_code") or ""),
+                    "pending": int(r.get("pending_count") or 0),
+                }
+                for r in reason_rows
+            ],
+            "backlog": {
+                "pending_total": int(backlog_row.get("pending_total") or 0),
+                "resolved_last_24h": int(backlog_row.get("resolved_last_24h") or 0),
+                "resolved_last_7d": int(backlog_row.get("resolved_last_7d") or 0),
+                "windows": {
+                    "resolved_24h_hours": int(resolved_24h_hours),
+                    "resolved_7d_days": int(resolved_7d_days),
+                },
+            },
+        }
+    )
+
+
+@app.post('/api/admin/pending-documents/{pending_id}/resolve')
+def admin_resolve_pending_document(
+    pending_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    rec = db.get(PendingDocument, pending_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail='pending document not found')
+    if str(rec.status or '').lower() == 'resolved':
+        raise HTTPException(status_code=409, detail='pending document already resolved')
+
+    reg_no_raw = str(payload.get('registration_no') or '').strip()
+    product_name_raw = str(payload.get('product_name') or '').strip() or None
+    if not reg_no_raw:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                'legacy_code': IngestErrorCode.E_NO_REG_NO.value,
+                'message': 'registration_no is required',
+            },
+        )
+    reg_no = normalize_registration_no(reg_no_raw)
+    if not reg_no:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'legacy_code': IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
+                'message': 'registration_no normalize failed',
+            },
+        )
+
+    raw_doc = db.get(RawDocument, rec.raw_document_id)
+    if raw_doc is None:
+        raise HTTPException(status_code=409, detail='raw_document not found for pending item')
+
+    # Replay ingest from the stored raw_document JSON payload.
+    try:
+        raw_bytes = read_file_bytes(str(raw_doc.storage_uri))
+        raw_obj = json.loads(raw_bytes.decode('utf-8', errors='ignore') or '{}')
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'code': IngestErrorCode.E_PARSE_FAILED.value,
+                'message': f'failed to load raw_document payload: {exc}',
+            },
+        )
+    if not isinstance(raw_obj, dict):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'code': IngestErrorCode.E_PARSE_FAILED.value,
+                'message': 'raw_document payload must be a JSON object',
+            },
+        )
+
+    raw_obj = dict(raw_obj)
+    raw_obj['registration_no'] = reg_no
+    if product_name_raw:
+        raw_obj['product_name'] = product_name_raw
+    if not raw_obj.get('source_url') and raw_doc.source_url:
+        raw_obj['source_url'] = raw_doc.source_url
+
+    upsert_res = upsert_structured_record_via_runner(
+        db,
+        source_key=str(raw_doc.source or 'ADMIN_PENDING_DOC_RESOLVE').strip().upper() or 'ADMIN_PENDING_DOC_RESOLVE',
+        source_run_id=(int(rec.source_run_id) if rec.source_run_id is not None else None),
+        row=raw_obj,
+        parser_key=None,
+        raw_document_id=raw_doc.id,
+        observed_at=datetime.now(),
+    )
+
+    before_status = str(rec.status or '')
+    rec.status = 'resolved'
+    rec.updated_at = datetime.now()
+    db.add(rec)
+    db.add(
+        ChangeLog(
+            product_id=None,
+            entity_type='pending_document',
+            entity_id=rec.id,
+            change_type='resolve',
+            changed_fields={
+                'status': {'old': before_status, 'new': 'resolved'},
+                'registration_no': {'old': None, 'new': reg_no},
+            },
+            before_json={'status': before_status},
+            after_json={'status': rec.status, 'registration_no': reg_no},
+            before_raw={'raw_document_id': str(rec.raw_document_id)},
+            after_raw={
+                'raw_document_id': str(rec.raw_document_id),
+                'source': str(raw_doc.source or ''),
+                'resolved_by': str(getattr(admin, 'email', '') or ''),
+                'registration_no': reg_no,
+                'variant_upserted': bool(upsert_res.variant_upserted),
+            },
+            source_run_id=(int(rec.source_run_id) if rec.source_run_id is not None else None),
+        )
+    )
+    db.commit()
+
+    return _ok(
+        {
+            'id': str(rec.id),
+            'status': rec.status,
+            'registration_no': reg_no,
+            'source': str(raw_doc.source or ''),
+            'variant_upserted': bool(upsert_res.variant_upserted),
+            'updated_at': rec.updated_at,
+        }
+    )
+
+
+@app.post('/api/admin/pending-documents/{pending_id}/ignore')
+def admin_ignore_pending_document(
+    pending_id: UUID,
+    payload: dict,
+    admin: User = Depends(_require_admin_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    rec = db.get(PendingDocument, pending_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail='pending document not found')
+    if str(rec.status or '').lower() == 'resolved':
+        raise HTTPException(status_code=409, detail='pending document already resolved')
+
+    reason = str(payload.get('reason') or '').strip() or None
+    before_status = str(rec.status or '')
+    rec.status = 'ignored'
+    rec.updated_at = datetime.now()
+    db.add(rec)
+    db.add(
+        ChangeLog(
+            product_id=None,
+            entity_type='pending_document',
+            entity_id=rec.id,
+            change_type='ignore',
+            changed_fields={'status': {'old': before_status, 'new': 'ignored'}},
+            before_json={'status': before_status},
+            after_json={'status': rec.status},
+            before_raw={'raw_document_id': str(rec.raw_document_id)},
+            after_raw={
+                'raw_document_id': str(rec.raw_document_id),
+                'ignored_by': str(getattr(admin, 'email', '') or ''),
+                'reason': reason,
+            },
+            source_run_id=(int(rec.source_run_id) if rec.source_run_id is not None else None),
+        )
+    )
+    db.commit()
+    return _ok({'id': str(rec.id), 'status': rec.status, 'updated_at': rec.updated_at})
+
+
 @app.get('/api/admin/udi/pending-links')
 def admin_list_pending_udi_links(
     status: str = Query(default='pending'),
@@ -3019,6 +3701,235 @@ def admin_map_procurement_lot_registration(
     )
     out['registration_no'] = reg.registration_no
     return _ok(out)
+
+
+@app.get('/api/admin/lri', response_model=ApiResponseAdminLriList)
+def admin_lri_list(
+    date: str | None = Query(default=None, description='UTC date YYYY-MM-DD; if omitted, returns latest per registration'),
+    risk_level: str | None = Query(default=None, description='LOW/MID/HIGH/CRITICAL'),
+    model_version: str = Query(default='lri_v1'),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> ApiResponseAdminLriList:
+    date_norm: date | None = None
+    if date:
+        try:
+            date_norm = datetime.strptime(str(date).strip(), "%Y-%m-%d").date()
+        except Exception:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+
+    # Select latest score per registration (optionally constrained to a single UTC date).
+    total = db.execute(
+        text(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (s.registration_id)
+                s.registration_id,
+                s.product_id,
+                s.methodology_id,
+                s.tte_days,
+                s.renewal_count,
+                s.competitive_count,
+                s.gp_new_12m,
+                s.lri_norm,
+                s.risk_level,
+                s.model_version,
+                s.calculated_at
+              FROM lri_scores s
+              WHERE s.model_version = :mv
+                AND (CAST(:d AS date) IS NULL OR (s.calculated_at AT TIME ZONE 'UTC')::date = CAST(:d AS date))
+              ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+            )
+            SELECT COUNT(1)
+            FROM latest
+            WHERE (CAST(:rl AS text) IS NULL OR risk_level = CAST(:rl AS text))
+            """
+        ),
+        {'mv': str(model_version), 'd': date_norm, 'rl': (str(risk_level).strip().upper() if risk_level else None)},
+    ).scalar_one()
+
+    rows = db.execute(
+        text(
+            """
+            WITH latest AS (
+              SELECT DISTINCT ON (s.registration_id)
+                s.registration_id,
+                s.product_id,
+                s.methodology_id,
+                s.tte_days,
+                s.renewal_count,
+                s.competitive_count,
+                s.gp_new_12m,
+                s.lri_norm,
+                s.risk_level,
+                s.model_version,
+                s.calculated_at
+              FROM lri_scores s
+              WHERE s.model_version = :mv
+                AND (CAST(:d AS date) IS NULL OR (s.calculated_at AT TIME ZONE 'UTC')::date = CAST(:d AS date))
+              ORDER BY s.registration_id, s.calculated_at DESC, s.id ASC
+            )
+            SELECT
+              l.registration_id,
+              r.registration_no,
+              l.product_id,
+              p.name AS product_name,
+              COALESCE(NULLIF(btrim(p.ivd_category), ''), NULLIF(btrim(p.category), '')) AS ivd_category,
+              m.code AS methodology_code,
+              m.name_cn AS methodology_name_cn,
+              l.tte_days,
+              l.renewal_count,
+              l.competitive_count,
+              l.gp_new_12m,
+              l.lri_norm,
+              l.risk_level,
+              l.model_version,
+              l.calculated_at
+            FROM latest l
+            JOIN registrations r ON r.id = l.registration_id
+            LEFT JOIN products p ON p.id = l.product_id
+            LEFT JOIN methodology_master m ON m.id = l.methodology_id
+            WHERE (CAST(:rl AS text) IS NULL OR l.risk_level = CAST(:rl AS text))
+            ORDER BY l.calculated_at DESC, l.registration_id ASC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {
+            'mv': str(model_version),
+            'd': date_norm,
+            'rl': (str(risk_level).strip().upper() if risk_level else None),
+            'limit': int(limit),
+            'offset': int(offset),
+        },
+    ).mappings().all()
+
+    items = [
+        AdminLriItemOut(
+            registration_id=r['registration_id'],
+            registration_no=str(r['registration_no'] or ''),
+            product_id=r.get('product_id'),
+            product_name=r.get('product_name'),
+            ivd_category=r.get('ivd_category'),
+            methodology_code=r.get('methodology_code'),
+            methodology_name_cn=r.get('methodology_name_cn'),
+            tte_days=r.get('tte_days'),
+            renewal_count=int(r.get('renewal_count') or 0),
+            competitive_count=int(r.get('competitive_count') or 0),
+            gp_new_12m=int(r.get('gp_new_12m') or 0),
+            lri_norm=float(r.get('lri_norm') or 0),
+            risk_level=str(r.get('risk_level') or ''),
+            model_version=str(r.get('model_version') or ''),
+            calculated_at=r.get('calculated_at'),
+        )
+        for r in rows
+    ]
+
+    return _ok(AdminLriListData(total=int(total or 0), items=items))
+
+
+@app.post('/api/admin/lri/compute')
+def admin_lri_compute(
+    payload: dict,
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    # Runs a synchronous compute with upsert (delete same-day window then insert),
+    # so admins can validate config changes quickly.
+    raw_date = payload.get('date')
+    raw_mv = payload.get('model_version')
+    upsert = bool(payload.get('upsert', True))
+
+    asof = None
+    if raw_date not in {None, ''}:
+        try:
+            asof = dt_date.fromisoformat(str(raw_date))
+        except Exception:
+            raise HTTPException(status_code=400, detail='date must be YYYY-MM-DD')
+
+    mv = str(raw_mv or '').strip() if raw_mv not in {None, ''} else ''
+    if not mv:
+        cfg = get_admin_config(db, 'lri_v1_config')
+        if cfg and isinstance(cfg.config_value, dict) and cfg.config_value.get('model_version'):
+            mv = str(cfg.config_value.get('model_version') or '').strip()
+    if not mv:
+        mv = 'lri_v1'
+
+    try:
+        from app.services.lri_v1 import compute_lri_v1
+
+        res = compute_lri_v1(
+            db,
+            asof=asof,
+            dry_run=False,
+            model_version=mv,
+            upsert_mode=upsert,
+        )
+        return _ok(
+            {
+                'ok': bool(getattr(res, 'ok', True)),
+                'dry_run': bool(getattr(res, 'dry_run', False)),
+                'date': str(getattr(res, 'date', '') or ''),
+                'model_version': str(getattr(res, 'model_version', '') or mv),
+                'upsert_mode': bool(getattr(res, 'upsert_mode', upsert)),
+                'would_write': int(getattr(res, 'would_write', 0) or 0),
+                'wrote': int(getattr(res, 'wrote', 0) or 0),
+                'risk_dist': dict(getattr(res, 'risk_dist', {}) or {}),
+                'missing_methodology_ratio': float(getattr(res, 'missing_methodology_ratio', 0.0) or 0.0),
+                'error': getattr(res, 'error', None),
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={'code': 'LRI_COMPUTE_FAILED', 'message': str(e)})
+
+
+@app.get('/api/admin/lri/quality-latest')
+def admin_lri_quality_latest(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT
+              metric_date,
+              pending_count,
+              lri_computed_count,
+              lri_missing_methodology_count,
+              risk_level_distribution,
+              updated_at
+            FROM daily_metrics
+            ORDER BY metric_date DESC
+            LIMIT 1
+            """
+        )
+    ).mappings().first()
+    if not row:
+        return _ok(
+            {
+                'metric_date': None,
+                'pending_count': 0,
+                'lri_computed_count': 0,
+                'lri_missing_methodology_count': 0,
+                'risk_level_distribution': {'LOW': 0, 'MID': 0, 'HIGH': 0, 'CRITICAL': 0},
+                'updated_at': None,
+            }
+        )
+    dist = row.get('risk_level_distribution') or {}
+    out_dist = {k: int(dist.get(k, 0) or 0) for k in ('LOW', 'MID', 'HIGH', 'CRITICAL')}
+    return _ok(
+        {
+            'metric_date': row.get('metric_date'),
+            'pending_count': int(row.get('pending_count') or 0),
+            'lri_computed_count': int(row.get('lri_computed_count') or 0),
+            'lri_missing_methodology_count': int(row.get('lri_missing_methodology_count') or 0),
+            'risk_level_distribution': out_dist,
+            'updated_at': row.get('updated_at'),
+        }
+    )
 
 
 def _ds_preview(cfg: dict) -> dict:

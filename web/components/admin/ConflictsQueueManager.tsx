@@ -277,9 +277,9 @@ export default function ConflictsQueueManager({ initialItems }: { initialItems: 
             }}
             style={{ minWidth: 180 }}
           >
-            <option value="open">open（{ADMIN_CONFLICT_STATUS_ZH.open}）</option>
-            <option value="resolved">resolved（{ADMIN_CONFLICT_STATUS_ZH.resolved}）</option>
-            <option value="all">all（{ADMIN_CONFLICT_STATUS_ZH.all}）</option>
+            <option value="open">{ADMIN_CONFLICT_STATUS_ZH.open}</option>
+            <option value="resolved">{ADMIN_CONFLICT_STATUS_ZH.resolved}</option>
+            <option value="all">{ADMIN_CONFLICT_STATUS_ZH.all}</option>
           </Select>
           <Select
             value={viewMode}
@@ -333,7 +333,9 @@ export default function ConflictsQueueManager({ initialItems }: { initialItems: 
                         <div key={it.id} className="card" style={{ padding: 10 }}>
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                             <Badge variant="muted">{it.field_name}</Badge>
-                            <Badge variant={conflictStatusBadgeVariant(it.status)}>{it.status}</Badge>
+                            <Badge variant={conflictStatusBadgeVariant(it.status)} title={it.status}>
+                              {ADMIN_CONFLICT_STATUS_ZH[it.status as keyof typeof ADMIN_CONFLICT_STATUS_ZH] || it.status}
+                            </Badge>
                             <span className="muted">候选：</span>
                             {(it.candidates || []).slice(0, 3).map((c, idx) => (
                               <span key={`${it.id}-${idx}`} style={{ fontSize: 12 }}>
@@ -391,7 +393,9 @@ export default function ConflictsQueueManager({ initialItems }: { initialItems: 
                       <td>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <Badge variant="muted">{it.field_name}</Badge>
-                          <Badge variant={conflictStatusBadgeVariant(it.status)}>{it.status}</Badge>
+                          <Badge variant={conflictStatusBadgeVariant(it.status)} title={it.status}>
+                            {ADMIN_CONFLICT_STATUS_ZH[it.status as keyof typeof ADMIN_CONFLICT_STATUS_ZH] || it.status}
+                          </Badge>
                         </div>
                       </td>
                       <td>

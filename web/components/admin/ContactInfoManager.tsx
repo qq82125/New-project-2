@@ -188,7 +188,7 @@ export default function ContactInfoManager({ initialConfig }: { initialConfig: A
               disabled={saving}
               title="打开 /contact?intent=pro"
             >
-              预览 Pro
+              预览专业版入口
             </Button>
             <Button
               variant="ghost"
@@ -196,7 +196,7 @@ export default function ContactInfoManager({ initialConfig }: { initialConfig: A
               disabled={saving}
               title="打开 /contact?intent=trial"
             >
-              预览 Trial
+              预览试用入口
             </Button>
           </div>
         </CardContent>
@@ -239,4 +239,3 @@ export default function ContactInfoManager({ initialConfig }: { initialConfig: A
     </div>
   );
 }
-

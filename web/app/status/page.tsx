@@ -99,7 +99,7 @@ export default async function StatusPage({ searchParams }: { searchParams: Promi
       <Card>
         <CardHeader>
           <CardTitle>变化统计（近 30 天）</CardTitle>
-          <CardDescription>Free 仅展示统计；Pro 可查看产品级变化列表与详情。</CardDescription>
+          <CardDescription>免费版仅展示统计；专业版可查看产品级变化列表与详情。</CardDescription>
         </CardHeader>
         <CardContent className="grid">
           {statsRes.error ? (
@@ -130,7 +130,7 @@ export default async function StatusPage({ searchParams }: { searchParams: Promi
       {isPro ? (
         <Card>
           <CardHeader>
-            <CardTitle>变化列表（Pro）</CardTitle>
+            <CardTitle>变化列表（专业版）</CardTitle>
             <CardDescription>产品级变化记录（最近 30 天）。</CardDescription>
           </CardHeader>
           <CardContent className="grid">

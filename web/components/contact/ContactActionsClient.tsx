@@ -43,13 +43,13 @@ export default function ContactActionsClient({
 
   const primaryLabel = useMemo(() => {
     if (intent === 'trial') return '提交试用申请';
-    if (intent === 'pro') return '申请开通 Pro';
+    if (intent === 'pro') return '申请开通专业版';
     return '提交申请';
   }, [intent]);
 
   const mailSubject = useMemo(() => {
     if (intent === 'trial') return '试用申请';
-    if (intent === 'pro') return '开通 Pro';
+    if (intent === 'pro') return '开通专业版';
     return '联系';
   }, [intent]);
 

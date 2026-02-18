@@ -41,9 +41,9 @@ export const FIELD_ZH: Record<string, string> = {
 };
 
 export const PLAN_ZH: Record<string, string> = {
-  free: 'Free',
-  pro: 'Pro',
-  pro_annual: 'Pro 年度',
+  free: '免费版',
+  pro: '专业版',
+  pro_annual: '专业版（年度）',
 };
 
 export const PLAN_STATUS_ZH: Record<string, string> = {
@@ -72,6 +72,13 @@ export const RUN_STATUS_ZH: Record<string, string> = {
 export const SOURCE_TYPE_ZH: Record<string, string> = {
   postgres: 'PostgreSQL',
   local_registry: '本地注册库目录',
+};
+
+export const LRI_RISK_ZH: Record<string, string> = {
+  LOW: '低风险',
+  MID: '中风险',
+  HIGH: '高风险',
+  CRITICAL: '极高风险',
 };
 
 export function labelFrom(map: Record<string, string>, value?: string | null): string {

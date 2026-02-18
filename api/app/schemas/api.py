@@ -137,6 +137,62 @@ class DashboardBreakdownData(BaseModel):
     by_source: list[DashboardBreakdownItem]
 
 
+class DashboardLriTopItemOut(BaseModel):
+    product_id: UUID
+    product_name: str
+    risk_level: str
+    lri_norm: float
+    tte_days: int | None = None
+
+    # Pro-only fields (redacted to null for free)
+    competitive_count: int | None = None
+    gp_new_12m: int | None = None
+    tte_score: int | None = None
+    rh_score: int | None = None
+    cd_score: int | None = None
+    gp_score: int | None = None
+    calculated_at: datetime | None = None
+
+
+class DashboardLriTopData(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[DashboardLriTopItemOut]
+
+
+class ApiResponseDashboardLriTop(BaseModel):
+    code: int
+    message: str
+    data: DashboardLriTopData
+
+
+class DashboardLriMapItemOut(BaseModel):
+    methodology_id: UUID | None = None
+    methodology_code: str | None = None
+    methodology_name_cn: str | None = None
+    ivd_category: str
+    total_count: int
+    high_risk_count: int
+    avg_lri_norm: float
+
+    # Pro-only fields (redacted to null for free)
+    gp_new_12m: int | None = None
+
+
+class DashboardLriMapData(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[DashboardLriMapItemOut]
+
+
+class ApiResponseDashboardLriMap(BaseModel):
+    code: int
+    message: str
+    data: DashboardLriMapData
+
+
 class AdminConfigItem(BaseModel):
     config_key: str
     config_value: dict
@@ -216,6 +272,71 @@ class ApiResponseCompany(BaseModel):
     code: int
     message: str
     data: CompanyOut
+
+
+class LriScoreOut(BaseModel):
+    registration_id: UUID
+    product_id: UUID | None = None
+    methodology_id: UUID | None = None
+    methodology_code: str | None = None
+    methodology_name_cn: str | None = None
+
+    tte_days: int | None = None
+    renewal_count: int | None = None
+    competitive_count: int | None = None
+    gp_new_12m: int | None = None
+
+    tte_score: int | None = None
+    rh_score: int | None = None
+    cd_score: int | None = None
+    gp_score: int | None = None
+    lri_total: int | None = None
+    lri_norm: float
+
+    risk_level: str
+    model_version: str
+    calculated_at: datetime
+
+
+class ProductLriData(BaseModel):
+    product_id: UUID
+    registration_id: UUID | None = None
+    score: LriScoreOut | None = None
+
+
+class ApiResponseProductLri(BaseModel):
+    code: int
+    message: str
+    data: ProductLriData
+
+
+class AdminLriItemOut(BaseModel):
+    registration_id: UUID
+    registration_no: str
+    product_id: UUID | None = None
+    product_name: str | None = None
+    ivd_category: str | None = None
+    methodology_code: str | None = None
+    methodology_name_cn: str | None = None
+    tte_days: int | None = None
+    renewal_count: int
+    competitive_count: int
+    gp_new_12m: int
+    lri_norm: float
+    risk_level: str
+    model_version: str
+    calculated_at: datetime
+
+
+class AdminLriListData(BaseModel):
+    total: int
+    items: list[AdminLriItemOut]
+
+
+class ApiResponseAdminLriList(BaseModel):
+    code: int
+    message: str
+    data: AdminLriListData
 
 
 class ProductTimelineItemOut(BaseModel):

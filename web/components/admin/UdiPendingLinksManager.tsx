@@ -136,10 +136,10 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             }}
             style={{ minWidth: 180 }}
           >
-            <option value="PENDING">PENDING（{ADMIN_UDI_LINK_STATUS_ZH.PENDING}）</option>
-            <option value="RETRYING">RETRYING（{ADMIN_UDI_LINK_STATUS_ZH.RETRYING}）</option>
-            <option value="RESOLVED">RESOLVED（{ADMIN_UDI_LINK_STATUS_ZH.RESOLVED}）</option>
-            <option value="ALL">ALL（{ADMIN_UDI_LINK_STATUS_ZH.ALL}）</option>
+            <option value="PENDING">{ADMIN_UDI_LINK_STATUS_ZH.PENDING}</option>
+            <option value="RETRYING">{ADMIN_UDI_LINK_STATUS_ZH.RETRYING}</option>
+            <option value="RESOLVED">{ADMIN_UDI_LINK_STATUS_ZH.RESOLVED}</option>
+            <option value="ALL">{ADMIN_UDI_LINK_STATUS_ZH.ALL}</option>
           </Select>
           <Input
             placeholder="按 DI / 候选公司 / 候选产品过滤"
@@ -180,11 +180,8 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                     <tr key={it.id}>
                       <td>{it.di}</td>
                       <td>
-                        <Badge variant="muted">
-                          {it.status}
-                          {ADMIN_UDI_LINK_STATUS_ZH[it.status as keyof typeof ADMIN_UDI_LINK_STATUS_ZH]
-                            ? `（${ADMIN_UDI_LINK_STATUS_ZH[it.status as keyof typeof ADMIN_UDI_LINK_STATUS_ZH]}）`
-                            : ''}
+                        <Badge variant="muted" title={it.status}>
+                          {ADMIN_UDI_LINK_STATUS_ZH[it.status as keyof typeof ADMIN_UDI_LINK_STATUS_ZH] || it.status}
                         </Badge>
                       </td>
                       <td>

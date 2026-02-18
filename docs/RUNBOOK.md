@@ -6,6 +6,12 @@
 - 启动 API/Worker：
   - `docker compose up -d --build`
 
+## Rollback 脚本覆盖校验（建议 CI/发布前必跑）
+确保每个 `migrations/*.sql`（默认从 0011 开始）都有对应的 `scripts/rollback/*_down.sql`。
+```bash
+python3 scripts/verify_rollback_coverage.py
+```
+
 ## 1) 运行一次 UDI 同步
 ```bash
 python -m app.cli source:udi --date 2026-02-13 --execute
@@ -49,6 +55,13 @@ python -m app.cli metrics:recompute --scope ivd --since 2026-01-01
 ## 证据链表
 - `raw_documents`：原始文档元数据（`storage_uri`, `sha256`, `run_id`, `source_url`）
 - `product_params`：参数与证据（`evidence_text`, `evidence_page`, `raw_document_id`）
+
+## Pending 队列写入模式（缺 registration_no 时）
+
+环境变量：`PENDING_QUEUE_MODE`
+- `both`（默认）：同时写 `pending_records`（行级）与 `pending_documents`（文档级）
+- `document_only`：只写 `pending_documents`（避免重复积压口径）
+- `record_only`：只写 `pending_records`（兼容旧口径）
 
 ## pending_records Schema Guard（0031 口径）
 

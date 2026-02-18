@@ -33,7 +33,7 @@ export function Modal({
       <div className={cn('ui-modal', className)} onMouseDown={(e) => e.stopPropagation()}>
         <div className="ui-modal__header">
           <div className="ui-modal__title">{title}</div>
-          <button type="button" className="ui-modal__close" onClick={onClose} aria-label="Close">
+          <button type="button" className="ui-modal__close" onClick={onClose} aria-label="关闭">
             ×
           </button>
         </div>
@@ -43,4 +43,3 @@ export function Modal({
     </div>
   );
 }
-

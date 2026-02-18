@@ -12,6 +12,7 @@ import PlanDebugServer from '../components/plan/PlanDebugServer';
 import PlanBanner from '../components/plan/PlanBanner';
 import RestrictedHint from '../components/plan/RestrictedHint';
 import { PRO_COPY } from '../constants/pro';
+import { IVD_CATEGORY_ZH, LRI_RISK_ZH, RUN_STATUS_ZH, labelFrom } from '../constants/display';
 
 type StatusData = {
   latest_runs: Array<{
@@ -64,6 +65,51 @@ type SearchData = {
   }>;
 };
 
+type DashboardLriTopData = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: Array<{
+    product_id: string;
+    product_name: string;
+    risk_level: string;
+    lri_norm: number;
+    tte_days?: number | null;
+    competitive_count?: number | null;
+    gp_new_12m?: number | null;
+    tte_score?: number | null;
+    rh_score?: number | null;
+    cd_score?: number | null;
+    gp_score?: number | null;
+    calculated_at?: string | null;
+  }>;
+};
+
+type DashboardLriMapData = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: Array<{
+    methodology_id?: string | null;
+    methodology_code?: string | null;
+    methodology_name_cn?: string | null;
+    ivd_category: string;
+    total_count: number;
+    high_risk_count: number;
+    avg_lri_norm: number;
+    gp_new_12m?: number | null;
+  }>;
+};
+
+function lriBadgeVariant(level: string): 'success' | 'warning' | 'danger' | 'muted' {
+  const v = String(level || '').toUpperCase();
+  if (v === 'LOW') return 'success';
+  if (v === 'MID') return 'warning';
+  if (v === 'HIGH') return 'danger';
+  if (v === 'CRITICAL') return 'danger';
+  return 'muted';
+}
+
 function toCompanyRanking(items: SearchData['items']): Array<{ name: string; count: number }> {
   const map = new Map<string, number>();
   items.forEach((x) => {
@@ -105,7 +151,7 @@ function ProLockedState({ text }: { text: string }) {
     <div className="grid" style={{ gap: 10 }}>
       <div className="muted">{text}</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <Badge variant="muted">Pro</Badge>
+        <Badge variant="muted">专业版</Badge>
         <Link className="ui-btn" href="/contact?intent=pro">
           联系开通
         </Link>
@@ -114,7 +160,25 @@ function ProLockedState({ text }: { text: string }) {
   );
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = (await searchParams) || {};
+  function intParam(key: string, fallback: number): number {
+    const raw = sp?.[key];
+    const v = Array.isArray(raw) ? raw[0] : raw;
+    const n = Number.parseInt(String(v ?? ''), 10);
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  }
+
+  const LRI_TOP_LIMIT = 10;
+  const LRI_MAP_LIMIT = 30;
+  const lriTopOffset = intParam('lri_top_offset', 0);
+  const lriMapOffset = intParam('lri_map_offset', 0);
+  const dashHref = (params: Record<string, string | number | undefined | null>) => `/${qs(params)}`;
+
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
   const meRes = await fetch(`${API_BASE}/api/auth/me`, {
@@ -133,7 +197,7 @@ export default async function DashboardPage() {
     isPro = false;
   }
 
-  const [statusRes, summaryRes, trendRes, rankingsRes, radarRes, newProductRes, expiringRes] = await Promise.all([
+  const [statusRes, summaryRes, trendRes, rankingsRes, radarRes, newProductRes, expiringRes, lriTopRes, lriMapRes] = await Promise.all([
     apiGet<StatusData>('/api/status'),
     apiGet<SummaryData>('/api/dashboard/summary?days=30'),
     apiGet<TrendData>('/api/dashboard/trend?days=30'),
@@ -143,6 +207,8 @@ export default async function DashboardPage() {
     isPro
       ? apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`)
       : Promise.resolve({ data: null, error: null }),
+    apiGet<DashboardLriTopData>(`/api/dashboard/lri/top${qs({ limit: LRI_TOP_LIMIT, offset: lriTopOffset })}`),
+    apiGet<DashboardLriMapData>(`/api/dashboard/lri/map${qs({ limit: LRI_MAP_LIMIT, offset: lriMapOffset })}`),
   ]);
   const trendWindow = trendRes.data?.items.slice(-10) ?? [];
   const maxTrendValue = trendWindow.reduce((max, item) => Math.max(max, item.new_products), 0);
@@ -175,7 +241,7 @@ export default async function DashboardPage() {
         ) : (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <Badge variant={statusRes.data.latest_runs[0].status === 'success' ? 'success' : 'muted'}>
-              {statusRes.data.latest_runs[0].status}
+              {labelFrom(RUN_STATUS_ZH, String(statusRes.data.latest_runs[0].status || '').toLowerCase())}
             </Badge>
             <div>
               最近一次：#{statusRes.data.latest_runs[0].id}，开始于{' '}
@@ -197,6 +263,169 @@ export default async function DashboardPage() {
             <KpiCard label="活跃订阅" value={summaryRes.data.latest_active_subscriptions} />
           </>
         )}
+      </section>
+
+      <section className="columns-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>高风险证 Top</CardTitle>
+            <CardDescription>按 LRI 综合分倒序（分页 limit 生效）。</CardDescription>
+          </CardHeader>
+          <CardContent className="grid">
+            {lriTopRes.error ? (
+              <ErrorState text={`加载失败：${lriTopRes.error}`} />
+            ) : !lriTopRes.data || lriTopRes.data.items.length === 0 ? (
+              <EmptyState text="暂无 LRI 数据（可先运行 lri-compute 计算）。" />
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>产品</th>
+                      <th style={{ width: 120 }}>风险等级</th>
+                      {isPro ? <th style={{ width: 90 }}>综合分</th> : null}
+                      {isPro ? <th style={{ width: 90 }}>TTE</th> : null}
+                      {isPro ? <th style={{ width: 90 }}>竞争数</th> : null}
+                      {isPro ? <th style={{ width: 110 }}>12月新增</th> : null}
+                      {isPro ? <th style={{ width: 160 }}>分项(T/R/C/G)</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lriTopRes.data.items.map((it) => {
+                      const risk = String(it.risk_level || '').toUpperCase();
+                      const pct = Number(it.lri_norm || 0) * 100;
+                      return (
+                        <tr key={it.product_id}>
+                          <td>
+                            <Link href={`/products/${it.product_id}`}>{it.product_name}</Link>
+                          </td>
+                          <td>
+                            <Badge variant={lriBadgeVariant(risk)}>{labelFrom(LRI_RISK_ZH, risk)}</Badge>
+                          </td>
+                          {isPro ? <td>{pct.toFixed(1)}%</td> : null}
+                          {isPro ? <td>{it.tte_days ?? '-'}</td> : null}
+                          {isPro ? <td>{it.competitive_count ?? '-'}</td> : null}
+                          {isPro ? <td>{it.gp_new_12m ?? '-'}</td> : null}
+                          {isPro ? (
+                            <td className="muted">
+                              {(it.tte_score ?? '-') + '/' + (it.rh_score ?? '-') + '/' + (it.cd_score ?? '-') + '/' + (it.gp_score ?? '-')}
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+            {lriTopRes.data ? (
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span className="muted">
+                  显示 {Math.min(LRI_TOP_LIMIT, lriTopRes.data.items.length)} 条，偏移 {lriTopOffset}，总数 {lriTopRes.data.total}
+                </span>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Link
+                    className={`ui-btn ui-btn--sm ui-btn--secondary ${lriTopOffset <= 0 ? 'is-disabled' : ''}`}
+                    href={dashHref({
+                      lri_top_offset: Math.max(0, lriTopOffset - LRI_TOP_LIMIT),
+                      lri_map_offset: lriMapOffset,
+                    })}
+                    aria-disabled={lriTopOffset <= 0}
+                    tabIndex={lriTopOffset <= 0 ? -1 : 0}
+                  >
+                    上一页
+                  </Link>
+                  <Link
+                    className={`ui-btn ui-btn--sm ui-btn--secondary ${(lriTopOffset + LRI_TOP_LIMIT) >= lriTopRes.data.total ? 'is-disabled' : ''}`}
+                    href={dashHref({
+                      lri_top_offset: lriTopOffset + LRI_TOP_LIMIT,
+                      lri_map_offset: lriMapOffset,
+                    })}
+                    aria-disabled={(lriTopOffset + LRI_TOP_LIMIT) >= lriTopRes.data.total}
+                    tabIndex={(lriTopOffset + LRI_TOP_LIMIT) >= lriTopRes.data.total ? -1 : 0}
+                  >
+                    下一页
+                  </Link>
+                </div>
+              </div>
+            ) : null}
+            {!isPro ? <RestrictedHint text="升级专业版查看 LRI 构成分项与关键输入（TTE、竞争数、近12月新增）。" /> : null}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>赛道风险地图</CardTitle>
+            <CardDescription>维度：方法学 + IVD 分类。指标：平均风险、高风险数量、近12月新增。</CardDescription>
+          </CardHeader>
+          <CardContent className="grid">
+            {lriMapRes.error ? (
+              <ErrorState text={`加载失败：${lriMapRes.error}`} />
+            ) : !lriMapRes.data || lriMapRes.data.items.length === 0 ? (
+              <EmptyState text="暂无赛道风险数据" />
+            ) : (
+              <TableWrap>
+                <Table>
+                  <thead>
+                    <tr>
+                      <th>赛道</th>
+                      <th style={{ width: 120 }}>平均风险</th>
+                      <th style={{ width: 120 }}>高风险数</th>
+                      {isPro ? <th style={{ width: 140 }}>12月新增证</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lriMapRes.data.items.map((it, idx) => {
+                      const pct = Number(it.avg_lri_norm || 0) * 100;
+                      const cat = labelFrom(IVD_CATEGORY_ZH, String(it.ivd_category || '')) || '未知';
+                      const label = `${it.methodology_name_cn || it.methodology_code || '未映射'} · ${cat}`;
+                      return (
+                        <tr key={`${it.methodology_id || 'na'}:${it.ivd_category}:${idx}`}>
+                          <td title={label}>{label}</td>
+                          <td>{pct.toFixed(1)}%</td>
+                          <td>{it.high_risk_count} / {it.total_count}</td>
+                          {isPro ? <td>{it.gp_new_12m ?? '-'}</td> : null}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </Table>
+              </TableWrap>
+            )}
+            {lriMapRes.data ? (
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span className="muted">
+                  显示 {Math.min(LRI_MAP_LIMIT, lriMapRes.data.items.length)} 条，偏移 {lriMapOffset}，总数 {lriMapRes.data.total}
+                </span>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Link
+                    className={`ui-btn ui-btn--sm ui-btn--secondary ${lriMapOffset <= 0 ? 'is-disabled' : ''}`}
+                    href={dashHref({
+                      lri_top_offset: lriTopOffset,
+                      lri_map_offset: Math.max(0, lriMapOffset - LRI_MAP_LIMIT),
+                    })}
+                    aria-disabled={lriMapOffset <= 0}
+                    tabIndex={lriMapOffset <= 0 ? -1 : 0}
+                  >
+                    上一页
+                  </Link>
+                  <Link
+                    className={`ui-btn ui-btn--sm ui-btn--secondary ${(lriMapOffset + LRI_MAP_LIMIT) >= lriMapRes.data.total ? 'is-disabled' : ''}`}
+                    href={dashHref({
+                      lri_top_offset: lriTopOffset,
+                      lri_map_offset: lriMapOffset + LRI_MAP_LIMIT,
+                    })}
+                    aria-disabled={(lriMapOffset + LRI_MAP_LIMIT) >= lriMapRes.data.total}
+                    tabIndex={(lriMapOffset + LRI_MAP_LIMIT) >= lriMapRes.data.total ? -1 : 0}
+                  >
+                    下一页
+                  </Link>
+                </div>
+              </div>
+            ) : null}
+            {!isPro ? <RestrictedHint text="升级专业版查看“近12月新增证数量”等赛道增长细节，用于竞争与增长判断。" /> : null}
+          </CardContent>
+        </Card>
       </section>
 
       <Card>
@@ -351,7 +580,7 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent className="dashboard-compact">
           {!isPro ? (
-            <ProLockedState text="雷达与到期风险等指标仅 Pro 可见。" />
+            <ProLockedState text="雷达与到期风险等指标仅专业版可见。" />
           ) : radarRes.error ? (
             <ErrorState text={`雷达加载失败：${radarRes.error}`} />
           ) : !radarRes.data || radarRes.data.items.length === 0 ? (
@@ -386,7 +615,7 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent className="dashboard-compact">
           {!isPro ? (
-            <ProLockedState text="日榜（聚合榜单）仅 Pro 可见。" />
+            <ProLockedState text="日榜（聚合榜单）仅专业版可见。" />
           ) : rankingsRes.error ? (
             <ErrorState text={`榜单加载失败：${rankingsRes.error}`} />
           ) : !rankingsRes.data ? (

@@ -31,10 +31,10 @@ export default function PlanBanner({ isPro }: { isPro: boolean }) {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         {isPro ? (
-          <Badge variant="success">Pro</Badge>
+          <Badge variant="success">专业版</Badge>
         ) : (
           <>
-            <Badge variant="muted">Free</Badge>
+            <Badge variant="muted">免费版</Badge>
             <Link className="ui-btn ui-btn--default ui-btn--sm" href={PRO_TRIAL_HREF}>
               {PRO_COPY.banner.free_cta}
             </Link>

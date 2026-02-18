@@ -11,9 +11,21 @@ export const ADMIN_TEXT = {
       title: '待处理记录管理',
       description: '仅管理员可访问。用于跟踪注册锚点未解析记录的积压情况。',
     },
+    pendingDocuments: {
+      title: '待处理文档队列',
+      description: '用于查看缺少 registration_no 的 raw_documents，并支持手动补充后重放入库。',
+    },
     conflicts: {
       title: '冲突队列管理',
       description: '仅管理员可访问。用于处理字段级无法自动裁决的冲突。',
+    },
+    lri: {
+      title: 'LRI 风险看板',
+      description: '查看最新 LRI 风险分布，并快速定位高风险注册证号。',
+    },
+    lriConfig: {
+      title: '指数模型配置：LRI',
+      description: '编辑 lri_v1_config 的分段与阈值，并可触发一次重算验证效果。',
     },
     sources: {
       title: '数据源运维配置',
@@ -64,39 +76,51 @@ export const ADMIN_UDI_LINK_STATUS_ZH: Record<string, string> = {
   ALL: '全部',
 };
 
-export const ADMIN_NAV_GROUPS: Array<{
+export type PendingQueueMode = 'both' | 'document_only' | 'record_only';
+
+export function getAdminNavGroups(pendingQueueMode: PendingQueueMode): Array<{
   title: string;
   items: Array<{ href: string; label: string; icon: string }>;
-}> = [
-  {
-    title: '工作台',
-    items: [
-      { href: '/admin', label: '总览', icon: 'OV' },
-      { href: '/admin/pending', label: '待处理记录', icon: 'PD' },
-      { href: '/admin/conflicts', label: '冲突处理', icon: 'CF' },
-    ],
-  },
-  {
-    title: '数据治理',
-    items: [
-      { href: '/admin/sources', label: '数据源配置', icon: 'SR' },
-      { href: '/admin/udi-links', label: 'UDI 待映射', icon: 'UD' },
-    ],
-  },
-  {
-    title: '系统管理',
-    items: [
-      { href: '/admin/users', label: '用户与会员', icon: 'US' },
-      { href: '/admin/contact', label: '联系信息', icon: 'CT' },
-    ],
-  },
-];
+}> {
+  const showLegacyPendingRecords = pendingQueueMode === 'both' || pendingQueueMode === 'record_only';
+
+  return [
+    {
+      title: '工作台',
+      items: [
+        { href: '/admin', label: '总览', icon: 'OV' },
+        ...(showLegacyPendingRecords ? [{ href: '/admin/pending', label: '待处理记录', icon: 'PD' }] : []),
+        { href: '/admin/pending-documents', label: '待处理文档', icon: 'DQ' },
+        { href: '/admin/conflicts', label: '冲突处理', icon: 'CF' },
+        { href: '/admin/lri', label: 'LRI 风险', icon: 'LR' },
+      ],
+    },
+    {
+      title: '数据治理',
+      items: [
+        { href: '/admin/sources', label: '数据源配置', icon: 'SR' },
+        { href: '/admin/udi-links', label: 'UDI 待映射', icon: 'UD' },
+        { href: '/admin/lri-config', label: 'LRI 模型配置', icon: 'LC' },
+      ],
+    },
+    {
+      title: '系统管理',
+      items: [
+        { href: '/admin/users', label: '用户与会员', icon: 'US' },
+        { href: '/admin/contact', label: '联系信息', icon: 'CT' },
+      ],
+    },
+  ];
+}
 
 export function getAdminBreadcrumb(pathname: string): string {
   const p = String(pathname || '/admin');
   if (p === '/admin') return '总览';
+  if (p.startsWith('/admin/pending-documents')) return '待处理文档';
   if (p.startsWith('/admin/pending')) return '待处理记录';
   if (p.startsWith('/admin/conflicts')) return '冲突处理';
+  if (p.startsWith('/admin/lri-config')) return 'LRI 模型配置';
+  if (p.startsWith('/admin/lri')) return 'LRI 风险';
   if (p.startsWith('/admin/sources') || p.startsWith('/admin/data-sources')) return '数据源配置';
   if (p.startsWith('/admin/udi-links')) return 'UDI 待映射';
   if (p.startsWith('/admin/users')) return '用户与会员';

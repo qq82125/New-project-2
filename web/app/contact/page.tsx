@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ContactPage({ searchParams }: { searchParams: Promise<{ intent?: string }> }) {
   const { intent } = await searchParams;
-  const tag = intent === 'trial' ? '试用申请' : intent === 'pro' ? '开通 Pro' : '联系';
+  const tag = intent === 'trial' ? '试用申请' : intent === 'pro' ? '开通专业版' : '联系';
   const intentKey = intent === 'trial' ? 'trial' : intent === 'pro' ? 'pro' : 'other';
 
   // Public endpoint: admins can edit via /admin/contact.
@@ -42,7 +42,7 @@ export default async function ContactPage({ searchParams }: { searchParams: Prom
             {intentKey === 'trial'
               ? '试用申请入口。建议优先走表单，信息更完整。'
               : intentKey === 'pro'
-                ? '开通 Pro 入口。建议留下公司与需求，便于快速对接。'
+                ? '开通专业版入口。建议留下公司与需求，便于快速对接。'
                 : '联系入口。'}
           </CardDescription>
         </CardHeader>

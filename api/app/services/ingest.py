@@ -16,11 +16,12 @@ from sqlalchemy.orm import Session
 from bs4 import BeautifulSoup
 
 from app.common.errors import IngestErrorCode
-from app.models import ChangeLog, Company, ConflictQueue, PendingRecord, Product, ProductRejected
+from app.models import ChangeLog, Company, ConflictQueue, PendingDocument, PendingRecord, Product, ProductRejected
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 from app.services.nmpa_assets import record_shadow_diff_failure, shadow_write_nmpa_snapshot_and_diffs
 from app.services.normalize_keys import normalize_registration_no
+from app.services.pending_mode import should_enqueue_pending_documents, should_enqueue_pending_records
 from app.services.source_contract import apply_field_policy, upsert_registration_with_contract
 
 TRACKED_FIELDS = (
@@ -525,40 +526,60 @@ def ingest_staging_records(
                         payload = repr(raw).encode("utf-8", errors="ignore")
                     payload_hash = hashlib.sha256(payload).hexdigest()
                     try:
-                        stmt = insert(PendingRecord).values(
-                            source_key=str(source or "UNKNOWN").strip().upper() or "UNKNOWN",
-                            source_run_id=int(source_run_id),
-                            raw_document_id=raw_document_id,
-                            payload_hash=payload_hash,
-                            registration_no_raw=(str(record.reg_no or "").strip() or None),
-                            reason_code="NO_REG_NO",
-                            candidate_registry_no=(str(record.reg_no or "").strip() or None),
-                            candidate_company=str(record.company_name or "").strip() or None,
-                            candidate_product_name=str(record.name or "").strip() or None,
-                            reason=json.dumps(
-                                {
-                                    "error_code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
-                                    "message": "registration_no is required before structured upsert",
+                        if should_enqueue_pending_records():
+                            stmt = insert(PendingRecord).values(
+                                source_key=str(source or "UNKNOWN").strip().upper() or "UNKNOWN",
+                                source_run_id=int(source_run_id),
+                                raw_document_id=raw_document_id,
+                                payload_hash=payload_hash,
+                                registration_no_raw=(str(record.reg_no or "").strip() or None),
+                                reason_code="NO_REG_NO",
+                                candidate_registry_no=(str(record.reg_no or "").strip() or None),
+                                candidate_company=str(record.company_name or "").strip() or None,
+                                candidate_product_name=str(record.name or "").strip() or None,
+                                reason=json.dumps(
+                                    {
+                                        "error_code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
+                                        "message": "registration_no is required before structured upsert",
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                                status="open",
+                            )
+                            stmt = stmt.on_conflict_do_update(
+                                index_elements=[PendingRecord.source_run_id, PendingRecord.payload_hash],
+                                set_={
+                                    "raw_document_id": stmt.excluded.raw_document_id,
+                                    "registration_no_raw": stmt.excluded.registration_no_raw,
+                                    "reason_code": stmt.excluded.reason_code,
+                                    "reason": stmt.excluded.reason,
+                                    "candidate_registry_no": stmt.excluded.candidate_registry_no,
+                                    "candidate_company": stmt.excluded.candidate_company,
+                                    "candidate_product_name": stmt.excluded.candidate_product_name,
+                                    "status": "open",
+                                    "updated_at": func.now(),
                                 },
-                                ensure_ascii=False,
-                            ),
-                            status="open",
-                        )
-                        stmt = stmt.on_conflict_do_update(
-                            index_elements=[PendingRecord.source_run_id, PendingRecord.payload_hash],
-                            set_={
-                                "raw_document_id": stmt.excluded.raw_document_id,
-                                "registration_no_raw": stmt.excluded.registration_no_raw,
-                                "reason_code": stmt.excluded.reason_code,
-                                "reason": stmt.excluded.reason,
-                                "candidate_registry_no": stmt.excluded.candidate_registry_no,
-                                "candidate_company": stmt.excluded.candidate_company,
-                                "candidate_product_name": stmt.excluded.candidate_product_name,
-                                "status": "open",
-                                "updated_at": func.now(),
-                            },
-                        )
-                        db.execute(stmt)
+                            )
+                            db.execute(stmt)
+
+                        if should_enqueue_pending_documents():
+                            # Document-level backlog: raw_document missing canonical key
+                            doc_stmt = insert(PendingDocument).values(
+                                raw_document_id=raw_document_id,
+                                source_run_id=int(source_run_id),
+                                reason_code="NO_REG_NO",
+                                status="pending",
+                            )
+                            doc_stmt = doc_stmt.on_conflict_do_update(
+                                index_elements=[PendingDocument.raw_document_id],
+                                set_={
+                                    "source_run_id": doc_stmt.excluded.source_run_id,
+                                    "reason_code": doc_stmt.excluded.reason_code,
+                                    "status": "pending",
+                                    "updated_at": func.now(),
+                                },
+                            )
+                            db.execute(doc_stmt)
                     except Exception:
                         # Do not block the main ingest path on pending enqueue failures.
                         db.rollback()
