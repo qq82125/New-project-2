@@ -23,6 +23,7 @@ from app.services.nmpa_assets import record_shadow_diff_failure, shadow_write_nm
 from app.services.normalize_keys import normalize_registration_no
 from app.services.pending_mode import should_enqueue_pending_documents, should_enqueue_pending_records
 from app.services.source_contract import apply_field_policy, upsert_registration_with_contract
+from app.services.udi_parse import parse_packing_list, parse_storage_list
 
 TRACKED_FIELDS = (
     'status',
@@ -80,6 +81,9 @@ def load_staging_records(staging_dir: Path) -> list[dict[str, Any]]:
                                 items.append(d)
                         if items:
                             row[child.tag] = items
+                # Canonical structured JSON for contract consumers (deterministic from XML).
+                row["packaging_json"] = parse_packing_list(elem)
+                row["storage_json"] = parse_storage_list(elem)
                 if row:
                     out.append(row)
                 elem.clear()

@@ -79,6 +79,10 @@ def _parse_bool_zh(v: Any) -> bool | None:
 
 
 def _parse_packaging_json(row: dict[str, Any]) -> dict[str, Any] | None:
+    pre = row.get("packaging_json")
+    if isinstance(pre, dict) and isinstance(pre.get("packings"), list):
+        # Already canonical (from XML parser). Keep as-is.
+        return pre
     raw = row.get("packingList")
     items: list[dict[str, Any]] = []
     if isinstance(raw, str) and raw.strip():
@@ -109,6 +113,10 @@ def _parse_packaging_json(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _parse_storage_json(row: dict[str, Any]) -> dict[str, Any] | None:
+    pre = row.get("storage_json")
+    if isinstance(pre, dict) and isinstance(pre.get("storages"), list):
+        # Already canonical (from XML parser). Keep as-is.
+        return pre
     raw = row.get("storageList")
     items: list[dict[str, Any]] = []
     if isinstance(raw, str) and raw.strip():
