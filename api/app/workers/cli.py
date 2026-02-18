@@ -198,6 +198,15 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
 
+    udi_index = sub.add_parser('udi:index', help='Build UDI device index from extracted XML (no anchor writes)')
+    udi_index_mode = udi_index.add_mutually_exclusive_group()
+    udi_index_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_index_mode.add_argument('--execute', action='store_true', help='Write udi_device_index')
+    udi_index.add_argument('--source-run-id', type=int, default=None, help='source_runs.id (used to locate staging/run_<id>/extracted)')
+    udi_index.add_argument('--raw-document-id', default=None, help='raw_documents.id UUID (for traceability)')
+    udi_index.add_argument('--staging-dir', default=None, help='Override: path containing extracted UDI XML files')
+    udi_index.add_argument('--limit', type=int, default=None, help='Optional max number of <device> nodes to scan')
+
     prod_meth = sub.add_parser('methodology:map-products', help='Ontology V1: map products to methodology_master (rules-based)')
     prod_meth_mode = prod_meth.add_mutually_exclusive_group()
     prod_meth_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1014,6 +1023,58 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_udi_index(args: argparse.Namespace) -> int:
+    from app.core.config import Settings
+
+    settings = Settings()
+    db = SessionLocal()
+    try:
+        from app.services.udi_index import run_udi_device_index
+
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        raw_document_id = UUID(str(args.raw_document_id)) if getattr(args, "raw_document_id", None) else None
+
+        if getattr(args, "staging_dir", None):
+            staging = Path(str(args.staging_dir))
+        elif source_run_id is not None:
+            staging = Path(str(settings.staging_dir)) / f"run_{source_run_id}" / "extracted"
+        else:
+            raise SystemExit("require --staging-dir or --source-run-id")
+
+        rep = run_udi_device_index(
+            db,
+            staging_dir=staging,
+            raw_document_id=raw_document_id,
+            source_run_id=source_run_id,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) else None),
+        )
+
+        print(
+            json.dumps(
+                {
+                    "total_devices": rep.total_devices,
+                    "di_present": rep.di_present,
+                    "di_non_empty_rate": rep.di_non_empty_rate,
+                    "reg_present": rep.reg_present,
+                    "reg_non_empty_rate": rep.reg_non_empty_rate,
+                    "packing_present": rep.packing_present,
+                    "packing_rate": rep.packing_rate,
+                    "storage_present": rep.storage_present,
+                    "storage_rate": rep.storage_rate,
+                    "sample_packing_json": rep.sample_packing_json,
+                    "sample_storage_json": rep.sample_storage_json,
+                    "upserted": rep.upserted,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -1132,6 +1193,8 @@ def main() -> None:
         raise SystemExit(_run_source_runner_all(args))
     if args.cmd == 'udi:audit':
         raise SystemExit(_run_udi_audit(args))
+    if args.cmd == 'udi:index':
+        raise SystemExit(_run_udi_index(args))
     if args.cmd == 'methodology:map-products':
         db = SessionLocal()
         try:
