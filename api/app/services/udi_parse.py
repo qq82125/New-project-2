@@ -101,9 +101,10 @@ def parse_storage_list(device_xml: Element) -> dict[str, Any]:
 
             rng: str | None = None
             if mn is not None and mx is not None and unit:
-                rng = f"{mn:g}-{mx:g}{unit}"
+                # Use "~" to match how temperature ranges are commonly expressed in CN materials.
+                rng = f"{mn:g}~{mx:g}{unit}"
             elif mn is not None and mx is not None:
-                rng = f"{mn:g}-{mx:g}"
+                rng = f"{mn:g}~{mx:g}"
             elif mn is not None and unit:
                 rng = f"{mn:g}{unit}"
             elif mx is not None and unit:
@@ -116,4 +117,3 @@ def parse_storage_list(device_xml: Element) -> dict[str, Any]:
             storages.append({"type": t, "min": mn, "max": mx, "unit": unit, "range": rng})
 
     return {"storages": storages, "source": "UDI", "parsed_at": _parsed_at_from_device(device_xml)}
-

@@ -12,6 +12,7 @@ import ProUpgradeHint from '../../../components/plan/ProUpgradeHint';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../../constants/pro';
 import { IVD_CATEGORY_ZH, STATUS_ZH, labelFrom } from '../../../constants/display';
 import LriCard from '../../../components/lri/LriCard';
+import PackagingTree, { type PackingEdge } from '../../../components/udi/PackagingTree';
 
 type ProductData = {
   id: string;
@@ -22,8 +23,15 @@ type ProductData = {
   approved_date?: string | null;
   expiry_date?: string | null;
   class_name?: string | null;
+  model?: string | null;
+  specification?: string | null;
+  category?: string | null;
+  description?: string | null;
   ivd_category?: string | null;
   company?: { id: string; name: string; country?: string | null } | null;
+  is_stub?: boolean | null;
+  source_hint?: string | null;
+  verified_by_nmpa?: boolean | null;
 };
 
 type ProductParamItem = {
@@ -32,6 +40,7 @@ type ProductParamItem = {
   value_num?: number | null;
   value_text?: string | null;
   unit?: string | null;
+  conditions?: any | null;
   confidence: number;
   evidence_text: string;
   evidence_page?: number | null;
@@ -70,6 +79,37 @@ type ProductLriData = {
   score?: ProductLriScore | null;
 };
 
+type VariantItem = {
+  di: string;
+  model_spec?: string | null;
+  manufacturer?: string | null;
+  packaging_json?: any[] | any | null;
+};
+
+type RegistrationData = {
+  id: string;
+  registration_no: string;
+  status?: string | null;
+  is_stub?: boolean | null;
+  source_hint?: string | null;
+  verified_by_nmpa?: boolean | null;
+  variants: VariantItem[];
+};
+
+function packingsFromPackagingJson(v: any): PackingEdge[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v as PackingEdge[];
+  if (typeof v === 'object' && Array.isArray((v as any).packings)) return (v as any).packings as PackingEdge[];
+  return [];
+}
+
+function storagesFromStorageParam(p: ProductParamItem | null | undefined): any[] {
+  const c = (p as any)?.conditions;
+  if (!c) return [];
+  if (Array.isArray((c as any).storages)) return (c as any).storages;
+  return [];
+}
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -84,7 +124,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   const { id } = await params;
   const res = await apiGet<ProductData>(`/api/products/${id}`);
-  const paramsRes = isPro ? await apiGet<ProductParamsData>(`/api/products/${id}/params`) : { data: null, error: null };
+  const paramsRes = isPro ? await apiGet<ProductParamsData>(`/api/products/${id}/params`) : { data: null, error: null, status: null };
   const lriRes = await apiGet<ProductLriData>(`/api/products/${id}/lri`);
 
   if (res.error) {
@@ -93,6 +133,11 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   if (!res.data) {
     return <EmptyState text="产品不存在" />;
   }
+
+  const regRes =
+    res.data.reg_no
+      ? await apiGet<RegistrationData>(`/api/registrations/${encodeURIComponent(res.data.reg_no)}`)
+      : { data: null, error: null, status: null };
 
   return (
     <div className="grid">
@@ -115,6 +160,9 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <Badge variant="muted">注册证号: {res.data.reg_no || '-'}</Badge>
             <Badge variant="muted">UDI-DI: {res.data.udi_di || '-'}</Badge>
             <Badge variant="success">IVD分类: {labelFrom(IVD_CATEGORY_ZH, res.data.ivd_category)}</Badge>
+            {res.data.is_stub && res.data.source_hint === 'UDI' && res.data.verified_by_nmpa === false ? (
+              <Badge variant="warning">UDI来源｜待NMPA核验</Badge>
+            ) : null}
             <Badge
               variant={
                 res.data.status === 'active'
@@ -143,6 +191,26 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <div className="muted">分类码</div>
             <div>{res.data.class_name || '-'}</div>
           </div>
+          <div className="columns-2">
+            <div>
+              <div className="muted">型号</div>
+              <div>{res.data.model || '-'}</div>
+            </div>
+            <div>
+              <div className="muted">规格</div>
+              <div>{res.data.specification || '-'}</div>
+            </div>
+          </div>
+          <div>
+            <div className="muted">类别</div>
+            <div>{res.data.category || '-'}</div>
+          </div>
+          {res.data.description ? (
+            <div>
+              <div className="muted">产品描述</div>
+              <div style={{ whiteSpace: 'pre-wrap' }}>{res.data.description}</div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -155,41 +223,151 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
       <LriCard score={lriRes.data?.score || null} isPro={isPro} loadingError={lriRes.error} />
 
-      {isPro ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>参数摘要</CardTitle>
-            <CardDescription>来源于说明书/附件抽取，包含证据文本。</CardDescription>
-          </CardHeader>
-          <CardContent className="grid">
-            {paramsRes.error ? (
-              <ErrorState text={`参数加载失败：${paramsRes.error}`} />
-            ) : !paramsRes.data || (paramsRes.data.items || []).length === 0 ? (
-              <EmptyState text="暂无结构化参数" />
-            ) : (
-              (paramsRes.data.items || []).slice(0, 20).map((it) => (
-                <div key={it.id} className="card">
+      <Card>
+        <CardHeader>
+          <CardTitle>包装层级</CardTitle>
+          <CardDescription>
+            来自 UDI packingList；支持折叠树形查看（一个注册证可对应多个 DI）。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {!isPro ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span className="muted">专业版解锁：</span>
+              <Badge variant="muted">报价对齐</Badge>
+              <Badge variant="muted">集采映射</Badge>
+              <Badge variant="muted">异常提示</Badge>
+              <Badge variant="muted">变更订阅</Badge>
+              <Link className="ui-btn ui-btn--default ui-btn--sm" href={PRO_TRIAL_HREF} style={{ marginLeft: 'auto' }}>
+                解锁
+              </Link>
+            </div>
+          ) : null}
+          {regRes.error ? (
+            <ErrorState text={`包装层级加载失败：${regRes.error}`} />
+          ) : !regRes.data || (regRes.data.variants || []).length === 0 ? (
+            <EmptyState text="暂无包装层级数据（可先运行 udi:variants 生成绑定）。" />
+          ) : (
+            (regRes.data.variants || []).slice(0, 50).map((v) => {
+              const packings = packingsFromPackagingJson(v.packaging_json);
+              return (
+                <details key={v.di} className="card" open={false}>
+                  <summary style={{ cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Badge variant="muted">DI: {v.di}</Badge>
+                    {v.model_spec ? <Badge variant="muted">型号/货号: {v.model_spec}</Badge> : null}
+                    {v.manufacturer ? <Badge variant="muted">注册人: {v.manufacturer}</Badge> : null}
+                    {packings.length ? <Badge variant="muted">层级: {packings.length}</Badge> : <Badge variant="muted">无层级</Badge>}
+                  </summary>
+                  <div style={{ marginTop: 10 }}>
+                    <PackagingTree packings={packings} />
+                  </div>
+                </details>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>储存条件</CardTitle>
+          <CardDescription>来自 UDI / 说明书抽取（温度范围、特殊储存条件、标签信息与证据链为专业版能力）。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {!isPro ? (
+            <ProUpgradeHint
+              text="储存条件与标签关键信息属于专业版能力，可用于冷链合规核验与渠道/院内落地。"
+              highlights={['温度范围', '特殊储存', '批号/效期', '证据链追溯']}
+              ctaHref={PRO_TRIAL_HREF}
+            />
+          ) : paramsRes.error && paramsRes.status === 401 ? (
+            <ErrorState text="当前未登录，登录后可查看储存条件。" />
+          ) : paramsRes.error && paramsRes.status === 403 ? (
+            <ProUpgradeHint text="当前账号权限不足，升级专业版后可查看储存条件。" ctaHref={PRO_TRIAL_HREF} />
+          ) : paramsRes.error ? (
+            <ErrorState text={`储存条件加载失败：${paramsRes.error}`} />
+          ) : !paramsRes.data ? (
+            <EmptyState text="暂无储存条件" />
+          ) : (() => {
+              const storage = (paramsRes.data.items || []).find((x) => x.param_code === 'STORAGE') || null;
+              const storages = storagesFromStorageParam(storage);
+              if (!storage) return <EmptyState text="暂无储存条件（STORAGE）" />;
+              if (!storages.length) return <div>温度范围: {storage.value_text || '-'}</div>;
+              return (
+                <div className="grid">
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <Badge variant="muted">{it.param_code}</Badge>
-                    <Badge variant="muted">置信度: {Number(it.confidence || 0).toFixed(2)}</Badge>
-                    {it.source ? <Badge variant="muted">来源: {it.source}</Badge> : null}
+                    <Badge variant="muted">温度范围: {storage.value_text || '-'}</Badge>
+                    <Badge variant="muted">置信度: {Number(storage.confidence || 0).toFixed(2)}</Badge>
                   </div>
-                  <div style={{ marginTop: 8 }}>
-                    值: {it.value_num ?? it.value_text ?? '-'} {it.unit || ''}
-                  </div>
-                  <div className="muted" style={{ marginTop: 6 }}>
-                    证据{it.evidence_page != null ? ` (p.${it.evidence_page})` : ''}: {it.evidence_text}
+                  <div className="table">
+                    <div className="row header">
+                      <div>类型</div>
+                      <div>范围</div>
+                      <div>单位</div>
+                    </div>
+                    {storages.slice(0, 50).map((s, idx) => (
+                      <div className="row" key={idx}>
+                        <div>{s?.type || '-'}</div>
+                        <div>{s?.range || (s?.min != null && s?.max != null ? `${s.min}~${s.max}${s.unit || ''}` : '-')}</div>
+                        <div>{s?.unit || '-'}</div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      ) : null}
+              );
+            })()}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>参数摘要</CardTitle>
+          <CardDescription>来源于说明书/附件抽取，包含证据文本。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {!isPro ? (
+            <ProUpgradeHint
+              text="参数与证据链属于专业版能力，用于把监管信息落到可执行的运营与风控动作。"
+              highlights={['储存条件', '灭菌方式', '标签信息', '证据链审计']}
+              ctaHref={PRO_TRIAL_HREF}
+            />
+          ) : paramsRes.error && paramsRes.status === 401 ? (
+            <ErrorState text="当前未登录，登录后可查看参数与证据链。" />
+          ) : paramsRes.error && paramsRes.status === 403 ? (
+            <ProUpgradeHint text="当前账号权限不足，升级专业版后可查看参数与证据链。" ctaHref={PRO_TRIAL_HREF} />
+          ) : paramsRes.error ? (
+            <ErrorState text={`参数加载失败：${paramsRes.error}`} />
+          ) : !paramsRes.data || (paramsRes.data.items || []).length === 0 ? (
+            <EmptyState text="暂无结构化参数" />
+          ) : (
+            (paramsRes.data.items || []).slice(0, 20).map((it) => (
+              <div key={it.id} className="card">
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Badge variant="muted">{it.param_code}</Badge>
+                  <Badge variant="muted">置信度: {Number(it.confidence || 0).toFixed(2)}</Badge>
+                  {it.source ? <Badge variant="muted">来源: {it.source}</Badge> : null}
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  值: {it.value_num ?? it.value_text ?? '-'} {it.unit || ''}
+                </div>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  证据{it.evidence_page != null ? ` (p.${it.evidence_page})` : ''}: {it.evidence_text}
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent>
           <Link href={`/search?reg_no=${encodeURIComponent(res.data.reg_no || '')}`}>按注册证号搜索</Link>
+          {res.data.reg_no ? (
+            <>
+              {' '}
+              · <Link href={`/registrations/${encodeURIComponent(res.data.reg_no)}`}>打开注册证详情</Link>
+            </>
+          ) : null}
         </CardContent>
       </Card>
     </div>

@@ -329,11 +329,19 @@ class ProductVariant(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     di: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     registry_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=True, index=True
+    )
     product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey('products.id'), nullable=True)
     product_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     model_spec: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     packaging: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSONB (UDI packingList): stored as a JSON array or object; keep typing loose for ORM compatibility.
+    packaging_json: Mapped[Optional[Any]] = mapped_column(JSONB, nullable=True)
     manufacturer: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence_raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True, index=True
+    )
     is_ivd: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     ivd_category: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     ivd_version: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
@@ -349,6 +357,7 @@ class ProductParam(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     di: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     registry_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey('products.id'), nullable=True, index=True)
     param_code: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     value_num: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
     value_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -356,11 +365,13 @@ class ProductParam(Base):
     range_low: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
     range_high: Mapped[Optional[float]] = mapped_column(Numeric(18, 6), nullable=True)
     conditions: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    evidence_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     evidence_text: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     raw_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True)
     confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.5)
     extract_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -728,6 +739,31 @@ class AdminConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ParamDictionaryCandidate(Base):
+    __tablename__ = 'param_dictionary_candidates'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    xml_tag: Mapped[str] = mapped_column(Text, nullable=False)
+    count_total: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    count_non_empty: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    empty_rate: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False, default=0)
+    sample_values: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    sample_meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UdiJobCheckpoint(Base):
+    __tablename__ = 'udi_jobs_checkpoint'
+
+    job_name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    cursor: Mapped[str] = mapped_column(String(255), nullable=False, default='')
+    meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class DataSource(Base):
     __tablename__ = 'data_sources'
 
@@ -783,6 +819,9 @@ class DailyMetric(Base):
     lri_computed_count: Mapped[int] = mapped_column(Integer, default=0)
     lri_missing_methodology_count: Mapped[int] = mapped_column(Integer, default=0)
     risk_level_distribution: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # UDI operational + enrichment value-add metrics (stored as JSON to avoid schema churn).
+    # Keys are defined in app.services.metrics._compute_udi_value_add_metrics().
+    udi_metrics: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey('source_runs.id'), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

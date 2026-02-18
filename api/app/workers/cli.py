@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from typing import Any
 
 from pathlib import Path
 from datetime import datetime, timezone
@@ -198,6 +199,26 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
 
+    udi_promote = sub.add_parser('udi:promote', help='Promote UDI device index entries into registration/product structures')
+    udi_promote_mode = udi_promote.add_mutually_exclusive_group()
+    udi_promote_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_promote_mode.add_argument('--execute', action='store_true', help='Write registration/product bindings')
+    udi_promote.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
+    udi_promote.add_argument('--raw-document-id', default=None, help='Filter by udi_device_index.raw_document_id')
+    udi_promote.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
+    udi_promote.add_argument('--offset', type=int, default=None, help='Optional offset for batched promote pagination')
+    # Backward-compatible runbook flag: current implementation does not branch on confidence yet.
+    udi_promote.add_argument('--min-confidence', type=float, default=None, help='Reserved (accepted for compatibility)')
+
+    udi_promote_snapshot = sub.add_parser('udi:promote-snapshot', help='Snapshot udi:promote run with success-rate metrics')
+    udi_promote_snapshot_mode = udi_promote_snapshot.add_mutually_exclusive_group()
+    udi_promote_snapshot_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_promote_snapshot_mode.add_argument('--execute', action='store_true', help='Execute and write')
+    udi_promote_snapshot.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
+    udi_promote_snapshot.add_argument('--raw-document-id', default=None, help='Filter by udi_device_index.raw_document_id')
+    udi_promote_snapshot.add_argument('--source', default='UDI_PROMOTE', help='Source label for upsert/pending paths (default: UDI_PROMOTE)')
+    udi_promote_snapshot.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
+
     udi_index = sub.add_parser('udi:index', help='Build UDI device index from extracted XML (no anchor writes)')
     udi_index_mode = udi_index.add_mutually_exclusive_group()
     udi_index_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -206,6 +227,43 @@ def build_parser() -> argparse.ArgumentParser:
     udi_index.add_argument('--raw-document-id', default=None, help='raw_documents.id UUID (for traceability)')
     udi_index.add_argument('--staging-dir', default=None, help='Override: path containing extracted UDI XML files')
     udi_index.add_argument('--limit', type=int, default=None, help='Optional max number of <device> nodes to scan')
+    udi_index.add_argument('--limit-files', type=int, default=None, help='Optional max number of XML files to scan (sorted)')
+    udi_index.add_argument('--max-devices-per-file', type=int, default=None, help='Optional max number of <device> nodes per file')
+    udi_index.add_argument('--part-from', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
+    udi_index.add_argument('--part-to', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
+
+    udi_variants = sub.add_parser('udi:variants', help='Promote udi_device_index into registration-anchored product_variants')
+    udi_variants_mode = udi_variants.add_mutually_exclusive_group()
+    udi_variants_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_variants_mode.add_argument('--execute', action='store_true', help='Write product_variants + mark udi_device_index unbound')
+    udi_variants.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
+    udi_variants.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
+
+    udi_products_enrich = sub.add_parser('udi:products-enrich', help='Enrich products (fill-empty only) from udi_device_index')
+    udi_products_enrich_mode = udi_products_enrich.add_mutually_exclusive_group()
+    udi_products_enrich_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_products_enrich_mode.add_argument('--execute', action='store_true', help='Write products (fill-empty) + change_log')
+    udi_products_enrich.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
+    udi_products_enrich.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
+    udi_products_enrich.add_argument('--description-max-len', type=int, default=2000, help='Max chars for cpms description snapshot')
+
+    udi_params = sub.add_parser('udi:params', help='Scan UDI device index param candidates; optionally write allowlisted product_params')
+    udi_params_mode = udi_params.add_mutually_exclusive_group()
+    udi_params_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_params_mode.add_argument('--execute', action='store_true', help='Write product_params (and optional candidates snapshot)')
+    udi_params.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
+    udi_params.add_argument('--limit', type=int, default=None, help='Optional max number of index rows to scan (for execute)')
+    udi_params.add_argument('--top', type=int, default=50, help='Top N fields to print in dry-run (default 50)')
+    udi_params.add_argument('--sample-rows', type=int, default=20000, help='Full-scan: sample size for sample_values (default 20000)')
+    udi_params.add_argument('--sample-limit', type=int, default=200000, help='Dry-run sampling rows (default 200000)')
+    udi_params.add_argument('--full-scan', action='store_true', help='Dry-run/execute candidates: use full scan instead of sampling')
+    udi_params.add_argument('--with-candidates', action='store_true', help='Execute: also compute+upsert candidates snapshot (can be expensive)')
+    udi_params.add_argument('--only-allowlisted', action='store_true', help='Execute: only write params from admin_configs[udi_params_allowlist]')
+    udi_params.add_argument('--batch-size', type=int, default=50000, help='Execute: rows per batch for allowlist write (default 50000)')
+    udi_params.add_argument('--resume', dest='resume', action='store_true', help='Execute: continue from checkpoint (default)')
+    udi_params.add_argument('--no-resume', dest='resume', action='store_false', help='Execute: ignore checkpoint and start fresh')
+    udi_params.add_argument('--start-cursor', default=None, help='Execute: start from this di_norm cursor (overrides checkpoint)')
+    udi_params.set_defaults(resume=True)
 
     prod_meth = sub.add_parser('methodology:map-products', help='Ontology V1: map products to methodology_master (rules-based)')
     prod_meth_mode = prod_meth.add_mutually_exclusive_group()
@@ -243,7 +301,23 @@ def _run_daily_metrics(metric_date: str | None) -> int:
         from app.services.metrics import generate_daily_metrics
 
         row = generate_daily_metrics(db, target)
-        print(json.dumps({'metric_date': row.metric_date.isoformat(), 'new_products': row.new_products}, ensure_ascii=True))
+        print(
+            json.dumps(
+                {
+                    'metric_date': row.metric_date.isoformat(),
+                    'new_products': int(row.new_products or 0),
+                    'updated_products': int(row.updated_products or 0),
+                    'cancelled_products': int(row.cancelled_products or 0),
+                    'expiring_in_90d': int(row.expiring_in_90d or 0),
+                    'pending_count': int(getattr(row, 'pending_count', 0) or 0),
+                    'lri_computed_count': int(getattr(row, 'lri_computed_count', 0) or 0),
+                    'lri_missing_methodology_count': int(getattr(row, 'lri_missing_methodology_count', 0) or 0),
+                    'udi_metrics': (getattr(row, 'udi_metrics', None) or {}),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        )
         return 0
     finally:
         db.close()
@@ -1023,14 +1097,95 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_udi_promote(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.udi_promote import promote_udi_from_device_index
+
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        raw_document_id = UUID(str(args.raw_document_id)) if getattr(args, "raw_document_id", None) else None
+
+        rep = promote_udi_from_device_index(
+            db,
+            source_run_id=source_run_id,
+            raw_document_id=raw_document_id,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) else None),
+            offset=(int(args.offset) if getattr(args, "offset", None) else None),
+        )
+
+        print(json.dumps(rep.to_dict, ensure_ascii=True, default=str))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_udi_promote_snapshot(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.udi_promote import promote_udi_from_device_index
+
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        raw_document_id = UUID(str(args.raw_document_id)) if getattr(args, "raw_document_id", None) else None
+        source = str(getattr(args, "source", "UDI_PROMOTE"))
+        execute = bool(getattr(args, "execute", False))
+
+        rep = promote_udi_from_device_index(
+            db,
+            source_run_id=source_run_id,
+            raw_document_id=raw_document_id,
+            source=source,
+            dry_run=(not execute),
+            limit=(int(args.limit) if getattr(args, "limit", None) else None),
+        )
+
+        scanned = int(rep.scanned or 0)
+        with_registration = int(rep.with_registration_no or 0)
+        missing = int(rep.missing_registration_no or 0)
+        pending = int(rep.pending_written or 0)
+        promoted = int(rep.promoted or 0)
+        failed = int(rep.failed or 0)
+
+        def _pct(n: int, t: int) -> float:
+            return round((float(n) * 100.0) / float(t), 2) if t > 0 else 0.0
+
+        snapshot = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+            "source_run_id": source_run_id,
+            "raw_document_id": str(raw_document_id) if raw_document_id else None,
+            "execute": bool(execute),
+            "limit": int(args.limit) if getattr(args, "limit", None) else None,
+            "metrics": {
+                "promoted_rate_pct": _pct(promoted, scanned),
+                "reg_no_hit_rate_pct": _pct(with_registration, scanned),
+                "missing_reg_no_rate_pct": _pct(missing, scanned),
+                "pending_rate_pct": _pct(pending, scanned),
+                "failure_rate_pct": _pct(failed, scanned),
+                "with_registration_no": with_registration,
+                "missing_registration_no": missing,
+                "pending_written": pending,
+                "failed": failed,
+            },
+        }
+
+        out = rep.to_dict
+        out["snapshot"] = snapshot
+        print(json.dumps(out, ensure_ascii=True, default=str))
+        return 0
+    finally:
+        db.close()
+
+
 def _run_udi_index(args: argparse.Namespace) -> int:
     from app.core.config import Settings
 
     settings = Settings()
     db = SessionLocal()
     try:
-        from app.services.udi_index import run_udi_device_index
+        from app.services.udi_index import run_udi_device_index, refresh_udi_registration_index
 
+        execute = bool(getattr(args, "execute", False))
         source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
         raw_document_id = UUID(str(args.raw_document_id)) if getattr(args, "raw_document_id", None) else None
 
@@ -1041,35 +1196,278 @@ def _run_udi_index(args: argparse.Namespace) -> int:
         else:
             raise SystemExit("require --staging-dir or --source-run-id")
 
-        rep = run_udi_device_index(
+        # Standardized import rule: all writes must have source_run_id.
+        run = None
+        if execute and source_run_id is None:
+            part_from = getattr(args, "part_from", None)
+            part_to = getattr(args, "part_to", None)
+            pkg = "UDID_FULL_RELEASE_20260205"
+            if part_from is not None or part_to is not None:
+                pkg = f"{pkg}:PART{part_from or ''}-{part_to or ''}"
+            run = start_source_run(db, "UDI_INDEX", package_name=pkg, package_md5=None, download_url=str(staging))
+            source_run_id = int(run.id)
+
+        try:
+            rep = run_udi_device_index(
+                db,
+                staging_dir=staging,
+                raw_document_id=raw_document_id,
+                source_run_id=source_run_id,
+                dry_run=(not execute),
+                limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                limit_files=(int(args.limit_files) if getattr(args, "limit_files", None) is not None else None),
+                max_devices_per_file=(
+                    int(args.max_devices_per_file) if getattr(args, "max_devices_per_file", None) is not None else None
+                ),
+                part_from=(int(args.part_from) if getattr(args, "part_from", None) is not None else None),
+                part_to=(int(args.part_to) if getattr(args, "part_to", None) is not None else None),
+            )
+        except Exception as e:
+            db.rollback()
+            if run is not None:
+                finish_source_run(
+                    db,
+                    run,
+                    status="FAILED",
+                    message=f"udi:index failed: {type(e).__name__}: {e}",
+                    records_total=0,
+                    records_success=0,
+                    records_failed=0,
+                    source_notes={"error": str(e), "staging_dir": str(staging), "source_run_id": source_run_id},
+                )
+            raise
+
+        out = {
+            # Required counters/rates for runbook validation.
+            "files_seen": int(getattr(rep, "files_seen", 0)),
+            "files_total": int(getattr(rep, "files_total", 0)),
+            "files_failed": int(getattr(rep, "files_failed", 0)),
+            "file_errors": list(getattr(rep, "file_errors", []) or []),
+            "devices_parsed": int(rep.total_devices),
+            "di_non_empty_rate": float(rep.di_non_empty_rate),
+            "reg_no_non_empty_rate": float(rep.reg_non_empty_rate),
+            "has_cert_yes_rate": float(getattr(rep, "has_cert_yes_rate", 0.0)),
+            "packing_present_rate": float(rep.packing_rate),
+            "storage_present_rate": float(rep.storage_rate),
+            "sample_packaging_json": rep.sample_packing_json,
+            "sample_storage_json": rep.sample_storage_json,
+            # Backward-compatible fields (kept stable for existing scripts).
+            "total_devices": int(rep.total_devices),
+            "di_present": int(rep.di_present),
+            "reg_present": int(rep.reg_present),
+            "packing_present": int(rep.packing_present),
+            "storage_present": int(rep.storage_present),
+            "upserted": int(rep.upserted),
+            "source_run_id": source_run_id,
+        }
+
+        print(json.dumps(out, ensure_ascii=False, default=str))
+
+        # Hard guard: never "silent success" when nothing was scanned.
+        if out["files_total"] == 0:
+            if run is not None:
+                finish_source_run(
+                    db,
+                    run,
+                    status="FAILED",
+                    message="files_total=0 (no XML found under staging-dir)",
+                    records_total=0,
+                    records_success=0,
+                    records_failed=0,
+                    source_notes=out,
+                )
+            raise SystemExit(1)
+        if execute and out["devices_parsed"] == 0:
+            if run is not None:
+                finish_source_run(
+                    db,
+                    run,
+                    status="FAILED",
+                    message="devices_parsed=0 in execute mode",
+                    records_total=0,
+                    records_success=0,
+                    records_failed=0,
+                    source_notes=out,
+                )
+            raise SystemExit(1)
+
+        if execute and source_run_id is not None:
+            # Build/refresh registration-level aggregation for this batch.
+            try:
+                refreshed = refresh_udi_registration_index(db, source_run_id=int(source_run_id))
+            except Exception as e:
+                if run is not None:
+                    finish_source_run(
+                        db,
+                        run,
+                        status="FAILED",
+                        message=f"refresh_udi_registration_index failed: {e}",
+                        records_total=int(out["devices_parsed"]),
+                        records_success=int(out["upserted"]),
+                        records_failed=int(out["devices_parsed"]) - int(out["upserted"]),
+                        source_notes=out,
+                    )
+                raise
+            out["udi_registration_index_refreshed"] = int(refreshed)
+            print(json.dumps({"udi_registration_index_refreshed": int(refreshed)}, ensure_ascii=False, default=str))
+
+        if run is not None:
+            msg = None
+            if int(out.get("files_failed") or 0) > 0:
+                msg = f"completed with {int(out.get('files_failed') or 0)} XML parse error file(s)"
+            finish_source_run(
+                db,
+                run,
+                status="SUCCESS",
+                message=msg,
+                records_total=int(out["devices_parsed"]),
+                records_success=int(out["upserted"]),
+                records_failed=max(0, int(out["devices_parsed"]) - int(out["upserted"])),
+                source_notes=out,
+            )
+        return 0
+    finally:
+        db.close()
+
+
+def _run_udi_variants(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.udi_variants import upsert_udi_variants_from_device_index
+
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        rep = upsert_udi_variants_from_device_index(
             db,
-            staging_dir=staging,
-            raw_document_id=raw_document_id,
             source_run_id=source_run_id,
-            dry_run=(not bool(getattr(args, "execute", False))),
             limit=(int(args.limit) if getattr(args, "limit", None) else None),
+            dry_run=(not bool(getattr(args, "execute", False))),
+        )
+        print(json.dumps(rep.to_dict, ensure_ascii=True, default=str))
+        return 0 if int(rep.failed or 0) == 0 else 1
+    finally:
+        db.close()
+
+def _run_udi_products_enrich(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.udi_products_enrich import enrich_products_from_udi_device_index
+
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        rep = enrich_products_from_udi_device_index(
+            db,
+            source_run_id=source_run_id,
+            limit=(int(args.limit) if getattr(args, "limit", None) else None),
+            dry_run=(not bool(getattr(args, "execute", False))),
+            description_max_len=int(getattr(args, "description_max_len", 2000) or 2000),
+        )
+        print(json.dumps(rep.to_dict, ensure_ascii=True, default=str))
+        return 0 if int(rep.failed or 0) == 0 else 1
+    finally:
+        db.close()
+
+def _run_udi_params(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.udi_params import (
+            compute_udi_candidates_full,
+            compute_udi_candidates_sample,
+            upsert_candidates,
+            write_allowlisted_params,
         )
 
-        print(
-            json.dumps(
-                {
-                    "total_devices": rep.total_devices,
-                    "di_present": rep.di_present,
-                    "di_non_empty_rate": rep.di_non_empty_rate,
-                    "reg_present": rep.reg_present,
-                    "reg_non_empty_rate": rep.reg_non_empty_rate,
-                    "packing_present": rep.packing_present,
-                    "packing_rate": rep.packing_rate,
-                    "storage_present": rep.storage_present,
-                    "storage_rate": rep.storage_rate,
-                    "sample_packing_json": rep.sample_packing_json,
-                    "sample_storage_json": rep.sample_storage_json,
-                    "upserted": rep.upserted,
-                },
-                ensure_ascii=False,
-                default=str,
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        dry_run = not bool(getattr(args, "execute", False))
+        topn = max(1, int(getattr(args, "top", 50) or 50))
+        sample_rows = max(100, int(getattr(args, "sample_rows", 20000) or 20000))
+        sample_limit = max(1000, int(getattr(args, "sample_limit", 200000) or 200000))
+        with_candidates = bool(getattr(args, "with_candidates", False))
+        full_scan = bool(getattr(args, "full_scan", False))
+        raw_start = getattr(args, "start_cursor", None)
+        start_cursor = str(raw_start).strip() if isinstance(raw_start, str) else None
+        if start_cursor == "":
+            start_cursor = None
+
+        if not dry_run:
+            def _progress(batch: Any) -> None:
+                print(
+                    json.dumps(
+                        {
+                            "type": "batch",
+                            "batch_no": int(batch.batch_no),
+                            "rows_scanned": int(batch.rows_scanned),
+                            "rows_written": int(batch.rows_written),
+                            "elapsed_ms": int(batch.elapsed_ms),
+                            "cursor": str(batch.cursor),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+            rep = write_allowlisted_params(
+                db,
+                source_run_id=source_run_id,
+                limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
+                dry_run=False,
+                batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
+                resume=bool(getattr(args, "resume", True)),
+                start_cursor=start_cursor,
+                progress_cb=_progress,
             )
-        )
+            out: dict[str, object] = {"write": rep.to_dict}
+            if with_candidates:
+                if full_scan:
+                    candidates_rows, candidate_meta = compute_udi_candidates_full(
+                        db,
+                        source="UDI",
+                        source_run_id=source_run_id,
+                        top=topn,
+                        sample_rows=sample_rows,
+                    )
+                else:
+                    candidates_rows, candidate_meta = compute_udi_candidates_sample(
+                        db,
+                        source="UDI",
+                        source_run_id=source_run_id,
+                        top=topn,
+                        sample_limit=sample_limit,
+                        start_cursor=start_cursor,
+                    )
+                wrote = upsert_candidates(db, rows=candidates_rows)
+                rep.candidates_written = wrote
+                out["candidates_top"] = candidates_rows[:topn]
+                out["total_fields"] = len(candidates_rows)
+                out["candidates_meta"] = candidate_meta
+                db.commit()
+            print(json.dumps(out, ensure_ascii=False, default=str))
+            return 0 if int(rep.failed or 0) == 0 else 1
+
+        if full_scan:
+            top_rows, candidate_meta = compute_udi_candidates_full(
+                db,
+                source="UDI",
+                source_run_id=source_run_id,
+                top=topn,
+                sample_rows=sample_rows,
+            )
+        else:
+            top_rows, candidate_meta = compute_udi_candidates_sample(
+                db,
+                source="UDI",
+                source_run_id=source_run_id,
+                top=topn,
+                sample_limit=sample_limit,
+                start_cursor=start_cursor,
+            )
+        wrote = upsert_candidates(db, rows=top_rows)
+        db.commit()
+        out = {
+            "candidates_top": top_rows,
+            "total_fields": len(top_rows),
+            "candidates_written": wrote,
+            "candidates_meta": candidate_meta,
+        }
+        print(json.dumps(out, ensure_ascii=False, default=str))
         return 0
     finally:
         db.close()
@@ -1193,8 +1591,18 @@ def main() -> None:
         raise SystemExit(_run_source_runner_all(args))
     if args.cmd == 'udi:audit':
         raise SystemExit(_run_udi_audit(args))
+    if args.cmd == 'udi:promote':
+        raise SystemExit(_run_udi_promote(args))
+    if args.cmd == 'udi:promote-snapshot':
+        raise SystemExit(_run_udi_promote_snapshot(args))
     if args.cmd == 'udi:index':
         raise SystemExit(_run_udi_index(args))
+    if args.cmd == 'udi:variants':
+        raise SystemExit(_run_udi_variants(args))
+    if args.cmd == 'udi:products-enrich':
+        raise SystemExit(_run_udi_products_enrich(args))
+    if args.cmd == 'udi:params':
+        raise SystemExit(_run_udi_params(args))
     if args.cmd == 'methodology:map-products':
         db = SessionLocal()
         try:

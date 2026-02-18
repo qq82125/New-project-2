@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -252,3 +253,168 @@ def upsert_product_variants(
         contract_failed=contract_failed,
         notes=notes,
     )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class UdiVariantsFromIndexReport:
+    scanned: int = 0
+    bound: int = 0
+    unbound: int = 0
+    upserted: int = 0
+    marked_unbound: int = 0
+    failed: int = 0
+    errors: list[dict[str, Any]] | None = None
+
+    @property
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "scanned": self.scanned,
+            "bound": self.bound,
+            "unbound": self.unbound,
+            "upserted": self.upserted,
+            "marked_unbound": self.marked_unbound,
+            "failed": self.failed,
+            "errors": self.errors or [],
+        }
+
+
+def _compose_model_spec(ggxh: str | None, sku: str | None) -> str | None:
+    a = str(ggxh or "").strip()
+    b = str(sku or "").strip()
+    if a and b:
+        return f"{a} / {b}"
+    if a:
+        return a
+    if b:
+        return b
+    return None
+
+
+def upsert_udi_variants_from_device_index(
+    db: Session,
+    *,
+    source_run_id: int | None = None,
+    limit: int | None = None,
+    dry_run: bool,
+) -> UdiVariantsFromIndexReport:
+    """
+    Promotion path for UDI device index -> product_variants (registration anchored).
+
+    Rules (contract):
+    - Read udi_device_index.di_norm (unique).
+    - Must bind via registration_no_norm -> registrations.id; otherwise do NOT write variants.
+      Instead mark udi_device_index.status='unbound' (execute only).
+    - Upsert product_variants(di unique), filling:
+      - registration_id
+      - model_spec (ggxh + ' / ' + cphhhbh)
+      - manufacturer (ylqxzcrbarmc -> manufacturer_cn)
+      - packaging_json (udi_device_index.packing_json, schema: packings[] array)
+      - evidence_raw_document_id (raw_document_id)
+    """
+    rep = UdiVariantsFromIndexReport(errors=[])
+
+    sql = """
+    SELECT
+      udi.id AS udi_id,
+      udi.di_norm,
+      udi.registration_no_norm,
+      udi.model_spec,
+      udi.sku_code,
+      udi.manufacturer_cn,
+      udi.packing_json,
+      udi.raw_document_id
+    FROM udi_device_index udi
+    WHERE udi.di_norm IS NOT NULL AND btrim(udi.di_norm) <> ''
+    """
+    params: dict[str, Any] = {}
+    if source_run_id is not None:
+        sql += " AND udi.source_run_id = :source_run_id"
+        params["source_run_id"] = int(source_run_id)
+    sql += " ORDER BY udi.updated_at DESC NULLS LAST"
+    if isinstance(limit, int) and limit > 0:
+        sql += " LIMIT :lim"
+        params["lim"] = int(limit)
+
+    rows = db.execute(text(sql), params).mappings().all()
+
+    # Cache registrations by canonical registration_no.
+    reg_nos = sorted({str(r.get("registration_no_norm") or "").strip() for r in rows if str(r.get("registration_no_norm") or "").strip()})
+    reg_by_no: dict[str, UUID] = {}
+    if reg_nos:
+        for rid, rno in db.execute(
+            text("SELECT id, registration_no FROM registrations WHERE registration_no = ANY(:arr)"),
+            {"arr": reg_nos},
+        ).fetchall():
+            try:
+                reg_by_no[str(rno)] = UUID(str(rid))
+            except Exception:
+                continue
+
+    for r in rows:
+        rep.scanned += 1
+        di = str(r.get("di_norm") or "").strip()
+        reg_no = str(r.get("registration_no_norm") or "").strip()
+        udi_id = r.get("udi_id")
+        raw_document_id = r.get("raw_document_id")
+
+        reg_id = reg_by_no.get(reg_no) if reg_no else None
+        if reg_id is None:
+            rep.unbound += 1
+            if (not dry_run) and udi_id:
+                try:
+                    db.execute(
+                        text("UPDATE udi_device_index SET status = 'unbound', updated_at = NOW() WHERE id = :id"),
+                        {"id": str(udi_id)},
+                    )
+                    rep.marked_unbound += 1
+                except Exception as exc:
+                    rep.failed += 1
+                    rep.errors.append({"di": di, "error": f"mark_unbound_failed: {exc}"})
+            continue
+
+        rep.bound += 1
+        if dry_run:
+            rep.upserted += 1
+            continue
+
+        try:
+            model_spec = _compose_model_spec(r.get("model_spec"), r.get("sku_code"))
+            manufacturer = (str(r.get("manufacturer_cn") or "").strip() or None)
+            packing_json = r.get("packing_json")
+            ev_raw_id = str(raw_document_id) if raw_document_id else None
+
+            stmt = insert(ProductVariant).values(
+                di=di,
+                registry_no=reg_no,
+                registration_id=reg_id,
+                model_spec=model_spec,
+                manufacturer=manufacturer,
+                packaging_json=packing_json,
+                evidence_raw_document_id=(UUID(ev_raw_id) if ev_raw_id else None),
+                updated_at=func.now(),
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[ProductVariant.di],
+                set_={
+                    "registry_no": func.coalesce(stmt.excluded.registry_no, ProductVariant.registry_no),
+                    "registration_id": func.coalesce(stmt.excluded.registration_id, ProductVariant.registration_id),
+                    "model_spec": func.coalesce(stmt.excluded.model_spec, ProductVariant.model_spec),
+                    "manufacturer": func.coalesce(stmt.excluded.manufacturer, ProductVariant.manufacturer),
+                    "packaging_json": func.coalesce(stmt.excluded.packaging_json, ProductVariant.packaging_json),
+                    "evidence_raw_document_id": func.coalesce(stmt.excluded.evidence_raw_document_id, ProductVariant.evidence_raw_document_id),
+                    "updated_at": text("NOW()"),
+                },
+            )
+            db.execute(stmt)
+            rep.upserted += 1
+        except Exception as exc:
+            rep.failed += 1
+            rep.errors.append({"di": di, "error": str(exc)})
+
+    if not dry_run:
+        db.commit()
+    return rep

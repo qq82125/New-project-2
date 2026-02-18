@@ -24,9 +24,39 @@ class ProductOut(BaseModel):
     approved_date: date | None = None
     expiry_date: date | None = None
     class_name: str | None = None
+    model: str | None = None
+    specification: str | None = None
+    category: str | None = None
+    description: str | None = None
     ivd_category: str | None = None
     anchor_summary: dict | None = None
+    # UDI stub visibility: frontend uses these fields to show badges and filtering.
+    is_stub: bool | None = None
+    source_hint: str | None = None
+    verified_by_nmpa: bool | None = None
     company: CompanyOut | None = None
+
+
+class VariantOut(BaseModel):
+    di: str
+    registration_id: UUID | None = None
+    model_spec: str | None = None
+    manufacturer: str | None = None
+    packaging_json: dict | list | None = None
+    evidence_raw_document_id: UUID | None = None
+
+
+class RegistrationOut(BaseModel):
+    id: UUID
+    registration_no: str
+    filing_no: str | None = None
+    approval_date: date | None = None
+    expiry_date: date | None = None
+    status: str | None = None
+    is_stub: bool | None = None
+    source_hint: str | None = None
+    verified_by_nmpa: bool | None = None
+    variants: list[VariantOut] = Field(default_factory=list)
 
 
 class ProductParamOut(BaseModel):
@@ -260,6 +290,12 @@ class ApiResponseProduct(BaseModel):
     code: int
     message: str
     data: ProductOut
+
+
+class ApiResponseRegistration(BaseModel):
+    code: int
+    message: str
+    data: RegistrationOut
 
 
 class ApiResponseProductParams(BaseModel):

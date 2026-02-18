@@ -98,6 +98,79 @@ python -m app.cli nmpa:snapshots --since 2026-02-01
 python -m app.cli nmpa:diffs --date 2026-02-08
 ```
 
+## UDI Promote 快照运维（成功率核对）
+
+用于核对 `udi:promote` 一次批次的成功率与异常分布（不改前端）。
+
+推荐命令（dry-run）：
+```bash
+python -m app.workers.cli udi:promote-snapshot --source-run-id <source_run_id> --limit 500
+```
+
+执行（写入）：
+```bash
+python -m app.workers.cli udi:promote-snapshot --source-run-id <source_run_id> --limit 500 --execute
+```
+
+Docker 内本地化执行：
+```bash
+docker compose exec -T api python3 /app/api/scripts/udi_promote_snapshot.py --source-run-id <source_run_id> --limit 500
+```
+
+输出说明：
+- 继承 `udi:promote` 原始汇总：`scanned/with_registration_no/missing_registration_no/pending_written/failed/errors`
+- `snapshot.metrics` 成功率指标：`promoted_rate_pct` / `reg_no_hit_rate_pct` / `pending_rate_pct` / `failure_rate_pct`
+
+## UDI Variants（注册证锚点规格层落库）
+
+把 `udi_device_index` 里可绑定 `registration_no_norm` 的 DI 写入到 `product_variants`（并写入 `packaging_json` 包装层级）。
+
+Dry-run：
+```bash
+python -m app.workers.cli udi:variants --dry-run --source-run-id <source_run_id> --limit 500
+```
+
+Execute：
+```bash
+python -m app.workers.cli udi:variants --execute --source-run-id <source_run_id> --limit 500
+```
+
+说明与字段契约见：`docs/UDI_VARIANTS.md`
+
+## UDI Products Enrich（产品展示信息补齐）
+
+使用 `udi_device_index` 的字段对 `products` 做“只补空不覆盖”的信息补齐，并写 `change_log` 便于审计。
+
+Dry-run：
+```bash
+python -m app.workers.cli udi:products-enrich --dry-run --source-run-id <source_run_id> --limit 500
+```
+
+Execute：
+```bash
+python -m app.workers.cli udi:products-enrich --execute --source-run-id <source_run_id> --limit 500
+```
+
+说明与字段契约见：`docs/UDI_PRODUCTS_ENRICH.md`
+
+## UDI Params（候选池统计 + 白名单写入 product_params）
+
+用途：
+- 先做“全量候选字段分布统计”（不写主业务表），定位哪些字段值得产品化；
+- 再按 allowlist 只写高价值参数到 `product_params`（避免写爆）。
+
+Dry-run（不落库，只打印 top 字段分布）：
+```bash
+python -m app.workers.cli udi:params --dry-run --source-run-id <source_run_id> --top 50
+```
+
+Execute（落库写候选池快照，并按 allowlist 写 `product_params`）：
+```bash
+python -m app.workers.cli udi:params --execute --only-allowlisted --source-run-id <source_run_id> --limit 500
+```
+
+说明与字段契约见：`docs/UDI_PARAMS.md`
+
 ## Admin Pending 手工验收（PR-F1）
 
 启动：
@@ -170,6 +243,38 @@ docker compose up -d --build
 5. 失败路径验证：
    - 输入非法值（例如 `priority` 非数字）触发前端校验
    - 或制造后端失败，确认页面与 toast 均显示后端 `code/message/detail`
+
+## Admin 手工验收（Prompt3 UDI promote）
+
+启动：
+```bash
+docker compose up -d --build
+```
+
+验收步骤：
+1. 生成/确认 `udi_device_index` 已有数据（`source_run_id` 可从 ingest/source 日志确认）；
+2. 预览 promote：
+   ```bash
+   venv/bin/python -m app.workers.cli udi:promote --source-run-id <source_run_id> --limit 200
+   ```
+3. 真正执行：
+   ```bash
+   venv/bin/python -m app.workers.cli udi:promote --execute --source-run-id <source_run_id> --limit 200
+   ```
+4. 查看数据库：
+   - 对应 `di` 是否在 `product_udi_map` 中与 `registration_no` 绑定；
+   - `product_variants` 的 `registry_no` 与 `product_id` 是否回填；
+   - `registrations.raw_json->_stub` / `products.raw_json->_stub` 是否写入 `source_hint='UDI'`、`verified_by_nmpa=false`；
+   - 无注册证号记录是否落入 `pending_records` 且 reason_code 为 `NO_REG_NO`。
+5. 前端 spot check：
+   - 打开 `/search`（默认）确认待核验条目不出现；
+   - 打开 `/search?include_unverified=true` 可见待核验 Badge `UDI来源｜待NMPA核验`；
+   - 打开 `/products/{id}` 详情页确认 stub Badge 可见。
+
+回归命令（可选，建议 CI）：
+```bash
+venv/bin/python -m pytest -q api/tests/test_udi_parse_unit.py -q
+```
 
 回滚方式：
 ```bash

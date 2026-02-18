@@ -1,5 +1,7 @@
 from app.models.entities import (
     AdminConfig,
+    ParamDictionaryCandidate,
+    UdiJobCheckpoint,
     ChangeLog,
     ChangeLogArchive,
     CompanyAlias,
@@ -78,6 +80,8 @@ __all__ = [
     'SubscriptionDelivery',
     'ExportUsage',
     'AdminConfig',
+    'ParamDictionaryCandidate',
+    'UdiJobCheckpoint',
     'DataSource',
     'User',
     'MembershipGrant',

@@ -136,6 +136,23 @@ XML 结构：
   - `product_variants`（DI/包装层级）
   - `product_params`（储运/灭菌/特殊条件，需带证据）
 
+### 3.3 Variants 落库字段引用（udi:variants）
+
+为避免契约口径与实现分叉，`udi:variants` 的具体字段落库与失败处理以独立文档为准：
+- `docs/UDI_VARIANTS.md`
+
+摘要（必须满足）：
+- 输入：`udi_device_index.di_norm`（唯一） + `udi_device_index.registration_no_norm`
+- 绑定：`registration_no_norm` 必须命中 `registrations.registration_no` 并取得 `registrations.id`
+- 写入：`product_variants(di UNIQUE)`，并填充
+  - `registration_id`
+  - `registry_no`（兼容旧口径）
+  - `model_spec`（由 `ggxh/cphhhbh` 拼接）
+  - `manufacturer`
+  - `packaging_json`（来自 `udi_device_index.packing_json`，按 schema 原样）
+  - `evidence_raw_document_id`
+- 无法绑定：不写 `product_variants`；仅在执行模式下标记 `udi_device_index.status='unbound'`
+
 ## 4. 可审计性要求
 
 必须可追溯：
@@ -152,4 +169,3 @@ XML 结构：
 - `write_udi_contract_record()` 必须：
   - 无 `registration_no_norm` 时不写 `registrations/products`
   - 写入 `udi_di_master.packaging_json` / `udi_di_master.storage_json`（按上面 schema）
-

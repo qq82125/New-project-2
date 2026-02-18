@@ -164,6 +164,9 @@ from app.schemas.api import (
     ApiResponseAdminLriList,
     AdminLriListData,
     AdminLriItemOut,
+    ApiResponseRegistration,
+    RegistrationOut,
+    VariantOut,
 )
 from app.services.auth import (
     create_session_token,
@@ -230,6 +233,60 @@ security = HTTPBasic()
 
 def _ok(data):
     return {'code': 0, 'message': 'ok', 'data': data}
+
+
+@app.get('/api/registrations/{registration_no}')
+def get_registration_detail(registration_no: str, db: Session = Depends(get_db)) -> ApiResponseRegistration:
+    reg_no_norm = normalize_registration_no(str(registration_no))
+    if not reg_no_norm:
+        raise HTTPException(status_code=400, detail='invalid registration_no')
+
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
+    if reg is None:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    is_stub, source_hint, verified_by_nmpa = _stub_meta_from_registration(reg)
+
+    # Prefer the new anchor column product_variants.registration_id; keep backward compatibility by also
+    # reading legacy product_variants.registry_no when registration_id is NULL.
+    variants = (
+        db.scalars(
+            select(ProductVariant)
+            .where(
+                (ProductVariant.registration_id == reg.id)
+                | ((ProductVariant.registration_id.is_(None)) & (ProductVariant.registry_no == reg.registration_no))
+            )
+            .order_by(ProductVariant.updated_at.desc(), ProductVariant.created_at.desc())
+        )
+        .all()
+    )
+
+    items = [
+        VariantOut(
+            di=str(v.di),
+            registration_id=getattr(v, 'registration_id', None),
+            model_spec=getattr(v, 'model_spec', None),
+            manufacturer=getattr(v, 'manufacturer', None),
+            packaging_json=getattr(v, 'packaging_json', None),
+            evidence_raw_document_id=getattr(v, 'evidence_raw_document_id', None),
+        )
+        for v in variants
+    ]
+
+    return _ok(
+        RegistrationOut(
+            id=reg.id,
+            registration_no=reg.registration_no,
+            filing_no=getattr(reg, 'filing_no', None),
+            approval_date=getattr(reg, 'approval_date', None),
+            expiry_date=getattr(reg, 'expiry_date', None),
+            status=getattr(reg, 'status', None),
+            is_stub=is_stub,
+            source_hint=source_hint,
+            verified_by_nmpa=verified_by_nmpa,
+            variants=items,
+        )
+    )
 
 
 def _auth_user_out(user: User) -> AuthUserOut:
@@ -416,8 +473,62 @@ def _product_attr(product, name: str, default=None):
     return getattr(product, name, default)
 
 
+def _stub_meta_from_product(product) -> tuple[bool, str | None, bool | None]:
+    """Return (is_stub, source_hint, verified_by_nmpa) from product raw_json stub flags.
+
+    Contract:
+    - UDI-created stubs carry product.raw_json['_stub'] with keys:
+      evidence_level/source_hint/verified_by_nmpa.
+    """
+    try:
+        raw = _product_attr(product, 'raw_json', None) or {}
+        stub = raw.get('_stub') if isinstance(raw, dict) else None
+        if not isinstance(stub, dict):
+            return (False, None, True)
+        source_hint = str(stub.get('source_hint') or '').strip() or None
+        verified = stub.get('verified_by_nmpa')
+        if isinstance(verified, bool):
+            vb = verified
+        elif verified is None:
+            vb = False
+        else:
+            vb = str(verified).strip().lower() in {'1', 'true', 'yes', 'y'}
+        # Any _stub implies "not verified" unless explicitly marked otherwise.
+        return (True, source_hint, vb)
+    except Exception:
+        return (False, None, True)
+
+
+def _stub_meta_from_registration(reg) -> tuple[bool, str | None, bool | None]:
+    """Return (is_stub, source_hint, verified_by_nmpa) from registration raw_json stub flags."""
+    try:
+        raw = getattr(reg, 'raw_json', None) or {}
+        stub = raw.get('_stub') if isinstance(raw, dict) else None
+        if not isinstance(stub, dict):
+            return (False, None, True)
+        source_hint = str(stub.get('source_hint') or '').strip() or None
+        verified = stub.get('verified_by_nmpa')
+        if isinstance(verified, bool):
+            vb = verified
+        elif verified is None:
+            vb = False
+        else:
+            vb = str(verified).strip().lower() in {'1', 'true', 'yes', 'y'}
+        return (True, source_hint, vb)
+    except Exception:
+        return (False, None, True)
+
+
 def serialize_product(product, overrides: dict | None = None) -> ProductOut:
     ov = overrides or {}
+    is_stub, source_hint, verified_by_nmpa = _stub_meta_from_product(product)
+    desc = None
+    try:
+        rj = _product_attr(product, "raw_json", None) or {}
+        if isinstance(rj, dict):
+            desc = rj.get("description") or (rj.get("udi_snapshot") or {}).get("description")
+    except Exception:
+        desc = None
     return ProductOut(
         id=_product_attr(product, 'id'),
         registration_id=ov.get('registration_id', _product_attr(product, 'registration_id')),
@@ -428,8 +539,15 @@ def serialize_product(product, overrides: dict | None = None) -> ProductOut:
         approved_date=ov.get('approved_date', _product_attr(product, 'approved_date')),
         expiry_date=ov.get('expiry_date', _product_attr(product, 'expiry_date')),
         class_name=ov.get('class_name', _product_attr(product, 'class_name')),
+        model=ov.get('model', _product_attr(product, 'model')),
+        specification=ov.get('specification', _product_attr(product, 'specification')),
+        category=ov.get('category', _product_attr(product, 'category')),
+        description=ov.get('description', desc),
         ivd_category=ov.get('ivd_category', _product_attr(product, 'ivd_category', None)),
         anchor_summary=ov.get('anchor_summary', None),
+        is_stub=ov.get('is_stub', is_stub),
+        source_hint=ov.get('source_hint', source_hint),
+        verified_by_nmpa=ov.get('verified_by_nmpa', verified_by_nmpa),
         company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
 
@@ -437,6 +555,7 @@ def serialize_product(product, overrides: dict | None = None) -> ProductOut:
 def serialize_product_limited(product, overrides: dict | None = None) -> ProductOut:
     # Keep schema stable but trim optional fields for Free users (summary view).
     ov = overrides or {}
+    is_stub, source_hint, verified_by_nmpa = _stub_meta_from_product(product)
     return ProductOut(
         id=_product_attr(product, 'id'),
         registration_id=ov.get('registration_id', _product_attr(product, 'registration_id')),
@@ -447,8 +566,15 @@ def serialize_product_limited(product, overrides: dict | None = None) -> Product
         approved_date=None,
         expiry_date=ov.get('expiry_date', _product_attr(product, 'expiry_date')),
         class_name=None,
+        model=None,
+        specification=None,
+        category=None,
+        description=None,
         ivd_category=ov.get('ivd_category', _product_attr(product, 'ivd_category', None)),
         anchor_summary=ov.get('anchor_summary', None),
+        is_stub=ov.get('is_stub', is_stub),
+        source_hint=ov.get('source_hint', source_hint),
+        verified_by_nmpa=ov.get('verified_by_nmpa', verified_by_nmpa),
         company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
 
@@ -1142,6 +1268,7 @@ def search(
     sort_by: SortBy = Query(default='updated_at'),
     sort_order: SortOrder = Query(default='desc'),
     mode: SearchMode | None = Query(default=None, description='limited (free) or full (pro)'),
+    include_unverified: bool = Query(default=False, description='Include UDI stubs (unverified by NMPA)'),
     current_user: User | None = Depends(_get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> ApiResponseSearch:
@@ -1175,6 +1302,7 @@ def search(
         company=company,
         reg_no=reg_no,
         status=status,
+        include_unverified=bool(include_unverified),
         page=page,
         page_size=page_size,
         sort_by=sort_by,
@@ -1442,6 +1570,7 @@ def products_full(
     page_size: int = Query(default=30, ge=1, le=200),
     sort_by: SortBy = Query(default='updated_at'),
     sort_order: SortOrder = Query(default='desc'),
+    include_unverified: bool = Query(default=False, description='Include UDI stubs (unverified by NMPA)'),
     _user: User = Depends(require_pro),
     db: Session = Depends(get_db),
 ) -> ApiResponseSearch:
@@ -1451,6 +1580,7 @@ def products_full(
         company=company,
         reg_no=reg_no,
         status=status,
+        include_unverified=bool(include_unverified),
         class_prefix=class_prefix,
         ivd_category=ivd_category,
         page=page,

@@ -76,7 +76,7 @@ def test_parse_storage_list_schema_and_numeric_casts() -> None:
     assert out["storages"][0]["min"] == 2.0
     assert out["storages"][0]["max"] == 8.0
     assert out["storages"][0]["unit"] == "℃"
-    assert out["storages"][0]["range"] == "2-8℃"
+    assert out["storages"][0]["range"] == "2~8℃"
     assert out["storages"][1]["min"] is None
     assert out["storages"][1]["max"] == 30.0
     assert out["storages"][1]["range"] == "30℃"
@@ -86,4 +86,3 @@ def test_missing_lists_are_allowed() -> None:
     device_xml = ET.fromstring("<device><versionTime>2026-02-15</versionTime></device>")
     assert parse_packing_list(device_xml)["packings"] == []
     assert parse_storage_list(device_xml)["storages"] == []
-

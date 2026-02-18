@@ -48,6 +48,7 @@ services:
     volumes:
       - ./staging:/app/staging
       - ./migrations:/app/migrations:ro
+      - "/Users/GY/Documents/IIVD/000001 小桔灯网/4 数据库/注册产品库/udi/UDID_FULL_RELEASE_20260205:/data/udi:ro"
     restart: unless-stopped
 
   worker:
@@ -78,6 +79,7 @@ services:
     volumes:
       - ./staging:/app/staging
       - ./migrations:/app/migrations:ro
+      - "/Users/GY/Documents/IIVD/000001 小桔灯网/4 数据库/注册产品库/udi/UDID_FULL_RELEASE_20260205:/data/udi:ro"
     restart: unless-stopped
 
   web:

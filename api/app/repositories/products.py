@@ -18,6 +18,7 @@ def build_search_query(
     reg_no: str | None,
     status: str | None,
     ivd_filter: bool | None = True,
+    include_unverified: bool = False,
 ) -> Select[tuple[Product]]:
     stmt = (
         select(Product)
@@ -44,6 +45,13 @@ def build_search_query(
         stmt = stmt.where(Product.reg_no.ilike(f'%{reg_no}%'))
     if status:
         stmt = stmt.where(Product.status == status)
+
+    # Default behavior: hide UDI stubs unless explicitly requested.
+    # Stubs are marked by product.raw_json['_stub'].source_hint == 'UDI' and verified_by_nmpa == false.
+    if not include_unverified:
+        src = func.coalesce(Product.raw_json['_stub'].op('->>')('source_hint'), '')
+        verified = func.coalesce(Product.raw_json['_stub'].op('->>')('verified_by_nmpa'), 'true')
+        stmt = stmt.where(or_(src != 'UDI', verified == 'true'))
     return stmt
 
 
@@ -53,12 +61,13 @@ def search_products(
     company: str | None,
     reg_no: str | None,
     status: str | None,
+    include_unverified: bool,
     page: int,
     page_size: int,
     sort_by: SortBy,
     sort_order: SortOrder,
 ) -> tuple[list[Product], int]:
-    base_stmt = build_search_query(query, company, reg_no, status)
+    base_stmt = build_search_query(query, company, reg_no, status, include_unverified=include_unverified)
     total = db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
 
     sort_col = {
@@ -81,6 +90,7 @@ def list_full_products(
     company: str | None,
     reg_no: str | None,
     status: str | None,
+    include_unverified: bool,
     class_prefix: str | None,
     ivd_category: str | None,
     page: int,
@@ -88,7 +98,7 @@ def list_full_products(
     sort_by: SortBy,
     sort_order: SortOrder,
 ) -> tuple[list[Product], int]:
-    stmt = build_search_query(query, company, reg_no, status)
+    stmt = build_search_query(query, company, reg_no, status, include_unverified=include_unverified)
     if class_prefix:
         stmt = stmt.where(Product.class_name.ilike(f'{class_prefix}%'))
     if ivd_category:

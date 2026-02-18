@@ -8,7 +8,7 @@ import 'server-only';
 import { headers } from 'next/headers';
 import { apiBase } from './api-server';
 
-export async function apiGet<T>(path: string): Promise<{ data: T | null; error: string | null }> {
+export async function apiGet<T>(path: string): Promise<{ data: T | null; error: string | null; status?: number | null }> {
   try {
     // Forward cookies so API can apply per-user entitlements even for Server Components.
     // Some routes are public, but exporting / pro-only endpoints rely on auth context.
@@ -24,15 +24,15 @@ export async function apiGet<T>(path: string): Promise<{ data: T | null; error: 
       headers: cookie ? { cookie } : undefined,
     });
     if (!res.ok) {
-      return { data: null, error: `请求失败 (${res.status})` };
+      return { data: null, error: `请求失败 (${res.status})`, status: res.status };
     }
     const body = (await res.json()) as ApiEnvelope<T>;
     if (body.code !== 0) {
-      return { data: null, error: body.message || '接口返回异常' };
+      return { data: null, error: body.message || '接口返回异常', status: res.status };
     }
-    return { data: body.data, error: null };
+    return { data: body.data, error: null, status: res.status };
   } catch (err) {
-    return { data: null, error: err instanceof Error ? err.message : '网络错误' };
+    return { data: null, error: err instanceof Error ? err.message : '网络错误', status: null };
   }
 }
 

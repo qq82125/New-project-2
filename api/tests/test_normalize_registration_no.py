@@ -18,6 +18,11 @@ from app.services.normalize_keys import normalize_registration_no
         ("abc-Def", "ABCDEF"),
         ("国械注准〔2023〕1234", "国械注准20231234"),
         ("粤械备【2014】0023", "粤械备20140023"),
+        # UDI export sometimes concatenates multiple reg numbers into one field; keep the first segment.
+        (
+            "苏械注准20162220838苏械注准20152021027苏械注准20172661896",
+            "苏械注准20162220838",
+        ),
     ],
 )
 def test_normalize_registration_no_examples(inp: str, expected: str) -> None:
@@ -28,4 +33,3 @@ def test_normalize_registration_no_empty_returns_none() -> None:
     assert normalize_registration_no(None) is None
     assert normalize_registration_no("") is None
     assert normalize_registration_no("   ") is None
-
