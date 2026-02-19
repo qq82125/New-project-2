@@ -13,6 +13,8 @@ import PlanBanner from '../components/plan/PlanBanner';
 import RestrictedHint from '../components/plan/RestrictedHint';
 import { PRO_COPY } from '../constants/pro';
 import { IVD_CATEGORY_ZH, LRI_RISK_ZH, RUN_STATUS_ZH, labelFrom } from '../constants/display';
+import { getTopCompetitiveTracks, getTopGrowthCompanies, getTopRiskRegistrations } from '../lib/api/signals';
+import { ApiHttpError } from '../lib/api/client';
 
 type StatusData = {
   latest_runs: Array<{
@@ -160,6 +162,15 @@ function ProLockedState({ text }: { text: string }) {
   );
 }
 
+function settledErrorText(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return '未知错误';
+}
+
+function settledIs404(err: unknown): boolean {
+  return err instanceof ApiHttpError && err.status === 404;
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -209,6 +220,11 @@ export default async function DashboardPage({
       : Promise.resolve({ data: null, error: null }),
     apiGet<DashboardLriTopData>(`/api/dashboard/lri/top${qs({ limit: LRI_TOP_LIMIT, offset: lriTopOffset })}`),
     apiGet<DashboardLriMapData>(`/api/dashboard/lri/map${qs({ limit: LRI_MAP_LIMIT, offset: lriMapOffset })}`),
+  ]);
+  const [topRiskRes, topCompetitiveRes, topGrowthRes] = await Promise.allSettled([
+    getTopRiskRegistrations(),
+    getTopCompetitiveTracks(),
+    getTopGrowthCompanies(),
   ]);
   const trendWindow = trendRes.data?.items.slice(-10) ?? [];
   const maxTrendValue = trendWindow.reduce((max, item) => Math.max(max, item.new_products), 0);
@@ -264,6 +280,143 @@ export default async function DashboardPage({
           </>
         )}
       </section>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Signal 总览</CardTitle>
+          <CardDescription>生命周期高风险、赛道拥挤度、企业扩张速度三栏榜单。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <section className="columns-3">
+            <Card>
+              <CardHeader>
+                <CardTitle>高风险生命周期证 Top10</CardTitle>
+              </CardHeader>
+              <CardContent className="grid">
+                {topRiskRes.status === 'rejected' ? (
+                  settledIs404(topRiskRes.reason) ? (
+                    <EmptyState text="暂无数据" />
+                  ) : (
+                    <ErrorState text={`加载失败：${settledErrorText(topRiskRes.reason)}`} />
+                  )
+                ) : topRiskRes.value.items.length === 0 ? (
+                  <EmptyState text="暂无数据" />
+                ) : (
+                  <TableWrap>
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>注册证</th>
+                          <th style={{ width: 90 }}>level</th>
+                          <th style={{ width: 100 }}>到期天数</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topRiskRes.value.items.slice(0, 10).map((item) => (
+                          <tr key={item.registration_no}>
+                            <td>
+                              <Link href={`/registrations/${encodeURIComponent(item.registration_no)}`}>
+                                {item.registration_no}
+                              </Link>
+                              <div className="muted">{item.company || '-'}</div>
+                            </td>
+                            <td>{item.level || '-'}</td>
+                            <td>{item.days_to_expiry ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </TableWrap>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>拥挤赛道 Top10</CardTitle>
+              </CardHeader>
+              <CardContent className="grid">
+                {topCompetitiveRes.status === 'rejected' ? (
+                  settledIs404(topCompetitiveRes.reason) ? (
+                    <EmptyState text="暂无数据" />
+                  ) : (
+                    <ErrorState text={`加载失败：${settledErrorText(topCompetitiveRes.reason)}`} />
+                  )
+                ) : topCompetitiveRes.value.items.length === 0 ? (
+                  <EmptyState text="暂无数据" />
+                ) : (
+                  <TableWrap>
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>赛道</th>
+                          <th style={{ width: 90 }}>level</th>
+                          <th style={{ width: 100 }}>总量</th>
+                          <th style={{ width: 110 }}>12m增速</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topCompetitiveRes.value.items.slice(0, 10).map((item) => (
+                          <tr key={item.track_id}>
+                            <td>
+                              <Link href={`/tracks/${encodeURIComponent(item.track_id)}`}>{item.track_name}</Link>
+                            </td>
+                            <td>{item.level || '-'}</td>
+                            <td>{item.total_count ?? '-'}</td>
+                            <td>{item.new_rate_12m ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </TableWrap>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>扩张最快企业 Top10</CardTitle>
+              </CardHeader>
+              <CardContent className="grid">
+                {topGrowthRes.status === 'rejected' ? (
+                  settledIs404(topGrowthRes.reason) ? (
+                    <EmptyState text="暂无数据" />
+                  ) : (
+                    <ErrorState text={`加载失败：${settledErrorText(topGrowthRes.reason)}`} />
+                  )
+                ) : topGrowthRes.value.items.length === 0 ? (
+                  <EmptyState text="暂无数据" />
+                ) : (
+                  <TableWrap>
+                    <Table>
+                      <thead>
+                        <tr>
+                          <th>企业</th>
+                          <th style={{ width: 90 }}>level</th>
+                          <th style={{ width: 110 }}>12m新增证</th>
+                          <th style={{ width: 110 }}>12m新赛道</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topGrowthRes.value.items.slice(0, 10).map((item) => (
+                          <tr key={item.company_id}>
+                            <td>
+                              <Link href={`/companies/${encodeURIComponent(item.company_id)}`}>{item.company_name}</Link>
+                            </td>
+                            <td>{item.level || '-'}</td>
+                            <td>{item.new_registrations_12m ?? '-'}</td>
+                            <td>{item.new_tracks_12m ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </Table>
+                  </TableWrap>
+                )}
+              </CardContent>
+            </Card>
+          </section>
+        </CardContent>
+      </Card>
 
       <section className="columns-2">
         <Card>

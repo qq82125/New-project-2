@@ -15,6 +15,7 @@ import ProUpgradeHint from '../../components/plan/ProUpgradeHint';
 import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
 import { SORT_BY_ZH, SORT_ORDER_ZH, STATUS_ZH, labelFrom } from '../../constants/display';
 import PaginationControls from '../../components/PaginationControls';
+import { getSearchSignalsBatch, type SearchSignalItem } from '../../lib/api/signals';
 
 type SearchParams = {
   q?: string;
@@ -90,6 +91,17 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
   const res = await apiGet<SearchData>(`/api/search${query}`);
   const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: params.reg_no })}`;
+  const visibleItems = (res.data?.items || []).slice(0, isPro ? undefined : 10);
+  const registrationNos = visibleItems.map((x) => x.product.reg_no || '').filter(Boolean) as string[];
+  let signalMap = new Map<string, SearchSignalItem>();
+  let signalError: string | null = null;
+  try {
+    const signalRes = await getSearchSignalsBatch(registrationNos);
+    signalMap = new Map(signalRes.items.map((x) => [x.registration_no, x]));
+  } catch (err) {
+    signalError = err instanceof Error ? err.message : '未知错误';
+    signalMap = new Map();
+  }
 
   return (
     <div className="grid">
@@ -173,11 +185,15 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             <EmptyState text="暂无匹配结果" />
           ) : (
             <div className="list">
-              {(isPro ? res.data.items : res.data.items.slice(0, 10)).map((item) => (
+              {visibleItems.map((item) => {
+                const regNo = item.product.reg_no || '';
+                const signal = regNo ? signalMap.get(regNo) : undefined;
+                const mainHref = regNo ? `/registrations/${encodeURIComponent(regNo)}` : `/products/${item.product.id}`;
+                return (
                 <Card key={item.product.id}>
                   <CardHeader>
                     <CardTitle>
-                      <Link href={`/products/${item.product.id}`}>{item.product.name}</Link>
+                      <Link href={mainHref}>{item.product.name}</Link>
                     </CardTitle>
                     <CardDescription>
                       <span className="muted">UDI-DI:</span> {item.product.udi_di || '-'}
@@ -204,6 +220,22 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         <Badge variant="warning">UDI来源｜待NMPA核验</Badge>
                       ) : null}
                     </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {!regNo ? (
+                        <Badge variant="muted">无注册证锚点</Badge>
+                      ) : (
+                        <>
+                          {signal?.lifecycle_level ? <Badge variant="muted">生命周期: {signal.lifecycle_level}</Badge> : null}
+                          {signal?.track_level ? <Badge variant="muted">竞争: {signal.track_level}</Badge> : null}
+                          {signal?.company_level ? <Badge variant="muted">扩张: {signal.company_level}</Badge> : null}
+                          {!signal?.lifecycle_level && !signal?.track_level && !signal?.company_level ? (
+                            <Badge variant="muted">信号暂无</Badge>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                    {signal?.factors_summary ? <div className="muted">{signal.factors_summary}</div> : null}
+                    {signalError ? <div className="muted">信号加载降级：{signalError}</div> : null}
                     <div>
                       <span className="muted">企业:</span>{' '}
                       {item.product.company ? (
@@ -212,9 +244,20 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         '-'
                       )}
                     </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {regNo ? (
+                        <Link className="ui-btn ui-btn--sm ui-btn--default" href={`/registrations/${encodeURIComponent(regNo)}`}>
+                          查看注册证
+                        </Link>
+                      ) : null}
+                      <Link className="ui-btn ui-btn--sm ui-btn--secondary" href={`/products/${item.product.id}`}>
+                        查看产品
+                      </Link>
+                    </div>
                   </CardContent>
                 </Card>
-              ))}
+              );
+              })}
             </div>
           )}
 

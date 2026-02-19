@@ -18,6 +18,7 @@ type ProductData = {
   id: string;
   name: string;
   reg_no?: string | null;
+  registrations?: Array<string | { registration_no?: string | null; reg_no?: string | null }> | null;
   udi_di?: string | null;
   status: string;
   approved_date?: string | null;
@@ -110,6 +111,19 @@ function storagesFromStorageParam(p: ProductParamItem | null | undefined): any[]
   return [];
 }
 
+function firstRegistrationNo(product: ProductData): string | null {
+  if (product.reg_no) return product.reg_no;
+  const regs = product.registrations || [];
+  for (const item of regs) {
+    if (typeof item === 'string' && item) return item;
+    if (item && typeof item === 'object') {
+      if (item.registration_no) return item.registration_no;
+      if (item.reg_no) return item.reg_no;
+    }
+  }
+  return null;
+}
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -133,14 +147,34 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
   if (!res.data) {
     return <EmptyState text="产品不存在" />;
   }
+  const anchorRegNo = firstRegistrationNo(res.data);
 
   const regRes =
-    res.data.reg_no
-      ? await apiGet<RegistrationData>(`/api/registrations/${encodeURIComponent(res.data.reg_no)}`)
+    anchorRegNo
+      ? await apiGet<RegistrationData>(`/api/registrations/${encodeURIComponent(anchorRegNo)}`)
       : { data: null, error: null, status: null };
 
   return (
     <div className="grid">
+      <Card>
+        <CardHeader>
+          <CardTitle>关联注册证</CardTitle>
+          <CardDescription>注册证是该产品的第一入口（版本链/时间切片/信号）。</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {anchorRegNo ? (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Badge variant="muted">registration_no: {anchorRegNo}</Badge>
+              <Link className="ui-btn ui-btn--default" href={`/registrations/${encodeURIComponent(anchorRegNo)}`}>
+                查看注册证版本链
+              </Link>
+            </div>
+          ) : (
+            <EmptyState text="该产品尚未绑定注册证（可在 Admin 做映射）" />
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>{res.data.name}</CardTitle>
@@ -157,7 +191,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </CardHeader>
         <CardContent className="grid">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Badge variant="muted">注册证号: {res.data.reg_no || '-'}</Badge>
+            <Badge variant="muted">注册证号: {anchorRegNo || '-'}</Badge>
             <Badge variant="muted">UDI-DI: {res.data.udi_di || '-'}</Badge>
             <Badge variant="success">IVD分类: {labelFrom(IVD_CATEGORY_ZH, res.data.ivd_category)}</Badge>
             {res.data.is_stub && res.data.source_hint === 'UDI' && res.data.verified_by_nmpa === false ? (
