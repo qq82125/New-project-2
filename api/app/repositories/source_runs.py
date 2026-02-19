@@ -62,17 +62,25 @@ def finish_source_run(
 
 
 def latest_runs(db: Session, limit: int = 10) -> list[SourceRun]:
-    stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).limit(limit)
+    cutoff = datetime.now(timezone.utc) + timedelta(minutes=5)
+    stmt = (
+        select(SourceRun)
+        .where(SourceRun.started_at <= cutoff)
+        .order_by(desc(SourceRun.started_at))
+        .limit(limit)
+    )
     return list(db.scalars(stmt))
 
 
 def list_source_runs(db: Session, limit: int = 50) -> list[SourceRun]:
-    stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).limit(limit)
+    cutoff = datetime.now(timezone.utc) + timedelta(minutes=5)
+    stmt = select(SourceRun).where(SourceRun.started_at <= cutoff).order_by(desc(SourceRun.started_at)).limit(limit)
     return list(db.scalars(stmt))
 
 
 def count_source_runs(db: Session) -> int:
-    stmt = select(func.count()).select_from(SourceRun)
+    cutoff = datetime.now(timezone.utc) + timedelta(minutes=5)
+    stmt = select(func.count()).select_from(SourceRun).where(SourceRun.started_at <= cutoff)
     return int(db.scalar(stmt) or 0)
 
 
@@ -82,7 +90,14 @@ def list_source_runs_page(db: Session, *, page: int, page_size: int) -> tuple[li
     offset = (safe_page - 1) * safe_page_size
 
     total = count_source_runs(db)
-    stmt = select(SourceRun).order_by(desc(SourceRun.started_at)).offset(offset).limit(safe_page_size)
+    cutoff = datetime.now(timezone.utc) + timedelta(minutes=5)
+    stmt = (
+        select(SourceRun)
+        .where(SourceRun.started_at <= cutoff)
+        .order_by(desc(SourceRun.started_at))
+        .offset(offset)
+        .limit(safe_page_size)
+    )
     items = list(db.scalars(stmt))
     return items, total
 
