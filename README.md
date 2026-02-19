@@ -1,4 +1,4 @@
-# IVD产品雷达
+# DeepIVD
 
 面向 IVD（试剂/仪器/医疗软件）的“监管事实驱动”产品雷达：从 NMPA/UDI 等来源同步数据，沉淀证据链与变更资产，提供检索/Dashboard/订阅投递，并逐步演进到“快照 + 字段级 diff + 风险与行动”的决策链路。
 
@@ -19,6 +19,14 @@
 - 字段名表（DB Schema Dictionary）：`docs/FIELD_DICTIONARY.md`
 - NMPA 快照+diff SSOT（人读）：`docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
 - NMPA 快照+diff SSOT（机器读）：`docs/nmpa_field_dictionary_v1_adapted.yaml`
+
+## 前端信息架构（IA）
+- `Dashboard`：入口页，只保留可钻取入口（KPI / Signals / Track / Trend），所有动作收敛到 `/search`。
+- `Search`：工作台，统一 filters URL 契约与结果操作入口（含对标加入）。
+- `Detail`：证据资产页（Overview / Changes / Evidence / Variants），返回链路保持筛选上下文。
+- `Benchmarks`：对标集合与对比表（MVP 本地存储）。
+- `Admin`：控制台能力集中在 `/admin/*`。
+- `Pro`：转化入口，承接专业版权益说明与升级。
 
 Signal Engine V1 API：
 - 后端验收与运维：`docs/SIGNAL_ENGINE_V1_BACKEND.md`

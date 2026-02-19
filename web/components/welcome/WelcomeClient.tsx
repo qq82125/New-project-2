@@ -57,7 +57,7 @@ export default function WelcomeClient() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>欢迎使用 IVD智慧大脑</CardTitle>
+          <CardTitle>欢迎使用 DeepIVD</CardTitle>
           <CardDescription>您当前为免费版用户，以下是您可用的功能与升级选项</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>

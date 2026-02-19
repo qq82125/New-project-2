@@ -197,7 +197,7 @@ from app.services.supplement_sync import (
 from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 from app.api.signals import router as signals_router
 
-app = FastAPI(title='IVD产品雷达 API', version='0.4.0')
+app = FastAPI(title='DeepIVD API', version='0.4.0')
 app.include_router(signals_router)
 
 PRIMARY_SOURCE_NAME = 'NMPA注册产品库（主数据源）'
