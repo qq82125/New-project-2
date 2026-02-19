@@ -7,7 +7,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../..
 import { Badge } from '../../components/ui/badge';
 
 import { apiBase } from '../../lib/api-server';
-import { getMe } from '../../lib/getMe';
 import SearchExportActions from '../../components/search/SearchExportActions';
 import SearchFiltersPanel from '../../components/search/SearchFiltersPanel';
 import { SORT_BY_ZH, SORT_ORDER_ZH, STATUS_ZH, labelFrom } from '../../constants/display';
@@ -50,6 +49,21 @@ type SearchData = {
   }>;
 };
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('请求超时')), ms);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -59,13 +73,14 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     cache: 'no-store',
   });
   if (meRes.status === 401) redirect('/login');
-  const me = await getMe();
-  const isPro = Boolean(me?.plan?.is_pro || me?.plan?.is_admin);
+  let isPro = false;
   let canExport = false;
   try {
     const body = (await meRes.json()) as any;
+    isPro = Boolean(body?.data?.plan?.is_pro || body?.data?.plan?.is_admin);
     canExport = Boolean(body?.data?.entitlements?.can_export);
   } catch {
+    isPro = false;
     canExport = false;
   }
 
@@ -96,11 +111,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const res = await apiGet<SearchData>(`/api/search${query}`);
   const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: regNo })}`;
   const visibleItems = (res.data?.items || []).slice(0, isPro ? undefined : 10);
-  const registrationNos = visibleItems.map((x) => x.product.reg_no || '').filter(Boolean) as string[];
+  const registrationNos = visibleItems.map((x) => x.product.reg_no || '').filter(Boolean).slice(0, 8) as string[];
   let signalMap = new Map<string, SearchSignalItem>();
   let signalError: string | null = null;
   try {
-    const signalRes = await getSearchSignalsBatch(registrationNos);
+    const signalRes = await withTimeout(getSearchSignalsBatch(registrationNos), 900);
     signalMap = new Map(signalRes.items.map((x) => [x.registration_no, x]));
   } catch (err) {
     signalError = err instanceof Error ? err.message : '未知错误';

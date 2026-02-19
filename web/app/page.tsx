@@ -171,6 +171,21 @@ function settledIs404(err: unknown): boolean {
   return err instanceof ApiHttpError && err.status === 404;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+  });
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -209,22 +224,40 @@ export default async function DashboardPage({
   }
 
   const [statusRes, summaryRes, trendRes, rankingsRes, radarRes, newProductRes, expiringRes, lriTopRes, lriMapRes] = await Promise.all([
-    apiGet<StatusData>('/api/status'),
-    apiGet<SummaryData>('/api/dashboard/summary?days=30'),
-    apiGet<TrendData>('/api/dashboard/trend?days=30'),
-    isPro ? apiGet<RankingsData>('/api/dashboard/rankings?days=30&limit=10') : Promise.resolve({ data: null, error: null }),
-    isPro ? apiGet<RadarData>('/api/dashboard/radar') : Promise.resolve({ data: null, error: null }),
-    apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'approved_date', sort_order: 'desc' })}`),
+    withTimeout(apiGet<StatusData>('/api/status'), 1200, { data: null, error: '请求超时', status: null }),
+    withTimeout(apiGet<SummaryData>('/api/dashboard/summary?days=30'), 1200, { data: null, error: '请求超时', status: null }),
+    withTimeout(apiGet<TrendData>('/api/dashboard/trend?days=30'), 1200, { data: null, error: '请求超时', status: null }),
     isPro
-      ? apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`)
+      ? withTimeout(apiGet<RankingsData>('/api/dashboard/rankings?days=30&limit=10'), 1200, { data: null, error: '请求超时', status: null })
       : Promise.resolve({ data: null, error: null }),
-    apiGet<DashboardLriTopData>(`/api/dashboard/lri/top${qs({ limit: LRI_TOP_LIMIT, offset: lriTopOffset })}`),
-    apiGet<DashboardLriMapData>(`/api/dashboard/lri/map${qs({ limit: LRI_MAP_LIMIT, offset: lriMapOffset })}`),
+    isPro ? withTimeout(apiGet<RadarData>('/api/dashboard/radar'), 1200, { data: null, error: '请求超时', status: null }) : Promise.resolve({ data: null, error: null }),
+    withTimeout(
+      apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'approved_date', sort_order: 'desc' })}`),
+      1200,
+      { data: null, error: '请求超时', status: null },
+    ),
+    isPro
+      ? withTimeout(
+          apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`),
+          1200,
+          { data: null, error: '请求超时', status: null },
+        )
+      : Promise.resolve({ data: null, error: null }),
+    withTimeout(
+      apiGet<DashboardLriTopData>(`/api/dashboard/lri/top${qs({ limit: LRI_TOP_LIMIT, offset: lriTopOffset })}`),
+      1200,
+      { data: null, error: '请求超时', status: null },
+    ),
+    withTimeout(
+      apiGet<DashboardLriMapData>(`/api/dashboard/lri/map${qs({ limit: LRI_MAP_LIMIT, offset: lriMapOffset })}`),
+      1200,
+      { data: null, error: '请求超时', status: null },
+    ),
   ]);
   const [topRiskRes, topCompetitiveRes, topGrowthRes] = await Promise.allSettled([
-    getTopRiskRegistrations(),
-    getTopCompetitiveTracks(),
-    getTopGrowthCompanies(),
+    withTimeout(getTopRiskRegistrations(), 1200, { items: [] }),
+    withTimeout(getTopCompetitiveTracks(), 1200, { items: [] }),
+    withTimeout(getTopGrowthCompanies(), 1200, { items: [] }),
   ]);
   const trendWindow = trendRes.data?.items.slice(-10) ?? [];
   const maxTrendValue = trendWindow.reduce((max, item) => Math.max(max, item.new_products), 0);
