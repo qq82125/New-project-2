@@ -127,10 +127,15 @@ function toCompanyRanking(items: SearchData['items']): Array<{ name: string; cou
 
 function KpiCard({ label, value }: { label: string; value: number }) {
   return (
-    <Card>
+    <Card data-testid="dashboard__kpi__card">
       <CardContent>
         <div className="muted" style={{ fontSize: 13 }}>{label}</div>
         <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: 0.2 }}>{value}</div>
+        <div style={{ marginTop: 8 }}>
+          <Link className="ui-btn ui-btn--sm ui-btn--secondary" href="/search" data-testid="dashboard__kpi__view_list">
+            查看列表
+          </Link>
+        </div>
       </CardContent>
     </Card>
   );
@@ -301,7 +306,7 @@ export default async function DashboardPage({
         </CardContent>
       </Card>
 
-      <section className="kpis">
+      <section className="kpis" data-testid="dashboard__kpi__panel">
         {summaryRes.error || !summaryRes.data ? (
           <ErrorState text={`KPI 加载失败：${summaryRes.error || '未知错误'}`} />
         ) : (
@@ -325,7 +330,7 @@ export default async function DashboardPage({
               <CardHeader>
                 <CardTitle>高风险生命周期证 Top10</CardTitle>
               </CardHeader>
-              <CardContent className="grid">
+              <CardContent className="grid" data-testid="dashboard__risk_top__panel">
                 {topRiskRes.status === 'rejected' ? (
                   settledIs404(topRiskRes.reason) ? (
                     <EmptyState text="暂无数据" />
@@ -345,10 +350,13 @@ export default async function DashboardPage({
                         </tr>
                       </thead>
                       <tbody>
-                        {topRiskRes.value.items.slice(0, 10).map((item) => (
+                        {topRiskRes.value.items.slice(0, 10).map((item, idx) => (
                           <tr key={item.registration_no}>
                             <td>
-                              <Link href={`/search${qs({ registration_no: item.registration_no })}`}>
+                              <Link
+                                href={`/search${qs({ registration_no: item.registration_no })}`}
+                                data-testid={idx === 0 ? 'dashboard__risk_top__row_1' : undefined}
+                              >
                                 {item.registration_no}
                               </Link>
                               <div className="muted">{item.company || '-'}</div>
@@ -368,7 +376,7 @@ export default async function DashboardPage({
               <CardHeader>
                 <CardTitle>拥挤赛道 Top10</CardTitle>
               </CardHeader>
-              <CardContent className="grid">
+              <CardContent className="grid" data-testid="dashboard__competitive_top__panel">
                 {topCompetitiveRes.status === 'rejected' ? (
                   settledIs404(topCompetitiveRes.reason) ? (
                     <EmptyState text="暂无数据" />
@@ -389,10 +397,15 @@ export default async function DashboardPage({
                         </tr>
                       </thead>
                       <tbody>
-                        {topCompetitiveRes.value.items.slice(0, 10).map((item) => (
+                        {topCompetitiveRes.value.items.slice(0, 10).map((item, idx) => (
                           <tr key={item.track_id}>
                             <td>
-                              <Link href={`/search${qs({ q: item.track_name })}`}>{item.track_name}</Link>
+                              <Link
+                                href={`/search${qs({ q: item.track_name })}`}
+                                data-testid={idx === 0 ? 'dashboard__competitive_top__row_1' : undefined}
+                              >
+                                {item.track_name}
+                              </Link>
                             </td>
                             <td>{item.level || '-'}</td>
                             <td>{item.total_count ?? '-'}</td>
@@ -457,7 +470,7 @@ export default async function DashboardPage({
             <CardTitle>高风险证 Top</CardTitle>
             <CardDescription>按 LRI 综合分倒序（分页 limit 生效）。</CardDescription>
           </CardHeader>
-          <CardContent className="grid">
+          <CardContent className="grid" data-testid="dashboard__lri_top__panel">
             {lriTopRes.error ? (
               <ErrorState text={`加载失败：${lriTopRes.error}`} />
             ) : !lriTopRes.data || lriTopRes.data.items.length === 0 ? (
@@ -477,13 +490,15 @@ export default async function DashboardPage({
                     </tr>
                   </thead>
                   <tbody>
-                    {lriTopRes.data.items.map((it) => {
+                    {lriTopRes.data.items.map((it, idx) => {
                       const risk = String(it.risk_level || '').toUpperCase();
                       const pct = Number(it.lri_norm || 0) * 100;
                       return (
                         <tr key={it.product_id}>
                           <td>
-                            <Link href={`/search${qs({ q: it.product_name })}`}>{it.product_name}</Link>
+                            <Link href={`/search${qs({ q: it.product_name })}`} data-testid={idx === 0 ? 'dashboard__lri_top__row_1' : undefined}>
+                              {it.product_name}
+                            </Link>
                           </td>
                           <td>
                             <Badge variant={lriBadgeVariant(risk)}>{labelFrom(LRI_RISK_ZH, risk)}</Badge>
@@ -544,7 +559,7 @@ export default async function DashboardPage({
             <CardTitle>赛道风险地图</CardTitle>
             <CardDescription>维度：方法学 + IVD 分类。指标：平均风险、高风险数量、近12月新增。</CardDescription>
           </CardHeader>
-          <CardContent className="grid">
+          <CardContent className="grid" data-testid="dashboard__lri_map__panel">
             {lriMapRes.error ? (
               <ErrorState text={`加载失败：${lriMapRes.error}`} />
             ) : !lriMapRes.data || lriMapRes.data.items.length === 0 ? (
@@ -610,6 +625,11 @@ export default async function DashboardPage({
               </div>
             ) : null}
             {!isPro ? <RestrictedHint text="升级专业版查看“近12月新增证数量”等赛道增长细节，用于竞争与增长判断。" /> : null}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Link className="ui-btn ui-btn--sm ui-btn--secondary" href="/search" data-testid="dashboard__lri_map__view_track">
+                查看该赛道产品
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </section>
@@ -619,7 +639,12 @@ export default async function DashboardPage({
           <CardTitle>新增趋势（30 天）</CardTitle>
           <CardDescription>最近 10 天新增产品变化（简易条形图）。</CardDescription>
         </CardHeader>
-        <CardContent className="dashboard-compact">
+        <CardContent className="dashboard-compact" data-testid="dashboard__trend__panel">
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button type="button" className="ui-btn ui-btn--sm ui-btn--secondary" data-testid="dashboard__trend__tab">
+            新增
+          </button>
+        </div>
         {trendRes.error ? (
           <ErrorState text={`趋势加载失败：${trendRes.error}`} />
         ) : !trendRes.data || trendRes.data.items.length === 0 ? (

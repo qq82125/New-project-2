@@ -214,12 +214,17 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="grid">
-      <Card>
+      <Card data-testid="detail__overview__panel">
         <CardHeader>
           <CardTitle>产品详情</CardTitle>
           <CardDescription>概览区</CardDescription>
         </CardHeader>
         <CardContent className="grid">
+          <div>
+            <Link className="ui-btn ui-btn--sm ui-btn--secondary" href={`/search?reg_no=${encodeURIComponent(anchorRegNo || '')}`} data-testid="detail__header__back">
+              返回
+            </Link>
+          </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <Badge variant="muted">产品名: {res.data.name || '-'}</Badge>
             <Badge variant="muted">企业名: {res.data.company?.name || '-'}</Badge>
@@ -237,7 +242,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
               状态: {labelFrom(STATUS_ZH, res.data.status) || '-'}
             </Badge>
           </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }} data-testid="detail__overview__registration_no">
             <Badge variant="muted">注册证号: {anchorRegNo || '-'}</Badge>
             {anchorRegNo ? <CopyTextButton value={anchorRegNo} /> : null}
           </div>
@@ -258,7 +263,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
         </CardContent>
       </Card>
 
-      <Card>
+      <Card data-testid="detail__fields__panel">
         <CardHeader>
           <CardTitle>结构化字段</CardTitle>
           <CardDescription>字段分组折叠展示</CardDescription>
@@ -304,7 +309,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
             <ErrorState text="加载失败，请重试" />
           ) : (
             <>
-              <div className="card">
+              <div className="card" data-testid="detail__evidence__panel">
                 <div style={{ fontWeight: 700, marginBottom: 8 }}>证据</div>
                 {evidenceRows.length === 0 ? (
                   <EmptyState text="暂无可追溯证据（优先补采 raw_documents）" />
@@ -331,7 +336,7 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
                 )}
               </div>
 
-              <div className="card">
+              <div className="card" data-testid="detail__timeline__panel">
                 <div style={{ fontWeight: 700, marginBottom: 8 }}>变更</div>
                 {changeRows.length === 0 ? (
                   <EmptyState text="暂无字段变更记录" />

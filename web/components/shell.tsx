@@ -35,7 +35,7 @@ function AppHeader() {
             <div className="app-brand__tag">仪表盘 / 搜索 / 订阅与投递</div>
           </div>
         </div>
-        <nav className="app-header__nav" aria-label="顶部导航">
+        <nav className="app-header__nav" aria-label="顶部导航" data-testid="dashboard__header__nav">
           {navItems.map((item) => (
             <Link
               key={item.href}

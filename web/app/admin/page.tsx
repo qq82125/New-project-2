@@ -96,8 +96,12 @@ async function AdminHeroCard() {
         <CardDescription>{ADMIN_TEXT.modules.home.description}</CardDescription>
       </CardHeader>
       <CardContent className="admin-hero__content">
-        <div className="admin-hero__kpis">
-          <Link href="/admin/queue/pending-docs" className={cn('admin-kpi-card', pendingDocs > 0 ? 'is-warn' : 'is-ok')}>
+        <div className="admin-hero__kpis" data-testid="admin__cards__panel">
+          <Link
+            href="/admin/queue/pending-docs"
+            className={cn('admin-kpi-card', pendingDocs > 0 ? 'is-warn' : 'is-ok')}
+            data-testid="admin__cards__pending_docs"
+          >
             <div className="admin-kpi-card__label">待处理文档</div>
             <div className="admin-kpi-card__value">{fmtInt(pendingDocs)}</div>
             <div className="admin-kpi-card__meta">
@@ -105,7 +109,11 @@ async function AdminHeroCard() {
               <span className="muted">缺 registration_no 的 raw_documents</span>
             </div>
           </Link>
-          <Link href="/admin/queue/udi-pending" className={cn('admin-kpi-card', udiOpen > 0 ? 'is-warn' : 'is-ok')}>
+          <Link
+            href="/admin/queue/udi-pending"
+            className={cn('admin-kpi-card', udiOpen > 0 ? 'is-warn' : 'is-ok')}
+            data-testid="admin__cards__udi_pending"
+          >
             <div className="admin-kpi-card__label">UDI 待映射</div>
             <div className="admin-kpi-card__value">{fmtInt(udiOpen)}</div>
             <div className="admin-kpi-card__meta">
@@ -113,7 +121,11 @@ async function AdminHeroCard() {
               <span className="muted">DI 到注册证号绑定</span>
             </div>
           </Link>
-          <Link href="/admin/queue/conflicts" className={cn('admin-kpi-card', conflictsOpen > 0 ? 'is-risk' : 'is-ok')}>
+          <Link
+            href="/admin/queue/conflicts"
+            className={cn('admin-kpi-card', conflictsOpen > 0 ? 'is-risk' : 'is-ok')}
+            data-testid="admin__cards__conflicts"
+          >
             <div className="admin-kpi-card__label">冲突待裁决</div>
             <div className="admin-kpi-card__value">{fmtInt(conflictsOpen)}</div>
             <div className="admin-kpi-card__meta">
@@ -127,6 +139,7 @@ async function AdminHeroCard() {
               'admin-kpi-card',
               Number(lriDist.HIGH || 0) + Number(lriDist.CRITICAL || 0) > 0 ? 'is-warn' : 'is-ok'
             )}
+            data-testid="admin__cards__high_risk"
           >
             <div className="admin-kpi-card__label">LRI 高风险</div>
             <div className="admin-kpi-card__value">{fmtInt(Number(lriDist.HIGH || 0) + Number(lriDist.CRITICAL || 0))}</div>
@@ -220,7 +233,7 @@ async function AdminHealthCard() {
               </div>
             )}
           </div>
-          <div>
+          <div data-testid="admin__reason_top__panel">
             <div className="muted" style={{ marginBottom: 6 }}>待处理原因码 TOP</div>
             {!pendingDocStats ? (
               <div className="muted">待处理统计加载失败或暂无数据</div>

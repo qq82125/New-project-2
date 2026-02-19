@@ -63,21 +63,23 @@ export default function HighRiskQueueClient({ initialItems }: { initialItems: It
         <CardTitle>LRI 高风险</CardTitle>
       </CardHeader>
       <CardContent className="grid">
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__filters__panel">
           <Select value={level} onChange={(e) => setLevel(e.target.value)}>
             <option value="HIGH,CRITICAL">高风险</option>
             <option value="MID">中风险</option>
             <option value="LOW">低风险</option>
             <option value="LOW,MID,HIGH,CRITICAL">全部</option>
           </Select>
-          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading}>
+          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading} data-testid="admin_queue__list__load_more">
             {loading ? '加载中…' : '加载更多'}
           </Button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__bulk__panel">
           <Button type="button" onClick={batchIgnore}>批量忽略</Button>
           <Badge variant="muted">共 {filtered.length} 条</Badge>
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ overflowX: 'auto' }} data-testid="admin_queue__list__panel">
           <table className="table">
             <thead>
               <tr>

@@ -69,16 +69,18 @@ export default function ConflictsQueueClient({ initialItems }: { initialItems: I
         <CardTitle>冲突待裁决</CardTitle>
       </CardHeader>
       <CardContent className="grid">
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__filters__panel">
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="按字段名 / 注册证号筛选" />
-          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading}>
+          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading} data-testid="admin_queue__list__load_more">
             {loading ? '加载中…' : '加载更多'}
           </Button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__bulk__panel">
           <Button type="button" onClick={batchMarkProcessed}>批量标记已处理</Button>
           <Badge variant="muted">共 {filtered.length} 条</Badge>
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ overflowX: 'auto' }} data-testid="admin_queue__list__panel">
           <table className="table">
             <thead>
               <tr>

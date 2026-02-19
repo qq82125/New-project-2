@@ -23,7 +23,7 @@ export default async function AdminQueueUdiPendingPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>UDI 待映射</CardTitle>
+          <CardTitle data-testid="admin_queue__header__title">UDI 待映射</CardTitle>
           <CardDescription>队列页：支持筛选、分页加载与批量标记已处理。</CardDescription>
         </CardHeader>
         <CardContent />

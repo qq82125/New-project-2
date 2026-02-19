@@ -16,7 +16,7 @@ export default function UnifiedProGate() {
       <CardHeader>
         <CardTitle>升级到 Pro</CardTitle>
       </CardHeader>
-      <CardContent className="grid" style={{ gap: 10 }}>
+      <CardContent className="grid" style={{ gap: 10 }} data-testid="pro__cta__compare">
         <div className="muted">解锁导出与高级分析能力</div>
         <div className="grid" style={{ gap: 8 }}>
           {BENEFITS.map((item) => (
@@ -36,10 +36,10 @@ export default function UnifiedProGate() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Link className="ui-btn ui-btn--secondary ui-btn--sm" href={PRO_SALES_HREF}>
+          <Link className="ui-btn ui-btn--secondary ui-btn--sm" href={PRO_SALES_HREF} data-testid="pro__cta__contact">
             联系开通
           </Link>
-          <Link className="ui-btn ui-btn--default ui-btn--sm" href={PRO_TRIAL_HREF}>
+          <Link className="ui-btn ui-btn--default ui-btn--sm" href={PRO_TRIAL_HREF} data-testid="pro__cta__trial">
             申请试用
           </Link>
         </div>

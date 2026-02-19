@@ -127,7 +127,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>搜索</CardTitle>
+          <CardTitle data-testid="search__header__title">搜索</CardTitle>
           <CardDescription>按关键词、企业、注册证号等筛选产品。</CardDescription>
         </CardHeader>
         <CardContent>
@@ -170,13 +170,13 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           {res.data.items.length === 0 ? (
             <EmptyState text="暂无匹配结果" />
           ) : (
-            <div className="list">
-              {visibleItems.map((item) => {
+            <div className="list" data-testid="search__results__list">
+              {visibleItems.map((item, idx) => {
                 const regNo = item.product.reg_no || '';
                 const signal = regNo ? signalMap.get(regNo) : undefined;
                 const mainHref = regNo ? `/registrations/${encodeURIComponent(regNo)}` : `/products/${item.product.id}`;
                 return (
-                <Card key={item.product.id}>
+                <Card key={item.product.id} data-testid={idx === 0 ? 'search__results__row_1' : undefined}>
                   <CardHeader>
                     <CardTitle>
                       <Link href={mainHref}>{item.product.name}</Link>

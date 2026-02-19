@@ -10,7 +10,7 @@ export default function SearchExportActions({ canExport, exportHref }: { canExpo
 
   if (canExport) {
     return (
-      <a className="ui-btn" href={exportHref}>
+      <a className="ui-btn" href={exportHref} data-testid="search__export__button">
         导出 CSV
       </a>
     );
@@ -21,6 +21,7 @@ export default function SearchExportActions({ canExport, exportHref }: { canExpo
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <Button
           type="button"
+          data-testid="search__export__button"
           onClick={() => {
             setShowGate(true);
             toast({ title: '升级到 Pro', description: '解锁导出与高级分析能力' });
@@ -29,7 +30,11 @@ export default function SearchExportActions({ canExport, exportHref }: { canExpo
           导出 CSV
         </Button>
       </div>
-      {showGate ? <UnifiedProGate /> : null}
+      {showGate ? (
+        <div data-testid="progate__cta__panel">
+          <UnifiedProGate />
+        </div>
+      ) : null}
     </div>
   );
 }

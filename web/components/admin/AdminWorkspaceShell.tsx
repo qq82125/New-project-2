@@ -28,7 +28,7 @@ export default function AdminWorkspaceShell({
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>{ADMIN_TEXT.workbenchTitle}</CardTitle>
+          <CardTitle data-testid="admin__header__title">{ADMIN_TEXT.workbenchTitle}</CardTitle>
           <CardDescription>{ADMIN_TEXT.breadcrumbFallback} / {leaf}</CardDescription>
         </CardHeader>
         <CardContent style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -47,7 +47,7 @@ export default function AdminWorkspaceShell({
           <CardHeader>
             <CardTitle>{ADMIN_TEXT.menuTitle}</CardTitle>
           </CardHeader>
-          <CardContent className="admin-nav">
+          <CardContent className="admin-nav" data-testid="admin__nav__panel">
             {navGroups.map((group) => (
               <div key={group.title} className="admin-nav__group">
                 <div className="admin-nav__group-title">{group.title}</div>
