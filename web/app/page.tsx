@@ -232,13 +232,13 @@ export default async function DashboardPage({
       : Promise.resolve({ data: null, error: null }),
     isPro ? withTimeout(apiGet<RadarData>('/api/dashboard/radar'), 1200, { data: null, error: '请求超时', status: null }) : Promise.resolve({ data: null, error: null }),
     withTimeout(
-      apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'approved_date', sort_order: 'desc' })}`),
+      apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 8, sort_by: 'approved_date', sort_order: 'desc' })}`),
       1200,
       { data: null, error: '请求超时', status: null },
     ),
     isPro
       ? withTimeout(
-          apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 20, sort_by: 'expiry_date', sort_order: 'asc' })}`),
+          apiGet<SearchData>(`/api/search${qs({ page: 1, page_size: 8, sort_by: 'expiry_date', sort_order: 'asc' })}`),
           1200,
           { data: null, error: '请求超时', status: null },
         )

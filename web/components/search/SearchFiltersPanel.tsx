@@ -32,7 +32,7 @@ function normalize(input: Partial<SearchFormState>): SearchFormState {
     company: String(input.company || ''),
     reg_no: String(input.reg_no || ''),
     status: String(input.status || ''),
-    sort_by: String(input.sort_by || 'updated_at'),
+    sort_by: String(input.sort_by || 'approved_date'),
     sort_order: String(input.sort_order || 'desc'),
     include_pending: Boolean(input.include_pending),
   };
@@ -83,7 +83,7 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
     if (next.company) qs.set('company', next.company);
     if (next.reg_no) qs.set('reg_no', next.reg_no);
     if (next.status) qs.set('status', next.status);
-    if (next.sort_by && next.sort_by !== 'updated_at') qs.set('sort_by', next.sort_by);
+    if (next.sort_by && next.sort_by !== 'approved_date') qs.set('sort_by', next.sort_by);
     if (next.sort_order && next.sort_order !== 'desc') qs.set('sort_order', next.sort_order);
     if (next.include_pending) qs.set('include_pending', '1');
     router.push(`${pathname}?${qs.toString()}`);

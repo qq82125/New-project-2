@@ -86,8 +86,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
   const params = await searchParams;
   const page = Number(params.page || '1');
-  const pageSize = Number(params.page_size || '20');
-  const sortBy = params.sort_by || 'updated_at';
+  const pageSize = Number(params.page_size || '10');
+  const sortBy = params.sort_by || 'approved_date';
   const sortOrder = params.sort_order || 'desc';
   const includePending =
     params.include_pending === '1' ||
@@ -111,7 +111,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const res = await apiGet<SearchData>(`/api/search${query}`);
   const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: regNo })}`;
   const visibleItems = (res.data?.items || []).slice(0, isPro ? undefined : 10);
-  const registrationNos = visibleItems.map((x) => x.product.reg_no || '').filter(Boolean).slice(0, 8) as string[];
+  const hasFilter = Boolean((params.q || '').trim() || (params.company || '').trim() || (regNo || '').trim() || (params.status || '').trim());
+  const registrationNos = hasFilter ? (visibleItems.map((x) => x.product.reg_no || '').filter(Boolean).slice(0, 8) as string[]) : [];
   let signalMap = new Map<string, SearchSignalItem>();
   let signalError: string | null = null;
   try {
