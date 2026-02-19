@@ -49,17 +49,17 @@ type SearchData = {
   }>;
 };
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('请求超时')), ms);
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
     promise
       .then((value) => {
         clearTimeout(timer);
         resolve(value);
       })
-      .catch((err) => {
+      .catch(() => {
         clearTimeout(timer);
-        reject(err);
+        resolve(fallback);
       });
   });
 }
@@ -108,7 +108,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     include_unverified: includePending ? 'true' : undefined,
   });
 
-  const res = await apiGet<SearchData>(`/api/search${query}`);
+  const res = await withTimeout(
+    apiGet<SearchData>(`/api/search${query}`),
+    10000,
+    { data: null, error: '请求超时', status: null } as { data: SearchData | null; error: string | null; status?: number | null },
+  );
   const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: regNo })}`;
   const visibleItems = (res.data?.items || []).slice(0, isPro ? undefined : 10);
   const hasFilter = Boolean((params.q || '').trim() || (params.company || '').trim() || (regNo || '').trim() || (params.status || '').trim());
@@ -116,7 +120,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   let signalMap = new Map<string, SearchSignalItem>();
   let signalError: string | null = null;
   try {
-    const signalRes = await withTimeout(getSearchSignalsBatch(registrationNos), 900);
+    const signalRes = await withTimeout(getSearchSignalsBatch(registrationNos), 900, { items: [] });
     signalMap = new Map(signalRes.items.map((x) => [x.registration_no, x]));
   } catch (err) {
     signalError = err instanceof Error ? err.message : '未知错误';

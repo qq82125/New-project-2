@@ -223,7 +223,20 @@ export default async function DashboardPage({
     isPro = false;
   }
 
-  const [statusRes, summaryRes, trendRes, rankingsRes, radarRes, newProductRes, expiringRes, lriTopRes, lriMapRes] = await Promise.all([
+  const [
+    statusRes,
+    summaryRes,
+    trendRes,
+    rankingsRes,
+    radarRes,
+    newProductRes,
+    expiringRes,
+    lriTopRes,
+    lriMapRes,
+    topRiskRes,
+    topCompetitiveRes,
+    topGrowthRes,
+  ] = await Promise.all([
     withTimeout(apiGet<StatusData>('/api/status'), 1200, { data: null, error: '请求超时', status: null }),
     withTimeout(apiGet<SummaryData>('/api/dashboard/summary?days=30'), 1200, { data: null, error: '请求超时', status: null }),
     withTimeout(apiGet<TrendData>('/api/dashboard/trend?days=30'), 1200, { data: null, error: '请求超时', status: null }),
@@ -253,11 +266,9 @@ export default async function DashboardPage({
       1200,
       { data: null, error: '请求超时', status: null },
     ),
-  ]);
-  const [topRiskRes, topCompetitiveRes, topGrowthRes] = await Promise.allSettled([
-    withTimeout(getTopRiskRegistrations(), 1200, { items: [] }),
-    withTimeout(getTopCompetitiveTracks(), 1200, { items: [] }),
-    withTimeout(getTopGrowthCompanies(), 1200, { items: [] }),
+    Promise.resolve(withTimeout(getTopRiskRegistrations(), 1200, { items: [] })).then((value) => ({ status: 'fulfilled', value } as const)).catch((reason) => ({ status: 'rejected', reason } as const)),
+    Promise.resolve(withTimeout(getTopCompetitiveTracks(), 1200, { items: [] })).then((value) => ({ status: 'fulfilled', value } as const)).catch((reason) => ({ status: 'rejected', reason } as const)),
+    Promise.resolve(withTimeout(getTopGrowthCompanies(), 1200, { items: [] })).then((value) => ({ status: 'fulfilled', value } as const)).catch((reason) => ({ status: 'rejected', reason } as const)),
   ]);
   const trendWindow = trendRes.data?.items.slice(-10) ?? [];
   const maxTrendValue = trendWindow.reduce((max, item) => Math.max(max, item.new_products), 0);
