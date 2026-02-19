@@ -4,14 +4,12 @@ import Link from 'next/link';
 import { EmptyState, ErrorState } from '../../components/States';
 import { apiGet, qs } from '../../lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Input } from '../../components/ui/input';
-import { Select } from '../../components/ui/select';
-import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 
 import { apiBase } from '../../lib/api-server';
 import { getMe } from '../../lib/getMe';
 import SearchExportActions from '../../components/search/SearchExportActions';
+import SearchFiltersPanel from '../../components/search/SearchFiltersPanel';
 import { SORT_BY_ZH, SORT_ORDER_ZH, STATUS_ZH, labelFrom } from '../../constants/display';
 import PaginationControls from '../../components/PaginationControls';
 import { getSearchSignalsBatch, type SearchSignalItem } from '../../lib/api/signals';
@@ -26,6 +24,7 @@ type SearchParams = {
   page_size?: string;
   sort_by?: 'updated_at' | 'approved_date' | 'expiry_date' | 'name';
   sort_order?: 'asc' | 'desc';
+  include_pending?: string;
   include_unverified?: string;
 };
 
@@ -75,7 +74,11 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const pageSize = Number(params.page_size || '20');
   const sortBy = params.sort_by || 'updated_at';
   const sortOrder = params.sort_order || 'desc';
-  const includeUnverified = params.include_unverified === '1' || params.include_unverified === 'true';
+  const includePending =
+    params.include_pending === '1' ||
+    params.include_pending === 'true' ||
+    params.include_unverified === '1' ||
+    params.include_unverified === 'true';
   const regNo = params.reg_no || params.registration_no;
 
   const query = qs({
@@ -87,7 +90,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     page_size: pageSize,
     sort_by: sortBy,
     sort_order: sortOrder,
-    include_unverified: includeUnverified ? 'true' : undefined,
+    include_unverified: includePending ? 'true' : undefined,
   });
 
   const res = await apiGet<SearchData>(`/api/search${query}`);
@@ -115,37 +118,17 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
             <SearchExportActions canExport={canExport} exportHref={exportHref} />
           </div>
-          <form className="controls" method="GET">
-            <Input name="q" defaultValue={params.q} placeholder="关键词（产品名/注册证号/UDI-DI）" />
-            <Input name="company" defaultValue={params.company} placeholder="企业名称" />
-            <Input name="reg_no" defaultValue={regNo} placeholder="注册证号" />
-            <Select name="status" defaultValue={params.status || ''}>
-              <option value="">全部状态</option>
-              <option value="active">有效</option>
-              <option value="cancelled">已注销</option>
-              <option value="expired">已过期</option>
-            </Select>
-            <Select name="sort_by" defaultValue={sortBy}>
-              <option value="updated_at">最近更新</option>
-              <option value="approved_date">批准日期</option>
-              <option value="expiry_date">失效日期</option>
-              <option value="name">产品名称</option>
-            </Select>
-            <Select name="sort_order" defaultValue={sortOrder}>
-              <option value="desc">降序</option>
-              <option value="asc">升序</option>
-            </Select>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input
-                type="checkbox"
-                name="include_unverified"
-                value="true"
-                defaultChecked={includeUnverified}
-              />
-              <span>包含待核验（UDI）</span>
-            </label>
-            <Button type="submit">搜索</Button>
-          </form>
+          <SearchFiltersPanel
+            initial={{
+              q: params.q || '',
+              company: params.company || '',
+              reg_no: regNo || '',
+              status: params.status || '',
+              sort_by: sortBy,
+              sort_order: sortOrder,
+              include_pending: includePending,
+            }}
+          />
         </CardContent>
       </Card>
 
@@ -182,30 +165,20 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                     <CardTitle>
                       <Link href={mainHref}>{item.product.name}</Link>
                     </CardTitle>
-                    <CardDescription>
-                      <span className="muted">UDI-DI:</span> {item.product.udi_di || '-'}
-                    </CardDescription>
+                    <CardDescription>检索结果</CardDescription>
                   </CardHeader>
                   <CardContent className="grid">
-                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <Badge variant="muted">注册证号: {item.product.reg_no || '-'}</Badge>
-                    <Badge
-                        variant={
-                          item.product.status === 'active'
-                            ? 'success'
-                            : item.product.status === 'expired'
-                              ? 'warning'
-                              : item.product.status === 'cancelled'
-                                ? 'danger'
-                              : 'muted'
-                        }
-                      >
-                        状态: {labelFrom(STATUS_ZH, item.product.status)}
-                      </Badge>
-                      <Badge variant="muted">失效日期: {item.product.expiry_date || '-'}</Badge>
-                      {item.product.is_stub && item.product.source_hint === 'UDI' && item.product.verified_by_nmpa === false ? (
-                        <Badge variant="warning">UDI来源｜待NMPA核验</Badge>
-                      ) : null}
+                    <div className="controls">
+                      <div><span className="muted">产品名：</span>{item.product.name || '-'}</div>
+                      <div><span className="muted">企业名：</span>{item.product.company?.name || '-'}</div>
+                      <div><span className="muted">注册证号：</span>{item.product.reg_no || '-'}</div>
+                      <div><span className="muted">状态：</span>{labelFrom(STATUS_ZH, item.product.status) || '-'}</div>
+                      <div><span className="muted">失效日期：</span>{item.product.expiry_date || '-'}</div>
+                      <div><span className="muted">UDI-DI：</span>{item.product.udi_di || '-'}</div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {item.product.is_stub === true ? <Badge variant="warning">stub</Badge> : null}
+                      {item.product.verified_by_nmpa === true ? <Badge variant="success">NMPA verified</Badge> : null}
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                       {!regNo ? (
@@ -259,7 +232,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                   status: params.status,
                   sort_by: sortBy,
                   sort_order: sortOrder,
-                  include_unverified: includeUnverified ? 'true' : undefined,
+                  include_pending: includePending ? '1' : undefined,
                 }}
                 page={page}
                 pageSize={pageSize}
