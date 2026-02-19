@@ -29,7 +29,7 @@ export default function SearchExportActions({ canExport, exportHref }: { canExpo
           导出 CSV
         </Button>
       </div>
-      {showGate ? <UnifiedProGate /> : null}
+      {showGate ? <UnifiedProGate showProPageEntry /> : null}
     </div>
   );
 }

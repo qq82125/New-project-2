@@ -10,7 +10,7 @@ const BENEFITS = [
   { key: '风险信号', free: '摘要', pro: '完整证据链' },
 ];
 
-export default function UnifiedProGate() {
+export default function UnifiedProGate({ showProPageEntry = false }: { showProPageEntry?: boolean }) {
   return (
     <Card>
       <CardHeader>
@@ -36,6 +36,11 @@ export default function UnifiedProGate() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {showProPageEntry ? (
+            <Link className="ui-btn ui-btn--secondary ui-btn--sm" href="/pro">
+              查看 Pro 方案
+            </Link>
+          ) : null}
           <Link className="ui-btn ui-btn--secondary ui-btn--sm" href={PRO_SALES_HREF}>
             联系开通
           </Link>
