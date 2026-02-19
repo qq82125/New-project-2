@@ -78,36 +78,30 @@ export const ADMIN_UDI_LINK_STATUS_ZH: Record<string, string> = {
 
 export type PendingQueueMode = 'both' | 'document_only' | 'record_only';
 
-export function getAdminNavGroups(pendingQueueMode: PendingQueueMode): Array<{
+export function getAdminNavGroups(_pendingQueueMode: PendingQueueMode): Array<{
   title: string;
   items: Array<{ href: string; label: string; icon: string }>;
 }> {
-  const showLegacyPendingRecords = pendingQueueMode === 'both' || pendingQueueMode === 'record_only';
-
   return [
     {
-      title: '工作台',
+      title: '数据质量',
       items: [
-        { href: '/admin', label: '总览', icon: 'OV' },
-        ...(showLegacyPendingRecords ? [{ href: '/admin/pending', label: '待处理记录', icon: 'PD' }] : []),
-        { href: '/admin/pending-documents', label: '待处理文档', icon: 'DQ' },
-        { href: '/admin/conflicts', label: '冲突处理', icon: 'CF' },
-        { href: '/admin/lri', label: 'LRI 风险', icon: 'LR' },
+        { href: '/admin/queue/pending-docs', label: '待处理文档', icon: 'DQ' },
+        { href: '/admin/queue/udi-pending', label: 'UDI 待映射', icon: 'UD' },
+        { href: '/admin/queue/conflicts', label: '冲突待裁决', icon: 'CF' },
       ],
     },
     {
-      title: '数据治理',
+      title: '风险运营',
       items: [
-        { href: '/admin/sources', label: '数据源配置', icon: 'SR' },
-        { href: '/admin/udi-links', label: 'UDI 待映射', icon: 'UD' },
-        { href: '/admin/lri-config', label: 'LRI 模型配置', icon: 'LC' },
+        { href: '/admin/queue/high-risk', label: '高风险列表', icon: 'LR' },
       ],
     },
     {
-      title: '系统管理',
+      title: '系统',
       items: [
-        { href: '/admin/users', label: '用户与会员', icon: 'US' },
-        { href: '/admin/contact', label: '联系信息', icon: 'CT' },
+        { href: '/admin/sources', label: '来源健康', icon: 'SR' },
+        { href: '/admin/reasons', label: '抓取失败原因码', icon: 'RC' },
       ],
     },
   ];
@@ -116,6 +110,12 @@ export function getAdminNavGroups(pendingQueueMode: PendingQueueMode): Array<{
 export function getAdminBreadcrumb(pathname: string): string {
   const p = String(pathname || '/admin');
   if (p === '/admin') return '总览';
+  if (p.startsWith('/admin/queue/pending-docs')) return '待处理文档';
+  if (p.startsWith('/admin/queue/udi-pending')) return 'UDI 待映射';
+  if (p.startsWith('/admin/queue/conflicts')) return '冲突待裁决';
+  if (p.startsWith('/admin/queue/high-risk')) return '高风险列表';
+  if (p.startsWith('/admin/reasons')) return '抓取失败原因码';
+  if (p.startsWith('/admin/raw-documents')) return 'raw_document';
   if (p.startsWith('/admin/pending-documents')) return '待处理文档';
   if (p.startsWith('/admin/pending')) return '待处理记录';
   if (p.startsWith('/admin/conflicts')) return '冲突处理';

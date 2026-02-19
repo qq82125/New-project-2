@@ -97,7 +97,7 @@ async function AdminHeroCard() {
       </CardHeader>
       <CardContent className="admin-hero__content">
         <div className="admin-hero__kpis">
-          <Link href="/admin/pending-documents" className={cn('admin-kpi-card', pendingDocs > 0 ? 'is-warn' : 'is-ok')}>
+          <Link href="/admin/queue/pending-docs" className={cn('admin-kpi-card', pendingDocs > 0 ? 'is-warn' : 'is-ok')}>
             <div className="admin-kpi-card__label">待处理文档</div>
             <div className="admin-kpi-card__value">{fmtInt(pendingDocs)}</div>
             <div className="admin-kpi-card__meta">
@@ -105,7 +105,7 @@ async function AdminHeroCard() {
               <span className="muted">缺 registration_no 的 raw_documents</span>
             </div>
           </Link>
-          <Link href="/admin/udi-links" className={cn('admin-kpi-card', udiOpen > 0 ? 'is-warn' : 'is-ok')}>
+          <Link href="/admin/queue/udi-pending" className={cn('admin-kpi-card', udiOpen > 0 ? 'is-warn' : 'is-ok')}>
             <div className="admin-kpi-card__label">UDI 待映射</div>
             <div className="admin-kpi-card__value">{fmtInt(udiOpen)}</div>
             <div className="admin-kpi-card__meta">
@@ -113,7 +113,7 @@ async function AdminHeroCard() {
               <span className="muted">DI 到注册证号绑定</span>
             </div>
           </Link>
-          <Link href="/admin/conflicts" className={cn('admin-kpi-card', conflictsOpen > 0 ? 'is-risk' : 'is-ok')}>
+          <Link href="/admin/queue/conflicts" className={cn('admin-kpi-card', conflictsOpen > 0 ? 'is-risk' : 'is-ok')}>
             <div className="admin-kpi-card__label">冲突待裁决</div>
             <div className="admin-kpi-card__value">{fmtInt(conflictsOpen)}</div>
             <div className="admin-kpi-card__meta">
@@ -122,7 +122,7 @@ async function AdminHeroCard() {
             </div>
           </Link>
           <Link
-            href="/admin/lri"
+            href="/admin/queue/high-risk"
             className={cn(
               'admin-kpi-card',
               Number(lriDist.HIGH || 0) + Number(lriDist.CRITICAL || 0) > 0 ? 'is-warn' : 'is-ok'
@@ -230,7 +230,7 @@ async function AdminHealthCard() {
                   <div key={`rsn-${x.reason_code}`} className="admin-mini-row">
                     <span className="admin-mini-row__k">{x.reason_code || '（空）'}</span>
                     <span className="admin-mini-row__v">待处理 {x.pending}</span>
-                    <span className="admin-mini-row__a muted">定位解析缺陷</span>
+                    <Link className="admin-mini-row__a" href={`/admin/reasons/${encodeURIComponent(x.reason_code || 'UNKNOWN')}`}>定位解析缺陷</Link>
                   </div>
                 ))}
               </div>
@@ -280,7 +280,7 @@ export default function AdminHomePage() {
                 <div className="admin-flow__title">处理待处理文档</div>
                 <div className="muted">补齐 registration_no，并重放入库（先 registrations）</div>
               </div>
-              <Link className="ui-btn ui-btn--secondary" href="/admin/pending-documents">进入</Link>
+              <Link className="ui-btn ui-btn--secondary" href="/admin/queue/pending-docs">进入</Link>
             </div>
             <div className="admin-flow__item">
               <div className="admin-flow__idx">2</div>
@@ -288,7 +288,7 @@ export default function AdminHomePage() {
                 <div className="admin-flow__title">清理 UDI 待映射</div>
                 <div className="muted">把 DI 挂到注册证号下，提升规格覆盖</div>
               </div>
-              <Link className="ui-btn ui-btn--secondary" href="/admin/udi-links">进入</Link>
+              <Link className="ui-btn ui-btn--secondary" href="/admin/queue/udi-pending">进入</Link>
             </div>
             <div className="admin-flow__item">
               <div className="admin-flow__idx">3</div>
@@ -296,7 +296,7 @@ export default function AdminHomePage() {
                 <div className="admin-flow__title">裁决冲突队列</div>
                 <div className="muted">人工裁决需填写原因，确保审计可追溯</div>
               </div>
-              <Link className="ui-btn ui-btn--secondary" href="/admin/conflicts">进入</Link>
+              <Link className="ui-btn ui-btn--secondary" href="/admin/queue/conflicts">进入</Link>
             </div>
           </CardContent>
         </Card>
