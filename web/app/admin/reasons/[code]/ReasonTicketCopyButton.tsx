@@ -7,7 +7,6 @@ export default function ReasonTicketCopyButton({ text }: { text: string }) {
   return (
     <Button
       type="button"
-      data-testid="admin_reason__sample__copy_ticket"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);

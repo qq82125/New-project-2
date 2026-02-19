@@ -86,18 +86,16 @@ export default function PendingDocsQueueClient({ initialItems }: { initialItems:
         <CardTitle>待处理文档</CardTitle>
       </CardHeader>
       <CardContent className="grid">
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__filters__panel">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="按 reason_code / raw_document_id 筛选" />
-          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading} data-testid="admin_queue__list__load_more">
+          <Button type="button" variant="secondary" onClick={() => void loadMore()} disabled={loading}>
             {loading ? '加载中…' : '加载更多'}
           </Button>
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }} data-testid="admin_queue__bulk__panel">
           <Button type="button" onClick={() => void batchIgnore()} disabled={loading}>批量忽略</Button>
           <Badge variant="muted">共 {filtered.length} 条</Badge>
         </div>
 
-        <div style={{ overflowX: 'auto' }} data-testid="admin_queue__list__panel">
+        <div style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
               <tr>

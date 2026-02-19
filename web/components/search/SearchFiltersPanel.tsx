@@ -131,14 +131,9 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
   const riskHint = useMemo(() => '后端未接入', []);
 
   return (
-    <div className="grid" style={{ gap: 12 }} data-testid="search__filters__panel">
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }} data-testid="search__saved_views__panel">
-        <Select
-          value={selectedViewId}
-          onChange={(e) => applySavedView(e.target.value)}
-          style={{ minWidth: 220 }}
-          data-testid="search__saved_views__select"
-        >
+    <div className="grid" style={{ gap: 12 }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Select value={selectedViewId} onChange={(e) => applySavedView(e.target.value)} style={{ minWidth: 220 }}>
           <option value="">选择已保存视图</option>
           {savedViews.map((view) => (
             <option key={view.id} value={view.id}>
@@ -146,7 +141,7 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
             </option>
           ))}
         </Select>
-        <Button type="button" onClick={saveView} data-testid="search__saved_views__save">保存视图</Button>
+        <Button type="button" onClick={saveView}>保存视图</Button>
         <Button type="button" variant="secondary" onClick={deleteSavedView}>删除视图</Button>
       </div>
 
@@ -154,7 +149,7 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
         <div className="card" style={{ display: 'grid', gap: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
             <strong>基础筛选</strong>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setOpenBasic((v) => !v)} data-testid="search__filters__basic_toggle">
+            <Button type="button" size="sm" variant="ghost" onClick={() => setOpenBasic((v) => !v)}>
               {openBasic ? '折叠' : '展开'}
             </Button>
           </div>
@@ -176,7 +171,7 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
         <div className="card" style={{ display: 'grid', gap: 10 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
             <strong>口径筛选</strong>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setOpenScope((v) => !v)} data-testid="search__filters__scope_toggle">
+            <Button type="button" size="sm" variant="ghost" onClick={() => setOpenScope((v) => !v)}>
               {openScope ? '折叠' : '展开'}
             </Button>
           </div>
@@ -195,7 +190,6 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFormSta
               <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <input
                   type="checkbox"
-                  data-testid="search__filters__include_pending"
                   checked={form.include_pending}
                   onChange={(e) => setForm((s) => ({ ...s, include_pending: e.target.checked }))}
                 />

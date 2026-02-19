@@ -23,7 +23,7 @@ export default async function AdminQueuePendingDocsPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle data-testid="admin_queue__header__title">待处理文档</CardTitle>
+          <CardTitle>待处理文档</CardTitle>
           <CardDescription>队列页：支持筛选、分页加载与批量忽略。</CardDescription>
         </CardHeader>
         <CardContent />

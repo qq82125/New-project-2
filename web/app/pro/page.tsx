@@ -6,7 +6,7 @@ export default function ProPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle data-testid="pro__header__title">升级到 Pro</CardTitle>
+          <CardTitle>升级方案</CardTitle>
           <CardDescription>Free 与 Pro 权益对比。</CardDescription>
         </CardHeader>
         <CardContent>

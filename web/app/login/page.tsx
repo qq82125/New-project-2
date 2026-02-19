@@ -51,10 +51,10 @@ export default function LoginPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle data-testid="login__header__title">登录</CardTitle>
+        <CardTitle>登录</CardTitle>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="grid" data-testid="login__header__form">
+        <form onSubmit={onSubmit} className="grid">
           <Input
           type="email"
           placeholder="邮箱（必填，例如 name@company.com）"
@@ -69,13 +69,13 @@ export default function LoginPage() {
           onChange={(e) => setPassword(e.target.value)}
           required
           />
-          <Button type="submit" disabled={submitting} data-testid="login__header__submit">
+          <Button type="submit" disabled={submitting}>
             {submitting ? '登录中...' : '登录'}
           </Button>
         </form>
         {error ? <p className="muted" style={{ marginTop: 10 }}>{error}</p> : null}
         <p className="muted" style={{ marginTop: 10 }}>
-          没有账号？<Link href="/register" data-testid="login__header__to_register">去注册</Link>
+          没有账号？<Link href="/register">去注册</Link>
         </p>
       </CardContent>
     </Card>

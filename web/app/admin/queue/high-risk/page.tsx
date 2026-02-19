@@ -20,7 +20,7 @@ export default async function AdminQueueHighRiskPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle data-testid="admin_queue__header__title">LRI 高风险</CardTitle>
+          <CardTitle>LRI 高风险</CardTitle>
           <CardDescription>队列页：支持筛选、分页加载与批量忽略。</CardDescription>
         </CardHeader>
         <CardContent />

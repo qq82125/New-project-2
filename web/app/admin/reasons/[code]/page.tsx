@@ -48,7 +48,7 @@ export default async function AdminReasonDetailPage({ params }: { params: Promis
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle data-testid="admin_reason__header__title">原因码详情</CardTitle>
+          <CardTitle>原因码详情</CardTitle>
           <CardDescription>reason_code: {reasonCode}</CardDescription>
         </CardHeader>
         <CardContent className="grid">
@@ -62,7 +62,7 @@ export default async function AdminReasonDetailPage({ params }: { params: Promis
           <CardTitle>样本（10 条）</CardTitle>
           <CardDescription>样本ID / 来源 / 时间 / 错误摘要</CardDescription>
         </CardHeader>
-        <CardContent data-testid="admin_reason__sample__list">
+        <CardContent>
           {samples.length === 0 ? (
             <div className="muted">暂无数据</div>
           ) : (

@@ -20,7 +20,7 @@ export default async function AdminQueueConflictsPage() {
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle data-testid="admin_queue__header__title">冲突待裁决</CardTitle>
+          <CardTitle>冲突待裁决</CardTitle>
           <CardDescription>队列页：支持筛选、分页加载与批量标记已处理。</CardDescription>
         </CardHeader>
         <CardContent />
