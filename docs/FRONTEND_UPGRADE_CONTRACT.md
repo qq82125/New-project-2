@@ -76,3 +76,7 @@
 - Pro 用户：导出 CSV 仍走原下载接口。
 - `/admin`：非管理员无权限（重定向或提示一致）；管理员可正常访问。
 - 每页具备 loading/empty/error 三态且错误可见。
+
+## 9. 当前交付状态
+- 以 `/Users/GY/Documents/New project 2/docs/UI_SNAPSHOT_MAP.md` 为唯一状态源。
+- 若 Snapshot Map 标注“待合并 PR#”，表示该能力已在对应分支完成但尚未并入 `main`。
