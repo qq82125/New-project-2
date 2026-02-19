@@ -1,15 +1,16 @@
 import Link from 'next/link';
 import SignalCard from '../../../components/signal/SignalCard';
-import VersionChainTimeline from '../../../components/timeline/VersionChainTimeline';
 import { EmptyState, ErrorState } from '../../../components/States';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
 import { Badge } from '../../../components/ui/badge';
 import { STATUS_ZH, labelFrom } from '../../../constants/display';
 import PackagingTree, { type PackingEdge } from '../../../components/udi/PackagingTree';
+import CopyTextButton from '../../../components/detail/CopyTextButton';
 import { getRegistration, getRegistrationSnapshot, getRegistrationTimeline } from '../../../lib/api/registrations';
 import { getRegistrationSignal } from '../../../lib/api/signals';
 import type { SignalResponse, TimelineEvent } from '../../../lib/api/types';
 import { ApiHttpError } from '../../../lib/api/client';
+import { toChangeRows, toEvidenceRows } from '../../../lib/detail';
 
 function packingsFromPackagingJson(v: any): any[] {
   if (!v) return [];
@@ -37,29 +38,47 @@ function normalizeSignal(signal: SignalResponse): SignalResponse {
   };
 }
 
-function renderSnapshotKeyFields(snapshot: unknown) {
-  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+function viewText(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '-';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
 
-  const data = snapshot as Record<string, unknown>;
-  const keys: Array<{ key: string; label: string }> = [
-    { key: 'registration_no', label: '注册证号' },
-    { key: 'company', label: '公司' },
-    { key: 'track', label: '赛道' },
-    { key: 'status', label: '状态' },
-    { key: 'expiry_date', label: '有效期至' },
-  ];
-
-  const items = keys.filter((k) => data[k.key] !== undefined && data[k.key] !== null && data[k.key] !== '');
-  if (items.length === 0) return null;
-
+function FieldRow({ label, value }: { label: string; value: unknown }) {
+  const text = viewText(value);
+  const isLong = text.length > 120;
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-      {items.map((item) => (
-        <Badge key={item.key} variant="muted">
-          {item.label}: {String(data[item.key])}
-        </Badge>
-      ))}
+    <div className="columns-2" style={{ gap: 8 }}>
+      <div className="muted">{label}</div>
+      <div>
+        {isLong ? (
+          <details>
+            <summary>show more</summary>
+            <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{text}</div>
+          </details>
+        ) : (
+          <span>{text}</span>
+        )}
+      </div>
     </div>
+  );
+}
+
+function FieldGroup({ title, rows }: { title: string; rows: Array<{ label: string; value: unknown }> }) {
+  return (
+    <details className="card" open>
+      <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{title}</summary>
+      <div className="grid" style={{ marginTop: 10 }}>
+        {rows.map((row) => (
+          <FieldRow key={row.label} label={row.label} value={row.value} />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -92,6 +111,10 @@ export default async function RegistrationDetailPage({
   const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null;
   const variants = registration?.variants || [];
 
+  const latestChangeDate = timeline.length > 0 ? String(timeline[0].observed_at || '-') : '-';
+  const evidenceRows = toEvidenceRows(timeline as TimelineEvent[]);
+  const changeRows = toChangeRows(timeline as TimelineEvent[]).slice(0, 5);
+
   const requiredFactorOrder = ['days_to_expiry', 'has_renewal_history', 'competition_density'];
   const orderedSignal = signal
     ? {
@@ -110,25 +133,140 @@ export default async function RegistrationDetailPage({
     <div className="grid">
       <Card>
         <CardHeader>
-          <CardTitle>注册证摘要</CardTitle>
-          <CardDescription>注册证基础信息与状态摘要。</CardDescription>
+          <CardTitle>产品详情</CardTitle>
+          <CardDescription>概览区</CardDescription>
         </CardHeader>
         <CardContent className="grid">
           {registrationResult.status === 'rejected' && !registrationNotFound ? (
-            <ErrorState text={`注册证加载失败：${formatError(registrationResult.reason)}`} />
+            <ErrorState text={`加载失败，请重试（${formatError(registrationResult.reason)}）`} />
           ) : null}
           {!registration ? (
-            <EmptyState text="注册证不存在或暂无摘要数据" />
+            <EmptyState text="暂无数据" />
           ) : (
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <Badge variant="muted">注册证号: {registration.registration_no}</Badge>
-              <Badge variant="muted">公司: {registration.company || '-'}</Badge>
-              <Badge variant="muted">赛道: {registration.track || '-'}</Badge>
-              <Badge variant="muted">状态: {labelFrom(STATUS_ZH, registration.status || '') || registration.status || '-'}</Badge>
-              <Badge variant="muted">有效期至: {registration.expiry_date || '-'}</Badge>
-              <Badge variant="muted">境内: {registration.is_domestic === undefined || registration.is_domestic === null ? '-' : registration.is_domestic ? '是' : '否'}</Badge>
-              <Badge variant="muted">DI 数量: {registration.di_count ?? variants.length}</Badge>
-            </div>
+            <>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Badge variant="muted">注册证名称: {registration.track || registration.registration_no}</Badge>
+                <Badge variant="muted">企业名: {registration.company || '-'}</Badge>
+                <Badge variant="muted">状态: {labelFrom(STATUS_ZH, registration.status || '') || registration.status || '-'}</Badge>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Badge variant="muted">注册证号: {registration.registration_no}</Badge>
+                <CopyTextButton value={registration.registration_no} />
+              </div>
+              <div className="columns-3">
+                <div>
+                  <div className="muted">批准日期</div>
+                  <div>{registration.approval_date || '-'}</div>
+                </div>
+                <div>
+                  <div className="muted">变更日期</div>
+                  <div>{latestChangeDate}</div>
+                </div>
+                <div>
+                  <div className="muted">失效日期</div>
+                  <div>{registration.expiry_date || '-'}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>结构化字段</CardTitle>
+          <CardDescription>字段分组折叠展示</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {!registration ? (
+            <EmptyState text="暂无数据" />
+          ) : (
+            <>
+              <FieldGroup
+                title="基本信息"
+                rows={[
+                  { label: '注册证号', value: registration.registration_no },
+                  { label: '企业名', value: registration.company },
+                  { label: '状态', value: labelFrom(STATUS_ZH, registration.status || '') || registration.status },
+                  { label: '备案号', value: registration.filing_no },
+                ]}
+              />
+              <FieldGroup
+                title="适用范围"
+                rows={[
+                  { label: '赛道', value: registration.track },
+                  { label: '境内', value: registration.is_domestic == null ? '-' : registration.is_domestic ? '是' : '否' },
+                  { label: 'DI数量', value: registration.di_count ?? variants.length },
+                ]}
+              />
+              <FieldGroup
+                title="结构组成"
+                rows={[
+                  { label: 'DI列表', value: variants.length ? variants.map((x) => x.di).join(' / ') : '-' },
+                  { label: '首个型号/货号', value: variants[0]?.model_spec || '-' },
+                  { label: '首个注册人', value: variants[0]?.manufacturer || '-' },
+                ]}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>证据与变更</CardTitle>
+          <CardDescription>可解释证据链与最近字段变更</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {timelineResult.status === 'rejected' && !timelineNotFound ? (
+            <ErrorState text={`加载失败，请重试（${formatError(timelineResult.reason)}）`} />
+          ) : (
+            <>
+              <div className="card">
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>证据</div>
+                {evidenceRows.length === 0 ? (
+                  <EmptyState text="暂无可追溯证据（优先补采 raw_documents）" />
+                ) : (
+                  <div className="grid">
+                    {evidenceRows.slice(0, 8).map((item, idx) => (
+                      <div key={`${item.source}-${idx}`} className="card">
+                        <div><span className="muted">来源：</span>{item.source || '-'}</div>
+                        <div><span className="muted">观察时间：</span>{item.observed_at || '-'}</div>
+                        <div>
+                          <span className="muted">证据片段：</span>
+                          {item.excerpt.length > 120 ? (
+                            <details>
+                              <summary>show more</summary>
+                              <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{item.excerpt}</div>
+                            </details>
+                          ) : (
+                            <span>{item.excerpt || '-'}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="card">
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>变更</div>
+                {changeRows.length === 0 ? (
+                  <EmptyState text="暂无字段变更记录" />
+                ) : (
+                  <div className="grid">
+                    {changeRows.map((row, idx) => (
+                      <div key={`${row.field}-${idx}`} className="columns-2" style={{ gap: 8 }}>
+                        <div><span className="muted">字段：</span>{row.field}</div>
+                        <div><span className="muted">时间：</span>{row.observed_at}</div>
+                        <div><span className="muted">旧值：</span>{row.old_value}</div>
+                        <div><span className="muted">新值：</span>{row.new_value}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -140,22 +278,9 @@ export default async function RegistrationDetailPage({
         </CardHeader>
         <CardContent className="grid">
           {signalResult.status === 'rejected' && !signalNotFound ? (
-            <ErrorState text={`生命周期指数加载失败：${formatError(signalResult.reason)}`} />
+            <ErrorState text={`加载失败，请重试（${formatError(signalResult.reason)}）`} />
           ) : null}
-          {orderedSignal ? <SignalCard title="Registration Lifecycle" signal={orderedSignal} /> : <EmptyState text="暂无生命周期指数数据" />}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>版本链时间轴</CardTitle>
-          <CardDescription>按事件序列只读展示（create/change/renew/cancel）。</CardDescription>
-        </CardHeader>
-        <CardContent className="grid">
-          {timelineResult.status === 'rejected' && !timelineNotFound ? (
-            <ErrorState text={`版本链加载失败：${formatError(timelineResult.reason)}`} />
-          ) : null}
-          {timeline.length === 0 ? <EmptyState text="暂无版本链事件" /> : <VersionChainTimeline events={timeline as TimelineEvent[]} />}
+          {orderedSignal ? <SignalCard title="Registration Lifecycle" signal={orderedSignal} /> : <EmptyState text="暂无数据" />}
         </CardContent>
       </Card>
 
@@ -170,62 +295,32 @@ export default async function RegistrationDetailPage({
             <button type="submit">回放</button>
           </form>
 
-          {atRaw && !at ? <ErrorState text="快照月份格式应为 YYYY-MM" /> : null}
-          {at && snapshotResult.status === 'rejected' && !snapshotNotFound ? (
-            <ErrorState text={`快照加载失败：${formatError(snapshotResult.reason)}`} />
-          ) : null}
+          {atRaw && !at ? <ErrorState text="加载失败，请重试" /> : null}
+          {at && snapshotResult.status === 'rejected' && !snapshotNotFound ? <ErrorState text="加载失败，请重试" /> : null}
 
           {at && snapshotResult.status === 'fulfilled' ? (
             !snapshot || (typeof snapshot === 'object' && !Array.isArray(snapshot) && Object.keys(snapshot as Record<string, unknown>).length === 0) ? (
-              <EmptyState text="该月份无快照" />
+              <EmptyState text="暂无数据" />
             ) : (
               <div className="grid">
-                {renderSnapshotKeyFields(snapshot)}
                 <details>
-                  <summary>查看原始 JSON</summary>
+                  <summary>show more</summary>
                   <pre style={{ overflow: 'auto', marginTop: 8 }}>{JSON.stringify(snapshot, null, 2)}</pre>
                 </details>
               </div>
             )
           ) : null}
-          {at && snapshotNotFound ? <EmptyState text="该月份无快照" /> : null}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>注册证详情</CardTitle>
-          <CardDescription>以 registration_no 为唯一锚点，汇总规格（UDI-DI）与包装层级。</CardDescription>
-        </CardHeader>
-        <CardContent className="grid">
-          {!registration ? (
-            <EmptyState text="暂无注册证详情" />
-          ) : (
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <Badge variant="muted">注册证号: {registration.registration_no}</Badge>
-              <Badge variant="muted">备案号: {registration.filing_no || '-'}</Badge>
-              <Badge variant="muted">批准日期: {registration.approval_date || '-'}</Badge>
-              <Badge variant="muted">有效期至: {registration.expiry_date || '-'}</Badge>
-              <Badge variant="muted">状态: {labelFrom(STATUS_ZH, registration.status || '') || registration.status || '-'}</Badge>
-              {registration.is_stub && registration.source_hint === 'UDI' && registration.verified_by_nmpa === false ? (
-                <Badge variant="warning">UDI来源｜待核验</Badge>
-              ) : null}
-            </div>
-          )}
-          <div>
-            <Link href={`/search?reg_no=${encodeURIComponent(registration?.registration_no || registration_no)}`}>按该注册证号搜索产品</Link>
-          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>UDI 规格（DI）</CardTitle>
-          <CardDescription>一个注册证可对应多个 DI；包装层级来自 UDI packingList（可用于按包装维度对齐报价/集采目录）。</CardDescription>
+          <CardDescription>一个注册证可对应多个 DI。</CardDescription>
         </CardHeader>
         <CardContent className="grid">
           {variants.length === 0 ? (
-            <EmptyState text="暂无 DI 规格记录（可先运行 udi:variants 生成绑定）" />
+            <EmptyState text="暂无数据" />
           ) : (
             variants.slice(0, 200).map((it) => {
               const packings = packingsFromPackagingJson(it.packaging_json) as PackingEdge[];
@@ -235,24 +330,17 @@ export default async function RegistrationDetailPage({
                     <Badge variant="muted">DI: {it.di}</Badge>
                     {it.model_spec ? <Badge variant="muted">型号/货号: {it.model_spec}</Badge> : null}
                     {it.manufacturer ? <Badge variant="muted">注册人: {it.manufacturer}</Badge> : null}
-                    {it.evidence_raw_document_id ? (
-                      <Badge variant="muted">证据: {String(it.evidence_raw_document_id).slice(0, 8)}…</Badge>
-                    ) : null}
                   </div>
-                  {packings.length === 0 ? (
-                    <div style={{ marginTop: 8 }}>
-                      <PackagingTree packings={[]} />
-                    </div>
-                  ) : (
-                    <div style={{ marginTop: 10 }} className="grid">
-                      <div className="muted">包装层级</div>
-                      <PackagingTree packings={packings} />
-                    </div>
-                  )}
+                  <div style={{ marginTop: 10 }} className="grid">
+                    <PackagingTree packings={packings} />
+                  </div>
                 </div>
               );
             })
           )}
+          <div>
+            <Link href={`/search?reg_no=${encodeURIComponent(registration?.registration_no || registration_no)}`}>返回搜索结果</Link>
+          </div>
         </CardContent>
       </Card>
     </div>

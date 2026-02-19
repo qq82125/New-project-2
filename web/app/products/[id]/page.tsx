@@ -13,6 +13,10 @@ import { PRO_COPY, PRO_TRIAL_HREF } from '../../../constants/pro';
 import { IVD_CATEGORY_ZH, STATUS_ZH, labelFrom } from '../../../constants/display';
 import LriCard from '../../../components/lri/LriCard';
 import PackagingTree, { type PackingEdge } from '../../../components/udi/PackagingTree';
+import CopyTextButton from '../../../components/detail/CopyTextButton';
+import { getRegistrationTimeline } from '../../../lib/api/registrations';
+import { ApiHttpError } from '../../../lib/api/client';
+import { toChangeRows, toEvidenceRows } from '../../../lib/detail';
 
 type ProductData = {
   id: string;
@@ -124,6 +128,54 @@ function firstRegistrationNo(product: ProductData): string | null {
   return null;
 }
 
+function isNotFound(err: unknown): boolean {
+  return err instanceof ApiHttpError && err.status === 404;
+}
+
+function viewText(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '-';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function FieldRow({ label, value }: { label: string; value: unknown }) {
+  const text = viewText(value);
+  const isLong = text.length > 120;
+  return (
+    <div className="columns-2" style={{ gap: 8 }}>
+      <div className="muted">{label}</div>
+      <div>
+        {isLong ? (
+          <details>
+            <summary>show more</summary>
+            <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{text}</div>
+          </details>
+        ) : (
+          <span>{text}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FieldGroup({ title, rows }: { title: string; rows: Array<{ label: string; value: unknown }> }) {
+  return (
+    <details className="card" open>
+      <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{title}</summary>
+      <div className="grid" style={{ marginTop: 10 }}>
+        {rows.map((row) => (
+          <FieldRow key={row.label} label={row.label} value={row.value} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export default async function ProductDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const API_BASE = apiBase();
   const cookie = (await headers()).get('cookie') || '';
@@ -153,9 +205,154 @@ export default async function ProductDetailPage({ params }: { params: Promise<{ 
     anchorRegNo
       ? await apiGet<RegistrationData>(`/api/registrations/${encodeURIComponent(anchorRegNo)}`)
       : { data: null, error: null, status: null };
+  const timelineResult = anchorRegNo ? await Promise.resolve(getRegistrationTimeline(anchorRegNo).then((x) => ({ data: x, error: null })).catch((e) => ({ data: null, error: e }))) : { data: [], error: null };
+  const timelineNotFound = timelineResult.error ? isNotFound(timelineResult.error) : false;
+  const timelineEvents = timelineResult.data || [];
+  const evidenceRows = toEvidenceRows(timelineEvents as any);
+  const changeRows = toChangeRows(timelineEvents as any).slice(0, 5);
+  const latestChangeDate = timelineEvents.length > 0 ? String((timelineEvents[0] as any).observed_at || '-') : '-';
 
   return (
     <div className="grid">
+      <Card>
+        <CardHeader>
+          <CardTitle>产品详情</CardTitle>
+          <CardDescription>概览区</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Badge variant="muted">产品名: {res.data.name || '-'}</Badge>
+            <Badge variant="muted">企业名: {res.data.company?.name || '-'}</Badge>
+            <Badge
+              variant={
+                res.data.status === 'active'
+                  ? 'success'
+                  : res.data.status === 'expired'
+                    ? 'warning'
+                    : res.data.status === 'cancelled'
+                      ? 'danger'
+                    : 'muted'
+              }
+            >
+              状态: {labelFrom(STATUS_ZH, res.data.status) || '-'}
+            </Badge>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Badge variant="muted">注册证号: {anchorRegNo || '-'}</Badge>
+            {anchorRegNo ? <CopyTextButton value={anchorRegNo} /> : null}
+          </div>
+          <div className="columns-3">
+            <div>
+              <div className="muted">批准日期</div>
+              <div>{res.data.approved_date || '-'}</div>
+            </div>
+            <div>
+              <div className="muted">变更日期</div>
+              <div>{latestChangeDate}</div>
+            </div>
+            <div>
+              <div className="muted">失效日期</div>
+              <div>{res.data.expiry_date || '-'}</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>结构化字段</CardTitle>
+          <CardDescription>字段分组折叠展示</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          <FieldGroup
+            title="基本信息"
+            rows={[
+              { label: '产品名', value: res.data.name },
+              { label: '企业名', value: res.data.company?.name || '-' },
+              { label: '注册证号', value: anchorRegNo || '-' },
+              { label: '状态', value: labelFrom(STATUS_ZH, res.data.status) || '-' },
+            ]}
+          />
+          <FieldGroup
+            title="适用范围"
+            rows={[
+              { label: 'IVD分类', value: labelFrom(IVD_CATEGORY_ZH, res.data.ivd_category) || '-' },
+              { label: '分类码', value: res.data.class_name || '-' },
+              { label: '类别', value: res.data.category || '-' },
+              { label: '产品描述', value: res.data.description || '-' },
+            ]}
+          />
+          <FieldGroup
+            title="结构组成"
+            rows={[
+              { label: '型号', value: res.data.model || '-' },
+              { label: '规格', value: res.data.specification || '-' },
+              { label: 'UDI-DI', value: res.data.udi_di || '-' },
+              { label: 'DI列表', value: regRes.data?.variants?.map((x) => x.di).join(' / ') || '-' },
+            ]}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>证据与变更</CardTitle>
+          <CardDescription>可解释证据链与最近字段变更</CardDescription>
+        </CardHeader>
+        <CardContent className="grid">
+          {timelineResult.error && !timelineNotFound ? (
+            <ErrorState text="加载失败，请重试" />
+          ) : (
+            <>
+              <div className="card">
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>证据</div>
+                {evidenceRows.length === 0 ? (
+                  <EmptyState text="暂无可追溯证据（优先补采 raw_documents）" />
+                ) : (
+                  <div className="grid">
+                    {evidenceRows.slice(0, 8).map((item, idx) => (
+                      <div key={`${item.source}-${idx}`} className="card">
+                        <div><span className="muted">来源：</span>{item.source || '-'}</div>
+                        <div><span className="muted">观察时间：</span>{item.observed_at || '-'}</div>
+                        <div>
+                          <span className="muted">证据片段：</span>
+                          {String(item.excerpt || '').length > 120 ? (
+                            <details>
+                              <summary>show more</summary>
+                              <div style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>{item.excerpt}</div>
+                            </details>
+                          ) : (
+                            <span>{item.excerpt || '-'}</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="card">
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>变更</div>
+                {changeRows.length === 0 ? (
+                  <EmptyState text="暂无字段变更记录" />
+                ) : (
+                  <div className="grid">
+                    {changeRows.map((row, idx) => (
+                      <div key={`${row.field}-${idx}`} className="columns-2" style={{ gap: 8 }}>
+                        <div><span className="muted">字段：</span>{row.field}</div>
+                        <div><span className="muted">时间：</span>{row.observed_at}</div>
+                        <div><span className="muted">旧值：</span>{row.old_value}</div>
+                        <div><span className="muted">新值：</span>{row.new_value}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>关联注册证</CardTitle>
