@@ -270,6 +270,35 @@ button {
   text-overflow: ellipsis;
 }
 
+.app-header__nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.app-header__nav-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  color: rgba(15, 31, 21, 0.86);
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.app-header__nav-item:hover {
+  background: rgba(23, 107, 82, 0.07);
+  border-color: rgba(23, 107, 82, 0.14);
+}
+
+.app-header__nav-item.is-active {
+  background: rgba(23, 107, 82, 0.12);
+  border-color: rgba(23, 107, 82, 0.22);
+  color: rgba(15, 31, 21, 1);
+}
+
 .app-header__actions {
   display: flex;
   align-items: center;
@@ -375,6 +404,20 @@ button {
 }
 
 @media (max-width: 920px) {
+  .app-header__inner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-header__nav {
+    width: 100%;
+  }
+
+  .app-header__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .app-body {
     grid-template-columns: 1fr;
   }

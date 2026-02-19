@@ -11,8 +11,7 @@ import { Badge } from '../../components/ui/badge';
 
 import { apiBase } from '../../lib/api-server';
 import { getMe } from '../../lib/getMe';
-import ProUpgradeHint from '../../components/plan/ProUpgradeHint';
-import { PRO_COPY, PRO_TRIAL_HREF } from '../../constants/pro';
+import SearchExportActions from '../../components/search/SearchExportActions';
 import { SORT_BY_ZH, SORT_ORDER_ZH, STATUS_ZH, labelFrom } from '../../constants/display';
 import PaginationControls from '../../components/PaginationControls';
 import { getSearchSignalsBatch, type SearchSignalItem } from '../../lib/api/signals';
@@ -21,6 +20,7 @@ type SearchParams = {
   q?: string;
   company?: string;
   reg_no?: string;
+  registration_no?: string;
   status?: string;
   page?: string;
   page_size?: string;
@@ -76,11 +76,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const sortBy = params.sort_by || 'updated_at';
   const sortOrder = params.sort_order || 'desc';
   const includeUnverified = params.include_unverified === '1' || params.include_unverified === 'true';
+  const regNo = params.reg_no || params.registration_no;
 
   const query = qs({
     q: params.q,
     company: params.company,
-    reg_no: params.reg_no,
+    reg_no: regNo,
     status: params.status,
     page,
     page_size: pageSize,
@@ -90,7 +91,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   });
 
   const res = await apiGet<SearchData>(`/api/search${query}`);
-  const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: params.reg_no })}`;
+  const exportHref = `/api/export/search.csv${qs({ q: params.q, company: params.company, reg_no: regNo })}`;
   const visibleItems = (res.data?.items || []).slice(0, isPro ? undefined : 10);
   const registrationNos = visibleItems.map((x) => x.product.reg_no || '').filter(Boolean) as string[];
   let signalMap = new Map<string, SearchSignalItem>();
@@ -112,26 +113,12 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
         </CardHeader>
         <CardContent>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-            {canExport ? (
-              <a className="ui-btn" href={exportHref}>
-                导出 CSV
-              </a>
-            ) : (
-              <>
-                <Button type="button" disabled title="专业版才支持导出">
-                  导出 CSV
-                </Button>
-                <Badge variant="muted">专业版</Badge>
-                <Link href="/contact?intent=pro" className="muted">
-                  联系开通
-                </Link>
-              </>
-            )}
+            <SearchExportActions canExport={canExport} exportHref={exportHref} />
           </div>
           <form className="controls" method="GET">
             <Input name="q" defaultValue={params.q} placeholder="关键词（产品名/注册证号/UDI-DI）" />
             <Input name="company" defaultValue={params.company} placeholder="企业名称" />
-            <Input name="reg_no" defaultValue={params.reg_no} placeholder="注册证号" />
+            <Input name="reg_no" defaultValue={regNo} placeholder="注册证号" />
             <Select name="status" defaultValue={params.status || ''}>
               <option value="">全部状态</option>
               <option value="active">有效</option>
@@ -261,13 +248,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
             </div>
           )}
 
-          {!isPro ? (
-            <ProUpgradeHint
-              text={PRO_COPY.search_free_hint}
-              ctaHref={PRO_TRIAL_HREF}
-            />
-          ) : null}
-
           <Card>
             <CardContent style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <PaginationControls
@@ -275,7 +255,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                 params={{
                   q: params.q,
                   company: params.company,
-                  reg_no: params.reg_no,
+                  reg_no: regNo,
                   status: params.status,
                   sort_by: sortBy,
                   sort_order: sortOrder,

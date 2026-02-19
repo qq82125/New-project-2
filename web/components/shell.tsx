@@ -8,11 +8,20 @@ import { cn } from './ui/cn';
 import { useAuth } from './auth/use-auth';
 import ProNavGroup from './plan/ProNavGroup';
 
+function isActivePath(pathname: string, href: string): boolean {
+  if (href === '/') return pathname === '/';
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 function AppHeader() {
   const auth = useAuth();
   const pathname = usePathname();
-  const isAdminRoute = pathname.startsWith('/admin');
   const isAdmin = !auth.loading && auth.user?.role === 'admin';
+  const navItems: Array<{ href: string; label: string }> = [
+    { href: '/', label: '仪表盘' },
+    { href: '/search', label: '搜索' },
+    { href: '/subscriptions', label: '订阅与投递' },
+  ];
 
   return (
     <header className="app-header">
@@ -23,15 +32,26 @@ function AppHeader() {
           </div>
           <div className="app-brand__text">
             <div className="app-brand__name">IVD智慧大脑</div>
-            <div className="app-brand__tag">仪表盘 / 搜索 / 状态</div>
+            <div className="app-brand__tag">仪表盘 / 搜索 / 订阅与投递</div>
           </div>
         </div>
-        <nav className="app-header__actions">
-          {isAdmin && !isAdminRoute ? (
-            <Link href="/admin" className="app-authlink">
-              管理后台
+        <nav className="app-header__nav" aria-label="顶部导航">
+          {navItems.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn('app-header__nav-item', isActivePath(pathname, item.href) ? 'is-active' : undefined)}
+            >
+              {item.label}
+            </Link>
+          ))}
+          {isAdmin ? (
+            <Link href="/admin" className={cn('app-header__nav-item', isActivePath(pathname, '/admin') ? 'is-active' : undefined)}>
+              Admin
             </Link>
           ) : null}
+        </nav>
+        <nav className="app-header__actions">
           <AuthNav />
         </nav>
       </div>
@@ -44,7 +64,7 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
   const items: Array<{ href: string; label: string }> = [
     { href: '/', label: '仪表盘' },
     { href: '/search', label: '搜索' },
-    { href: '/status', label: '状态' },
+    { href: '/subscriptions', label: '订阅与投递' },
     { href: '/account', label: '用户中心' },
   ];
 
@@ -52,7 +72,7 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
     <aside className="app-sidenav" aria-label="主菜单">
       <div className="app-sidenav__section">
         {items.map((item) => {
-          const active = pathname === item.href;
+          const active = isActivePath(pathname, item.href);
           return (
             <Link
               key={item.href}

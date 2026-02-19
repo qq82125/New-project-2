@@ -315,7 +315,7 @@ export default async function DashboardPage({
                         {topRiskRes.value.items.slice(0, 10).map((item) => (
                           <tr key={item.registration_no}>
                             <td>
-                              <Link href={`/registrations/${encodeURIComponent(item.registration_no)}`}>
+                              <Link href={`/search${qs({ registration_no: item.registration_no })}`}>
                                 {item.registration_no}
                               </Link>
                               <div className="muted">{item.company || '-'}</div>
@@ -359,7 +359,7 @@ export default async function DashboardPage({
                         {topCompetitiveRes.value.items.slice(0, 10).map((item) => (
                           <tr key={item.track_id}>
                             <td>
-                              <Link href={`/tracks/${encodeURIComponent(item.track_id)}`}>{item.track_name}</Link>
+                              <Link href={`/search${qs({ q: item.track_name })}`}>{item.track_name}</Link>
                             </td>
                             <td>{item.level || '-'}</td>
                             <td>{item.total_count ?? '-'}</td>
@@ -450,7 +450,7 @@ export default async function DashboardPage({
                       return (
                         <tr key={it.product_id}>
                           <td>
-                            <Link href={`/products/${it.product_id}`}>{it.product_name}</Link>
+                            <Link href={`/search${qs({ q: it.product_name })}`}>{it.product_name}</Link>
                           </td>
                           <td>
                             <Badge variant={lriBadgeVariant(risk)}>{labelFrom(LRI_RISK_ZH, risk)}</Badge>
