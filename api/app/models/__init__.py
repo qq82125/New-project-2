@@ -49,6 +49,7 @@ from app.models.entities import (
     UdiDiMaster,
     User,
 )
+from app.models.signal_score import SignalScore
 
 __all__ = [
     'Product',
@@ -100,4 +101,5 @@ __all__ = [
     'RegistrationEvent',
     'ProductMethodologyMap',
     'LriScore',
+    'SignalScore',
 ]

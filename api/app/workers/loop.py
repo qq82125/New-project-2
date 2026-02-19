@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 import logging
 import time
+from typing import Any
 
 from app.db.session import SessionLocal
 from app.repositories.radar import get_admin_config, upsert_admin_config
 from app.core.config import get_settings
+from app.services.signals_v1 import DEFAULT_WINDOW, compute_signals_v1
 from app.services.supplement_sync import (
     DEFAULT_SUPPLEMENT_SOURCE_NAME,
     run_nmpa_query_supplement_now,
@@ -17,6 +20,78 @@ from app.workers.sync import sync_nmpa_ivd
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+SIGNALS_DAILY_KEY = 'signals_compute_daily_last_run'
+
+
+def _today_utc() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _to_iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def _signals_last_success_as_of(db) -> date | None:
+    cfg = get_admin_config(db, SIGNALS_DAILY_KEY)
+    if not cfg or not isinstance(cfg.config_value, dict):
+        return None
+    raw = cfg.config_value.get('as_of_date')
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw))
+    except Exception:
+        return None
+
+
+def _run_signals_compute_daily_job() -> None:
+    db = SessionLocal()
+    try:
+        today = _today_utc()
+        last_success = _signals_last_success_as_of(db)
+        if last_success == today:
+            logger.info('Job signals_compute_daily skipped: already_successful_as_of=%s', today.isoformat())
+            return
+
+        started = datetime.now(timezone.utc)
+        logger.info('Job signals_compute_daily started: as_of_date=%s window=%s', today.isoformat(), DEFAULT_WINDOW)
+        result = compute_signals_v1(
+            db,
+            as_of=today,
+            window=DEFAULT_WINDOW,
+            dry_run=False,
+        )
+        elapsed_s = (datetime.now(timezone.utc) - started).total_seconds()
+        report: dict[str, Any] = {
+            'job': 'signals_compute_daily',
+            'status': ('success' if result.ok else 'failed'),
+            'as_of_date': today.isoformat(),
+            'window': DEFAULT_WINDOW,
+            'started_at': _to_iso(started),
+            'finished_at': _to_iso(datetime.now(timezone.utc)),
+            'duration_seconds': round(elapsed_s, 3),
+            'registration_count': int(result.registration_count),
+            'track_count': int(result.track_count),
+            'company_count': int(result.company_count),
+            'wrote_total': int(result.wrote_total),
+            'error': result.error,
+        }
+        upsert_admin_config(db, SIGNALS_DAILY_KEY, report)
+        logger.info(
+            'Job signals_compute_daily finished: as_of_date=%s wrote_total=%s registration=%s track=%s company=%s duration_s=%.3f',
+            today.isoformat(),
+            result.wrote_total,
+            result.registration_count,
+            result.track_count,
+            result.company_count,
+            elapsed_s,
+        )
+    except Exception as exc:
+        logger.exception('Job signals_compute_daily failed: %s', exc)
+    finally:
+        db.close()
 
 
 def main() -> None:
@@ -62,31 +137,47 @@ def main() -> None:
             last_failure = None
             repeated_failures = 0
 
-        db = SessionLocal()
-        try:
-            should_run, _, reason = should_run_supplement(db)
-            if should_run:
-                supplement_report = run_supplement_sync_now(db, reason=f'auto:{reason}')
-                logger.info(
-                    'Supplement sync finished: status=%s scanned=%s updated=%s',
-                    supplement_report.get('status'),
-                    supplement_report.get('scanned'),
-                    supplement_report.get('updated'),
-                )
-            should_run_q, _, reason_q = should_run_nmpa_query_supplement(db)
-            if should_run_q:
-                query_report = run_nmpa_query_supplement_now(db, reason=f'auto:{reason_q}')
-                logger.info(
-                    'NMPA-query supplement finished: status=%s scanned=%s updated=%s blocked_412=%s',
-                    query_report.get('status'),
-                    query_report.get('scanned'),
-                    query_report.get('updated'),
-                    query_report.get('blocked_412'),
-                )
-        except Exception as exc:
-            logger.error('Supplement sync check failed: %s', exc)
-        finally:
-            db.close()
+        def _job_supplement_sync() -> None:
+            db = SessionLocal()
+            try:
+                should_run, _, reason = should_run_supplement(db)
+                if should_run:
+                    supplement_report = run_supplement_sync_now(db, reason=f'auto:{reason}')
+                    logger.info(
+                        'Supplement sync finished: status=%s scanned=%s updated=%s',
+                        supplement_report.get('status'),
+                        supplement_report.get('scanned'),
+                        supplement_report.get('updated'),
+                    )
+            finally:
+                db.close()
+
+        def _job_nmpa_query_supplement() -> None:
+            db = SessionLocal()
+            try:
+                should_run_q, _, reason_q = should_run_nmpa_query_supplement(db)
+                if should_run_q:
+                    query_report = run_nmpa_query_supplement_now(db, reason=f'auto:{reason_q}')
+                    logger.info(
+                        'NMPA-query supplement finished: status=%s scanned=%s updated=%s blocked_412=%s',
+                        query_report.get('status'),
+                        query_report.get('scanned'),
+                        query_report.get('updated'),
+                        query_report.get('blocked_412'),
+                    )
+            finally:
+                db.close()
+
+        jobs: list[tuple[str, Any]] = [
+            ('supplement_sync', _job_supplement_sync),
+            ('nmpa_query_supplement', _job_nmpa_query_supplement),
+            ('signals_compute_daily', _run_signals_compute_daily_job),
+        ]
+        for job_name, job_fn in jobs:
+            try:
+                job_fn()
+            except Exception as exc:
+                logger.error('Loop job %s failed: %s', job_name, exc)
         time.sleep(settings.sync_interval_seconds)
 
 

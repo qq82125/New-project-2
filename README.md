@@ -20,6 +20,10 @@
 - NMPA 快照+diff SSOT（人读）：`docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
 - NMPA 快照+diff SSOT（机器读）：`docs/nmpa_field_dictionary_v1_adapted.yaml`
 
+Signal Engine V1 API：
+- 后端验收与运维：`docs/SIGNAL_ENGINE_V1_BACKEND.md`
+- 覆盖迁移验证、signals-compute、Top/Batch API 验证与故障排查
+
 ## 主要数据资产（表级）
 证据链：
 - `raw_documents`：原始文档元数据（`storage_uri/sha256/source_url/run_id/parse_log`）

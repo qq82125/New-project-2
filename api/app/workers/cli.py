@@ -278,6 +278,16 @@ def build_parser() -> argparse.ArgumentParser:
     lri.add_argument('--date', default=None, help='YYYY-MM-DD (default: today UTC)')
     lri.add_argument('--model-version', default='lri_v1')
     lri.add_argument('--upsert', action='store_true', help='Delete existing scores for the same day+model before insert')
+
+    signals = sub.add_parser('signals-compute', help='Compute Signal Engine V1 scores into signal_scores')
+    signals.add_argument('--window', default='12m', help='Time window (MVP supports 12m)')
+    signals.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
+    signals.add_argument('--batch-size', type=int, default=500, help='Batch size per entity scan')
+    signals.add_argument('--dry-run', action='store_true', help='Preview only, rollback writes')
+
+    ts_audit = sub.add_parser('time-semantics-audit', help='Audit registration start_date time semantics coverage')
+    ts_audit.add_argument('--limit', type=int, default=200, help='Sample size (default 200)')
+    ts_audit.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
     return parser
 
 
@@ -1630,6 +1640,42 @@ def main() -> None:
             )
             print(json.dumps(res.__dict__, ensure_ascii=True, default=str))
             raise SystemExit(0 if res.ok else 1)
+        finally:
+            db.close()
+    if args.cmd == 'signals-compute':
+        from datetime import date as dt_date
+
+        target = dt_date.fromisoformat(str(args.as_of)) if getattr(args, 'as_of', None) else None
+        db = SessionLocal()
+        try:
+            from app.services.signals_v1 import compute_signals_v1
+
+            res = compute_signals_v1(
+                db,
+                as_of=target,
+                window=str(getattr(args, 'window', '12m')),
+                dry_run=bool(getattr(args, 'dry_run', False)),
+                batch_size=int(getattr(args, 'batch_size', 500)),
+            )
+            print(json.dumps(res.__dict__, ensure_ascii=True, default=str))
+            raise SystemExit(0 if res.ok else 1)
+        finally:
+            db.close()
+    if args.cmd == 'time-semantics-audit':
+        from datetime import date as dt_date
+
+        target = dt_date.fromisoformat(str(args.as_of)) if getattr(args, 'as_of', None) else dt_date.today()
+        db = SessionLocal()
+        try:
+            from app.services.time_semantics import audit_time_semantics
+
+            out = audit_time_semantics(
+                db,
+                as_of_date=target,
+                limit=int(getattr(args, 'limit', 200)),
+            )
+            print(json.dumps(out, ensure_ascii=False, default=str))
+            raise SystemExit(0)
         finally:
             db.close()
     if args.cmd == 'loop':
