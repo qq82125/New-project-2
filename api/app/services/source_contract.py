@@ -26,6 +26,7 @@ from app.models import (
     UdiDiMaster,
 )
 from app.services.normalize_keys import normalize_registration_no
+from app.services.registration_no_parser import parse_registration_no
 
 
 def _utcnow() -> datetime:
@@ -843,17 +844,23 @@ def write_udi_contract_record(
         _pick_text(row, "registry_no", "reg_no", "registration_no", "zczbhhzbapzbh")
     )
     reg_norm = normalize_registration_no(raw_reg_no)
+    parsed_reg = parse_registration_no(reg_norm) if reg_norm else None
     has_cert = _parse_bool_zh(_pick_text(row, "sfyzcbayz", "has_cert"))
     packaging_json = _parse_packaging_json(row)
     storage_json = _parse_storage_json(row)
 
     parse_error: str | None = None
+    gate_reason_code: str | None = None
     if not di:
         parse_error = "missing di"
+    elif not reg_norm:
+        gate_reason_code = "REGNO_MISSING"
+    elif parsed_reg is not None and not parsed_reg.parse_ok:
+        gate_reason_code = "REGNO_PARSE_FAILED"
 
     payload_hash = _payload_hash(row)
     now = _utcnow()
-    parse_status = _parse_status_for(reg_norm, di, parse_error)
+    parse_status = _parse_status_for((reg_norm if gate_reason_code is None else None), di, parse_error)
 
     raw_stmt = insert(RawSourceRecord).values(
         source=str(source or "UNKNOWN"),
@@ -920,7 +927,7 @@ def write_udi_contract_record(
         )
         db.execute(master_stmt)
 
-    if reg_norm:
+    if reg_norm and gate_reason_code is None:
         def _ensure_anchor_product(registration_id: UUID, registration_no: str, payload: dict[str, Any]) -> None:
             # Keep one lightweight "anchor product" so search/workbench can reach this registration.
             product = db.scalar(
@@ -1063,8 +1070,12 @@ def write_udi_contract_record(
         "catalog_item_std",
         "catalog_item_raw",
     )
-    reason_code = ("MISSING_REGISTRATION_NO" if raw_reg_no is None else "REGISTRATION_NO_NOT_FOUND")
-    reason_text = ("missing registration_no" if raw_reg_no is None else "registration_no_not_found")
+    reason_code = gate_reason_code or ("REGNO_MISSING" if raw_reg_no is None else "REGISTRATION_NO_NOT_FOUND")
+    reason_text = (
+        "registration_no missing after normalize"
+        if reason_code == "REGNO_MISSING"
+        else ("registration_no semantic parse failed" if reason_code == "REGNO_PARSE_FAILED" else "registration_no_not_found")
+    )
 
     pending_stmt = insert(PendingUdiLink).values(
         di=di,
