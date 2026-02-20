@@ -3366,6 +3366,9 @@ def admin_resolve_pending_record(
             source='ADMIN_PENDING_RESOLVE',
             match_type='manual',
             confidence=0.95,
+            match_reason='pending_record_manual_resolve',
+            reversible=True,
+            linked_by=(str(getattr(admin, 'email', '') or '') or 'admin'),
             raw_source_record_id=None,
         )
         map_stmt = map_stmt.on_conflict_do_update(
@@ -3374,6 +3377,9 @@ def admin_resolve_pending_record(
                 'source': map_stmt.excluded.source,
                 'match_type': map_stmt.excluded.match_type,
                 'confidence': map_stmt.excluded.confidence,
+                'match_reason': map_stmt.excluded.match_reason,
+                'reversible': map_stmt.excluded.reversible,
+                'linked_by': map_stmt.excluded.linked_by,
                 'updated_at': text('NOW()'),
             },
         )
@@ -3737,6 +3743,7 @@ def admin_list_pending_udi_links(
     status: str = Query(default='pending'),
     source_key: str | None = Query(default=None),
     reason_code: str | None = Query(default=None),
+    confidence_lt: float | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     order_by: str = Query(default='created_at desc'),
@@ -3765,6 +3772,8 @@ def admin_list_pending_udi_links(
         filters.append(PendingUdiLink.status == status_map[status_norm])
     if reason_code_norm:
         filters.append(PendingUdiLink.reason_code == reason_code_norm)
+    if confidence_lt is not None:
+        filters.append(PendingUdiLink.confidence < float(confidence_lt))
     if source_key_norm:
         filters.append(RawSourceRecord.source == source_key_norm)
 
@@ -3821,6 +3830,10 @@ def admin_list_pending_udi_links(
                 'status': str(getattr(p, 'status', '') or ''),
                 'reason': str(getattr(p, 'reason', '') or ''),
                 'reason_code': (str(getattr(p, 'reason_code', '') or '') or None),
+                'match_reason': (str(getattr(p, 'match_reason', '') or '') or None),
+                'confidence': float(getattr(p, 'confidence', 0.0) or 0.0),
+                'reversible': bool(getattr(p, 'reversible', True)),
+                'linked_by': (str(getattr(p, 'linked_by', '') or '') or None),
                 'candidate_registry_no': (str(candidate_registry_no) if candidate_registry_no else None),
                 'raw_id': (str(getattr(p, 'raw_id', None)) if getattr(p, 'raw_id', None) else None),
                 'raw_source_record_id': (
@@ -3932,6 +3945,9 @@ def _admin_resolve_pending_udi_link(
         source='admin',
         match_type='manual',
         confidence=confidence,
+        match_reason=(str(payload.get('reason') or '').strip() or 'manual_admin_bind'),
+        reversible=bool(payload.get('reversible', True)),
+        linked_by=(str(getattr(admin, 'email', '') or '') or 'admin'),
         raw_source_record_id=raw_id,
     )
     stmt = stmt.on_conflict_do_update(
@@ -3940,6 +3956,9 @@ def _admin_resolve_pending_udi_link(
             'source': stmt.excluded.source,
             'match_type': stmt.excluded.match_type,
             'confidence': stmt.excluded.confidence,
+            'match_reason': stmt.excluded.match_reason,
+            'reversible': stmt.excluded.reversible,
+            'linked_by': stmt.excluded.linked_by,
             'raw_source_record_id': stmt.excluded.raw_source_record_id,
             'updated_at': text('NOW()'),
         },
@@ -3950,6 +3969,10 @@ def _admin_resolve_pending_udi_link(
     before_resolved_at = getattr(pending, 'resolved_at', None)
     before_resolved_by = getattr(pending, 'resolved_by', None)
     pending.status = 'RESOLVED'
+    pending.linked_by = (str(getattr(admin, 'email', '') or '') or 'admin')
+    pending.match_reason = (str(payload.get('reason') or '').strip() or pending.match_reason or 'manual_admin_bind')
+    pending.confidence = confidence
+    pending.reversible = bool(payload.get('reversible', True))
     if before_resolved_at is None:
         pending.resolved_at = datetime.now()
     pending.resolved_by = (str(getattr(admin, 'email', '') or '') or 'admin')

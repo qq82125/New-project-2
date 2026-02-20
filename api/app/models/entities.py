@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -173,7 +173,10 @@ class ProductUdiMap(Base):
     di: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     match_type: Mapped[str] = mapped_column(String(20), nullable=False, default='direct', index=True)
-    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.80)
+    match_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reversible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    linked_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
     )
@@ -208,6 +211,10 @@ class PendingUdiLink(Base):
     di: Mapped[str] = mapped_column(String(128), ForeignKey('udi_di_master.di'), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reason_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    match_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.80, index=True)
+    reversible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    linked_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default='PENDING', index=True)

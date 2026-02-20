@@ -409,6 +409,7 @@ def test_admin_udi_pending_links_filter_and_pagination(monkeypatch) -> None:
     tag = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
     di1 = f'DI-U-PEND-{tag}'
     di2 = f'DI-U-RES-{tag}'
+    source_key_test = f'TEST_UDI_LINK_{tag}'
     raw_id1 = uuid.uuid4()
     raw_id2 = uuid.uuid4()
 
@@ -419,13 +420,14 @@ def test_admin_udi_pending_links_filter_and_pagination(monkeypatch) -> None:
                 INSERT INTO raw_source_records (
                     id, source, source_run_id, source_url, payload_hash, evidence_grade, observed_at, payload, parse_status
                 ) VALUES
-                    (:id1, 'UDI_DI', NULL, 'https://example.test/1', :h1, 'B', NOW(), '{}'::jsonb, 'FAILED'),
-                    (:id2, 'NMPA_REG', NULL, 'https://example.test/2', :h2, 'A', NOW(), '{}'::jsonb, 'PARSED')
+                    (:id1, :src, NULL, 'https://example.test/1', :h1, 'B', NOW(), '{}'::jsonb, 'FAILED'),
+                    (:id2, :src, NULL, 'https://example.test/2', :h2, 'A', NOW(), '{}'::jsonb, 'PARSED')
                 """
             ),
             {
                 'id1': str(raw_id1),
                 'id2': str(raw_id2),
+                'src': source_key_test,
                 'h1': uuid.uuid4().hex + uuid.uuid4().hex,
                 'h2': uuid.uuid4().hex + uuid.uuid4().hex,
             },
@@ -435,13 +437,14 @@ def test_admin_udi_pending_links_filter_and_pagination(monkeypatch) -> None:
                 """
                 INSERT INTO udi_di_master (id, di, source, raw_source_record_id, payload_hash)
                 VALUES
-                    (gen_random_uuid(), :di1, 'UDI_DI', :raw1, :ph1),
-                    (gen_random_uuid(), :di2, 'NMPA_REG', :raw2, :ph2)
+                    (gen_random_uuid(), :di1, :src, :raw1, :ph1),
+                    (gen_random_uuid(), :di2, :src, :raw2, :ph2)
                 """
             ),
             {
                 'di1': di1,
                 'di2': di2,
+                'src': source_key_test,
                 'raw1': str(raw_id1),
                 'raw2': str(raw_id2),
                 'ph1': uuid.uuid4().hex + uuid.uuid4().hex,
@@ -452,19 +455,19 @@ def test_admin_udi_pending_links_filter_and_pagination(monkeypatch) -> None:
             text(
                 """
                 INSERT INTO pending_udi_links (
-                    id, di, reason, reason_code, status, raw_source_record_id,
+                    id, di, reason, reason_code, status, confidence, raw_source_record_id,
                     candidate_company_name, candidate_product_name, created_at, updated_at
                 ) VALUES
                     (
                         gen_random_uuid(), :di1,
                         '{"message":"missing reg","raw":{"registration_no":"国械注准20240001"}}',
-                        'NO_REG_NO', 'PENDING', :raw1,
+                        'NO_REG_NO', 'PENDING', 0.55, :raw1,
                         '企业A', '产品A', NOW(), NOW()
                     ),
                     (
                         gen_random_uuid(), :di2,
                         '{"message":"resolved"}',
-                        'PARSE_ERROR', 'RESOLVED', :raw2,
+                        'PARSE_ERROR', 'RESOLVED', 0.90, :raw2,
                         '企业B', '产品B', NOW() + interval '1 second', NOW() + interval '1 second'
                     )
                 """
@@ -486,26 +489,34 @@ def test_admin_udi_pending_links_filter_and_pagination(monkeypatch) -> None:
         token_admin = main_mod.create_session_token(user_id=2, secret='test-secret', ttl_seconds=3600)
         client.cookies.set('ivd_session', token_admin)
 
-        r1 = client.get('/api/admin/udi/pending-links?status=pending&source_key=UDI_DI&reason_code=NO_REG_NO')
+        r1 = client.get(f'/api/admin/udi/pending-links?status=pending&source_key={source_key_test}&reason_code=NO_REG_NO')
         assert r1.status_code == 200
         body1 = r1.json()['data']
         assert int(body1['total']) == 1
         assert int(body1['count']) == 1
         it = body1['items'][0]
         assert it['status'] == 'PENDING'
-        assert it['source_key'] == 'UDI_DI'
+        assert it['source_key'] == source_key_test
         assert it['reason_code'] == 'NO_REG_NO'
         assert it['di'] == di1
         assert it['candidate_registry_no'] == '国械注准20240001'
         assert it['raw_source_record_id'] == str(raw_id1)
 
-        r2 = client.get('/api/admin/udi/pending-links?status=all&limit=1&offset=1&order_by=created_at desc')
+        r2 = client.get(f'/api/admin/udi/pending-links?status=all&source_key={source_key_test}&limit=1&offset=1&order_by=created_at desc')
         assert r2.status_code == 200
         body2 = r2.json()['data']
         assert int(body2['total']) == 2
         assert int(body2['count']) == 1
         assert int(body2['limit']) == 1
         assert int(body2['offset']) == 1
+
+        r3 = client.get(f'/api/admin/udi/pending-links?status=all&source_key={source_key_test}&confidence_lt=0.6')
+        assert r3.status_code == 200
+        body3 = r3.json()['data']
+        assert int(body3['total']) == 1
+        assert int(body3['count']) == 1
+        assert body3['items'][0]['di'] == di1
+        assert float(body3['items'][0]['confidence']) < 0.6
     finally:
         app.dependency_overrides.pop(get_db, None)
         main_mod._settings = old_settings

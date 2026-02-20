@@ -199,6 +199,11 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
 
+    udi_links_audit = sub.add_parser('udi:links-audit', help='Audit UDI link quality metrics')
+    udi_links_audit_mode = udi_links_audit.add_mutually_exclusive_group()
+    udi_links_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_links_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
+
     udi_promote = sub.add_parser('udi:promote', help='Promote UDI device index entries into registration/product structures')
     udi_promote_mode = udi_promote.add_mutually_exclusive_group()
     udi_promote_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1107,6 +1112,78 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_udi_links_audit(_args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        total_links = int(db.execute(text("SELECT COUNT(1) FROM product_udi_map")).scalar() or 0)
+        auto_links = int(
+            db.execute(
+                text("SELECT COUNT(1) FROM product_udi_map WHERE match_type = 'direct'")
+            ).scalar()
+            or 0
+        )
+        rollback_done = int(
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM change_log
+                    WHERE entity_type = 'pending_udi_link'
+                      AND change_type IN ('ignore', 'rollback')
+                    """
+                )
+            ).scalar()
+            or 0
+        )
+        rollback_base = int(
+            db.execute(
+                text("SELECT COUNT(1) FROM product_udi_map WHERE reversible = TRUE")
+            ).scalar()
+            or 0
+        )
+        p95_seconds = float(
+            db.execute(
+                text(
+                    """
+                    SELECT COALESCE(
+                        percentile_cont(0.95) WITHIN GROUP (
+                            ORDER BY EXTRACT(EPOCH FROM (NOW() - created_at))
+                        ),
+                        0
+                    )
+                    FROM pending_udi_links
+                    WHERE status IN ('PENDING', 'RETRYING')
+                    """
+                )
+            ).scalar()
+            or 0.0
+        )
+
+        def _rate(n: int, d: int) -> float:
+            return round((float(n) / float(d)), 4) if d > 0 else 0.0
+
+        print(
+            json.dumps(
+                {
+                    "auto_link_rate": _rate(auto_links, total_links),
+                    "rollback_rate": _rate(rollback_done, rollback_base),
+                    "pending_age_p95": int(round(p95_seconds)),
+                    "units": {"pending_age_p95": "seconds"},
+                    "counts": {
+                        "total_links": total_links,
+                        "auto_links": auto_links,
+                        "rollback_done": rollback_done,
+                        "rollback_base": rollback_base,
+                    },
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def _run_udi_promote(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
@@ -1601,6 +1678,8 @@ def main() -> None:
         raise SystemExit(_run_source_runner_all(args))
     if args.cmd == 'udi:audit':
         raise SystemExit(_run_udi_audit(args))
+    if args.cmd == 'udi:links-audit':
+        raise SystemExit(_run_udi_links_audit(args))
     if args.cmd == 'udi:promote':
         raise SystemExit(_run_udi_promote(args))
     if args.cmd == 'udi:promote-snapshot':
