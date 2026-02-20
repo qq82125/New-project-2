@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import date as dt_date
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -5243,6 +5243,23 @@ def admin_upsert_config(
     _admin: User = Depends(_require_admin_user),
     db: Session = Depends(get_db),
 ) -> ApiResponseAdminConfig:
+    if config_key == "udi_params_allowlist":
+        now_iso = datetime.now(timezone.utc).isoformat()
+        version_raw = payload.config_value.get("version") if isinstance(payload.config_value, dict) else None
+        try:
+            allowlist_version = int(version_raw)
+        except Exception:
+            allowlist_version = 1
+        if allowlist_version <= 0:
+            allowlist_version = 1
+        change_reason = ""
+        if isinstance(payload.config_value, dict):
+            change_reason = str(payload.config_value.get("change_reason") or "").strip() or "manual_update"
+        changed_by = str(getattr(_admin, "email", "") or "admin")
+        upsert_admin_config(db, "udi_params_allowlist_version", {"value": allowlist_version})
+        upsert_admin_config(db, "udi_params_allowlist_changed_by", {"value": changed_by})
+        upsert_admin_config(db, "udi_params_allowlist_changed_at", {"value": now_iso})
+        upsert_admin_config(db, "udi_params_allowlist_change_reason", {"value": change_reason})
     cfg = upsert_admin_config(db, config_key, payload.config_value)
     data = AdminConfigItem(
         config_key=cfg.config_key,

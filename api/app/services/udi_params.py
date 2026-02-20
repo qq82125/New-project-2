@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
 
@@ -66,6 +67,95 @@ def _get_allowlist(db: Session) -> list[str]:
         "LABEL_EXP_DATE",
         "LABEL_LOT",
     ]
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _load_core_param_keys() -> set[str]:
+    dictionary_path = Path(__file__).resolve().parents[3] / "docs" / "PARAMETER_DICTIONARY_CORE_V1.yaml"
+    if not dictionary_path.exists():
+        return set()
+    keys: set[str] = set()
+    for line in dictionary_path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s.startswith("- key:"):
+            continue
+        key = s.split(":", 1)[1].strip().strip('"').strip("'")
+        if key:
+            keys.add(key)
+    return keys
+
+
+@dataclass
+class UdiAllowlistConfig:
+    allowlist: list[str]
+    allowlist_version: int
+    changed_by: str
+    changed_at: datetime | None
+    change_reason: str
+
+
+def _get_allowlist_config(db: Session) -> UdiAllowlistConfig:
+    cfg = db.scalar(select(AdminConfig).where(AdminConfig.config_key == "udi_params_allowlist"))
+    config_value = cfg.config_value if cfg and isinstance(cfg.config_value, dict) else {}
+    allowlist = _get_allowlist(db)
+
+    v_cfg = db.scalar(select(AdminConfig).where(AdminConfig.config_key == "udi_params_allowlist_version"))
+    version = _as_int((v_cfg.config_value or {}).get("value") if v_cfg and isinstance(v_cfg.config_value, dict) else None, 0)
+    if version <= 0:
+        version = _as_int(config_value.get("version"), 1)
+    if version <= 0:
+        version = 1
+
+    by_cfg = db.scalar(select(AdminConfig).where(AdminConfig.config_key == "udi_params_allowlist_changed_by"))
+    changed_by = ""
+    if by_cfg and isinstance(by_cfg.config_value, dict):
+        changed_by = _as_text(by_cfg.config_value.get("value")) or ""
+    if not changed_by:
+        changed_by = _as_text(config_value.get("changed_by")) or "admin"
+
+    at_cfg = db.scalar(select(AdminConfig).where(AdminConfig.config_key == "udi_params_allowlist_changed_at"))
+    changed_at: datetime | None = None
+    if at_cfg and isinstance(at_cfg.config_value, dict):
+        at_raw = at_cfg.config_value.get("value")
+        if at_raw:
+            changed_at = _to_dt(at_raw)
+    if changed_at is None and config_value.get("changed_at"):
+        changed_at = _to_dt(config_value.get("changed_at"))
+
+    reason_cfg = db.scalar(select(AdminConfig).where(AdminConfig.config_key == "udi_params_allowlist_change_reason"))
+    change_reason = ""
+    if reason_cfg and isinstance(reason_cfg.config_value, dict):
+        change_reason = _as_text(reason_cfg.config_value.get("value")) or ""
+    if not change_reason:
+        change_reason = _as_text(config_value.get("change_reason")) or ""
+
+    return UdiAllowlistConfig(
+        allowlist=allowlist,
+        allowlist_version=version,
+        changed_by=changed_by,
+        changed_at=changed_at,
+        change_reason=change_reason,
+    )
+
+
+def _validate_allowlist_keys(allowlist: list[str], core_keys: set[str]) -> tuple[list[str], list[str]]:
+    if not core_keys:
+        return list(allowlist), []
+    core_keys_lower = {k.lower() for k in core_keys}
+    valid: list[str] = []
+    invalid: list[str] = []
+    for key in allowlist:
+        if key in core_keys or key.lower() in core_keys_lower:
+            valid.append(key)
+        else:
+            invalid.append(key)
+    return valid, invalid
 
 
 def _is_non_empty(value: Any, data_type: str) -> bool:
@@ -237,6 +327,12 @@ class UdiParamsReport:
     skipped_missing_value: int = 0
     failed: int = 0
     errors: list[dict[str, Any]] | None = None
+    allowlist_version: int = 1
+    allowlisted_key_count: int = 0
+    invalid_key_count: int = 0
+    invalid_keys: list[str] | None = None
+    rejected_invalid_keys: int = 0
+    allowlisted_keys_preview: list[str] | None = None
     total_batches: int = 0
     final_cursor: str | None = None
     distinct_products_updated: int = 0
@@ -255,6 +351,12 @@ class UdiParamsReport:
             "skipped_missing_value": self.skipped_missing_value,
             "failed": self.failed,
             "errors": self.errors or [],
+            "allowlist_version": int(self.allowlist_version or 1),
+            "allowlisted_key_count": int(self.allowlisted_key_count or 0),
+            "invalid_key_count": int(self.invalid_key_count or 0),
+            "invalid_keys": list(self.invalid_keys or []),
+            "rejected_invalid_keys": int(self.rejected_invalid_keys or 0),
+            "allowlisted_keys_preview": list(self.allowlisted_keys_preview or []),
             "total_batches": self.total_batches,
             "final_cursor": self.final_cursor,
             "total_written": self.params_written,
@@ -559,11 +661,31 @@ def write_allowlisted_params(
     batch_size: int = 50000,
     resume: bool = True,
     start_cursor: str | None = None,
+    allow_unknown_keys: bool = False,
     job_name: str = "udi:params:allowlist",
     progress_cb: Callable[[UdiParamsBatchProgress], None] | None = None,
 ) -> UdiParamsReport:
     rep = UdiParamsReport(errors=[])
-    allow = set(_get_allowlist(db)) if only_allowlisted else set()
+    allow_cfg = _get_allowlist_config(db)
+    rep.allowlist_version = int(allow_cfg.allowlist_version or 1)
+    allow = set(allow_cfg.allowlist) if only_allowlisted else set()
+    rep.allowlisted_key_count = len(allow)
+    rep.allowlisted_keys_preview = sorted(list(allow))[:20]
+    rep.invalid_keys = []
+    if only_allowlisted:
+        valid, invalid = _validate_allowlist_keys(allow_cfg.allowlist, _load_core_param_keys())
+        rep.invalid_keys = list(invalid)
+        rep.invalid_key_count = len(invalid)
+        rep.rejected_invalid_keys = len(invalid)
+        if invalid and not dry_run and not allow_unknown_keys:
+            raise ValueError(
+                "invalid allowlist keys not in core dictionary: "
+                + ", ".join(invalid)
+                + ". Fix allowlist or run with --allow-unknown-keys."
+            )
+        allow = set(valid) if invalid else allow
+        rep.allowlisted_key_count = len(allow)
+        rep.allowlisted_keys_preview = sorted(list(allow))[:20]
     batch_size = max(1000, int(batch_size or 50000))
 
     effective_job_name = job_name
@@ -789,6 +911,7 @@ def write_allowlisted_params(
                         "raw_document_id": v["raw_document_id"],
                         "confidence": 0.80,
                         "extract_version": "udi_params_allowlist_v1",
+                        "param_key_version": int(rep.allowlist_version or 1),
                         "observed_at": v["observed_at"],
                         "created_at": _utcnow(),
                     }

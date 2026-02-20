@@ -69,6 +69,15 @@ def test_udi_params_execute_writes_storage_summary() -> None:
                 ),
                 {"id": source_run_id},
             )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO admin_configs (config_key, config_value)
+                    VALUES ('udi_params_allowlist_version', '{"value": 3}'::jsonb)
+                    ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value
+                    """
+                )
+            )
             # Raw evidence row for udi_device_index.raw_document_id and product_params.raw_document_id.
             db.execute(
                 text(
@@ -105,7 +114,14 @@ def test_udi_params_execute_writes_storage_summary() -> None:
             assert out.params_written >= 1
 
             rows = db.execute(
-                text("SELECT param_code, value_text, conditions FROM product_params WHERE registry_no = :r ORDER BY created_at DESC"),
+                text(
+                    """
+                    SELECT param_code, value_text, conditions, param_key_version
+                    FROM product_params
+                    WHERE registry_no = :r
+                    ORDER BY created_at DESC
+                    """
+                ),
                 {"r": reg_norm},
             ).mappings().all()
             codes = {r["param_code"] for r in rows}
@@ -114,3 +130,4 @@ def test_udi_params_execute_writes_storage_summary() -> None:
             assert storage["value_text"] is not None and "℃" in str(storage["value_text"])
             assert isinstance(storage["conditions"], dict)
             assert "storages" in storage["conditions"]
+            assert int(storage["param_key_version"]) == 3

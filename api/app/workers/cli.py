@@ -317,6 +317,11 @@ def build_parser() -> argparse.ArgumentParser:
     udi_params.add_argument('--full-scan', action='store_true', help='Dry-run/execute candidates: use full scan instead of sampling')
     udi_params.add_argument('--with-candidates', action='store_true', help='Execute: also compute+upsert candidates snapshot (can be expensive)')
     udi_params.add_argument('--only-allowlisted', action='store_true', help='Execute: only write params from admin_configs[udi_params_allowlist]')
+    udi_params.add_argument(
+        '--allow-unknown-keys',
+        action='store_true',
+        help='Allow unknown allowlist keys (default false; execute fails when unknown keys exist)',
+    )
     udi_params.add_argument('--batch-size', type=int, default=50000, help='Execute: rows per batch for allowlist write (default 50000)')
     udi_params.add_argument('--resume', dest='resume', action='store_true', help='Execute: continue from checkpoint (default)')
     udi_params.add_argument('--no-resume', dest='resume', action='store_false', help='Execute: ignore checkpoint and start fresh')
@@ -1692,18 +1697,35 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                     )
                 )
 
-            rep = write_allowlisted_params(
-                db,
-                source_run_id=source_run_id,
-                limit=(int(args.limit) if getattr(args, "limit", None) else None),
-                only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
-                dry_run=False,
-                batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
-                resume=bool(getattr(args, "resume", True)),
-                start_cursor=start_cursor,
-                progress_cb=_progress,
-            )
-            out: dict[str, object] = {"write": rep.to_dict}
+            try:
+                rep = write_allowlisted_params(
+                    db,
+                    source_run_id=source_run_id,
+                    limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                    only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
+                    dry_run=False,
+                    batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
+                    resume=bool(getattr(args, "resume", True)),
+                    start_cursor=start_cursor,
+                    allow_unknown_keys=bool(getattr(args, "allow_unknown_keys", False)),
+                    progress_cb=_progress,
+                )
+            except ValueError as exc:
+                print(
+                    json.dumps(
+                        {
+                            "code": "ALLOWLIST_VALIDATION_FAILED",
+                            "message": str(exc),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return 1
+            out: dict[str, object] = {
+                "write": rep.to_dict,
+                "allowlist_version": int(rep.allowlist_version or 1),
+                "per_version_written_count": {str(int(rep.allowlist_version or 1)): int(rep.params_written or 0)},
+            }
             if with_candidates:
                 if full_scan:
                     candidates_rows, candidate_meta = compute_udi_candidates_full(
@@ -1730,6 +1752,28 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                 db.commit()
             print(json.dumps(out, ensure_ascii=False, default=str))
             return 0 if int(rep.failed or 0) == 0 else 1
+
+        if bool(getattr(args, "only_allowlisted", False)):
+            rep = write_allowlisted_params(
+                db,
+                source_run_id=source_run_id,
+                limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                only_allowlisted=True,
+                dry_run=True,
+                batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
+                resume=bool(getattr(args, "resume", True)),
+                start_cursor=start_cursor,
+                allow_unknown_keys=bool(getattr(args, "allow_unknown_keys", False)),
+            )
+            out = {
+                "write_preview": rep.to_dict,
+                "allowlist_version": int(rep.allowlist_version or 1),
+                "allowlisted_key_count": int(rep.allowlisted_key_count or 0),
+                "invalid_key_count": int(rep.invalid_key_count or 0),
+                "invalid_keys": list(rep.invalid_keys or []),
+            }
+            print(json.dumps(out, ensure_ascii=False, default=str))
+            return 0
 
         if full_scan:
             top_rows, candidate_meta = compute_udi_candidates_full(

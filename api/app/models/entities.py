@@ -385,6 +385,7 @@ class ProductParam(Base):
     raw_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=False, index=True)
     confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.5)
     extract_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    param_key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, index=True)
     observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

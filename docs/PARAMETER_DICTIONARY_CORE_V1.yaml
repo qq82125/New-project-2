@@ -242,3 +242,83 @@ keys:
     replaced_by: ""
     created_in_version: 1
     tags: ["legacy"]
+  - key: "storage"
+    display_name: "储运条件"
+    description: "UDI结构化存储条件"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "evidence"]
+  - key: "sterilization_method"
+    display_name: "灭菌方式"
+    description: "UDI灭菌方式参数"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "evidence"]
+  - key: "special_storage_cond"
+    display_name: "特殊储存条件"
+    description: "UDI特殊储存条件"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "evidence"]
+  - key: "special_storage_note"
+    display_name: "特殊储存说明"
+    description: "UDI特殊储存说明"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "evidence"]
+  - key: "label_serial_no"
+    display_name: "标签序列号"
+    description: "UDI标签中的序列号"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "label"]
+  - key: "label_prod_date"
+    display_name: "标签生产日期"
+    description: "UDI标签中的生产日期"
+    unit: "date"
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "label"]
+  - key: "label_exp_date"
+    display_name: "标签失效日期"
+    description: "UDI标签中的失效日期"
+    unit: "date"
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "label"]
+  - key: "label_lot"
+    display_name: "标签批号"
+    description: "UDI标签中的批号"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["udi_allowlist", "label"]
