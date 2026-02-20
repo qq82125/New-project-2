@@ -1,0 +1,244 @@
+version: 1
+updated_at: "2026-02-20"
+owner: "data-platform"
+keys:
+  - key: "registration_no"
+    display_name: "注册证号"
+    description: "产品注册证主键锚点"
+    unit: ""
+    source_scopes: ["nmpa", "udi", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "join_key"]
+  - key: "filing_no"
+    display_name: "备案号"
+    description: "备案类证号"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter"]
+  - key: "product_name"
+    display_name: "产品名"
+    description: "产品标准名称"
+    unit: ""
+    source_scopes: ["nmpa", "udi", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "table_column"]
+  - key: "company_name"
+    display_name: "企业名"
+    description: "注册人或生产企业名称"
+    unit: ""
+    source_scopes: ["nmpa", "udi", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "table_column"]
+  - key: "status"
+    display_name: "状态"
+    description: "产品当前状态"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "table_column"]
+  - key: "approval_date"
+    display_name: "批准日期"
+    description: "证件批准日期"
+    unit: "date"
+    source_scopes: ["nmpa"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["timeline"]
+  - key: "expiry_date"
+    display_name: "失效日期"
+    description: "证件失效日期"
+    unit: "date"
+    source_scopes: ["nmpa", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["table_column", "risk"]
+  - key: "udi_di"
+    display_name: "UDI-DI"
+    description: "设备标识符"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["join_key", "table_column"]
+  - key: "track"
+    display_name: "赛道"
+    description: "业务赛道分类"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "dashboard"]
+  - key: "ivd_category"
+    display_name: "IVD分类"
+    description: "IVD场景分类"
+    unit: ""
+    source_scopes: ["nmpa", "udi"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "kpi"]
+  - key: "risk_level"
+    display_name: "风险等级"
+    description: "风险引擎输出等级"
+    unit: ""
+    source_scopes: ["signals", "lri"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "kpi"]
+  - key: "change_type"
+    display_name: "变更类型"
+    description: "新增/更新/注销"
+    unit: ""
+    source_scopes: ["nmpa", "timeline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "timeline"]
+  - key: "date_range"
+    display_name: "时间窗"
+    description: "筛选窗口7d/30d/90d/12m"
+    unit: ""
+    source_scopes: ["search"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter"]
+  - key: "sort"
+    display_name: "排序"
+    description: "搜索结果排序策略"
+    unit: ""
+    source_scopes: ["search"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter"]
+  - key: "view"
+    display_name: "视图"
+    description: "搜索结果视图模式"
+    unit: ""
+    source_scopes: ["search"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter"]
+  - key: "country_or_region"
+    display_name: "国家/地区"
+    description: "由生产地址/注册人住所提取的国家或地区"
+    unit: ""
+    source_scopes: ["offline", "nmpa"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "table_column"]
+  - key: "origin_bucket"
+    display_name: "来源属性"
+    description: "domestic/import/permit/filing/unknown"
+    unit: ""
+    source_scopes: ["offline", "nmpa"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["search_filter", "kpi"]
+  - key: "management_class"
+    display_name: "管理类别"
+    description: "注册证解析出的管理类别"
+    unit: ""
+    source_scopes: ["reg_parser"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["classification"]
+  - key: "regno_parse_level"
+    display_name: "证号解析层级"
+    description: "FULL/PARTIAL/CLASSIFIED/FAIL"
+    unit: ""
+    source_scopes: ["reg_parser", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["quality", "audit"]
+  - key: "regno_parse_reason"
+    display_name: "证号解析原因"
+    description: "解析结果原因码"
+    unit: ""
+    source_scopes: ["reg_parser", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["quality", "audit"]
+  - key: "regno_parse_confidence"
+    display_name: "证号解析置信度"
+    description: "证号解析置信度0到1"
+    unit: ""
+    source_scopes: ["reg_parser", "offline"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["quality"]
+  - key: "issuer_alias"
+    display_name: "旧证机构别名"
+    description: "旧版机构前缀归一别名"
+    unit: ""
+    source_scopes: ["reg_parser"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["legacy"]
+  - key: "action_suffix"
+    display_name: "动作后缀"
+    description: "旧证后缀更/延/补"
+    unit: ""
+    source_scopes: ["reg_parser"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["legacy"]
+  - key: "legacy_seq"
+    display_name: "旧证序列段"
+    description: "旧证可提取主体序列"
+    unit: ""
+    source_scopes: ["reg_parser"]
+    stability: "core"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["legacy"]
