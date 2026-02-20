@@ -90,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
     metrics_recompute_parser = sub.add_parser('metrics:recompute', help='Recompute metrics alias')
     metrics_recompute_parser.add_argument('--scope', default='ivd', choices=['ivd'])
     metrics_recompute_parser.add_argument('--since', default=None, help='YYYY-MM-DD')
+    quality_metrics_parser = sub.add_parser('metrics:quality-compute', help='Compute and optionally persist daily quality metrics')
+    quality_mode = quality_metrics_parser.add_mutually_exclusive_group()
+    quality_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    quality_mode.add_argument('--execute', action='store_true', help='Write daily_quality_metrics')
+    quality_metrics_parser.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
 
     local_supp_parser = sub.add_parser('local_registry_supplement', help='Supplement local products from local registry xlsx/zip files')
     local_supp_parser.add_argument('--folder', required=True, help='Folder containing xlsx/zip files')
@@ -516,6 +521,24 @@ def _run_metrics_recompute(*, scope: str, since: str | None) -> int:
 
         rows = regenerate_daily_metrics(db, days=days)
         print(json.dumps({'ok': True, 'scope': scope, 'since': target_since.isoformat(), 'days': days, 'rows': len(rows)}, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_quality_metrics_compute(args: argparse.Namespace) -> int:
+    from app.services.quality_metrics import compute_daily_quality_metrics, upsert_daily_quality_metrics
+
+    as_of = date.fromisoformat(str(args.as_of)) if getattr(args, "as_of", None) else date.today()
+    dry_run = not bool(getattr(args, "execute", False))
+
+    db = SessionLocal()
+    try:
+        report = compute_daily_quality_metrics(db, as_of=as_of)
+        if not dry_run:
+            upsert_daily_quality_metrics(db, report)
+            db.commit()
+        print(json.dumps({"ok": True, "dry_run": dry_run, **report.as_json()}, ensure_ascii=False, default=str))
         return 0
     finally:
         db.close()
@@ -1639,6 +1662,8 @@ def main() -> None:
         )
     if args.cmd == 'metrics:recompute':
         raise SystemExit(_run_metrics_recompute(scope=str(args.scope), since=args.since))
+    if args.cmd == 'metrics:quality-compute':
+        raise SystemExit(_run_quality_metrics_compute(args))
     if args.cmd == 'source:udi':
         raise SystemExit(_run_source_udi(execute=bool(args.execute), date_label=args.date))
     if args.cmd == 'local_registry_supplement':

@@ -867,6 +867,17 @@ class DailyUdiMetric(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class DailyQualityMetric(Base):
+    __tablename__ = 'daily_quality_metrics'
+
+    metric_date: Mapped[date] = mapped_column('date', Date, primary_key=True)
+    metric_key: Mapped[str] = mapped_column('key', Text, primary_key=True)
+    value: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, default=0)
+    meta: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class User(Base):
     __tablename__ = 'users'
 
