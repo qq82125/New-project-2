@@ -1,11 +1,12 @@
 FROM python:3.12-slim
 
-WORKDIR /app
+WORKDIR /app/api
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt /app/api/requirements.txt
+RUN pip install --no-cache-dir -r /app/api/requirements.txt
 
-COPY . /app/api
+# Keep image input minimal: only runtime app package is needed.
+COPY app /app/api/app
 
 ENV PYTHONPATH=/app/api
 

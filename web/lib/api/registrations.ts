@@ -1,5 +1,5 @@
 import { apiGet } from './client';
-import type { TimelineEvent } from './types';
+import type { RegistrationDiffList, TimelineEvent } from './types';
 
 type ApiEnvelope<T> = {
   code: number;
@@ -69,4 +69,16 @@ export async function getRegistrationSnapshot(no: string, at: string): Promise<u
     { at },
   );
   return unwrapEnvelope(payload);
+}
+
+export async function getRegistrationDiffs(no: string, limit = 5, offset = 0): Promise<RegistrationDiffList> {
+  const payload = await apiGet<RegistrationDiffList | ApiEnvelope<RegistrationDiffList>>(
+    `/api/registrations/${encodeURIComponent(no)}/diffs`,
+    { limit: String(limit), offset: String(offset) },
+  );
+  const data = unwrapEnvelope(payload);
+  return {
+    items: Array.isArray(data?.items) ? data.items : [],
+    total: Number(data?.total || 0),
+  };
 }

@@ -3,13 +3,19 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.pyc
+*.pyo
+*.log
 
 # Local venvs (should never be built into images)
 venv/
 .venv/
 
+# Non-runtime folders
+tests/
+docs/
+scripts/
+
 # Editor/OS noise
 .DS_Store
 .idea/
 .vscode/
-

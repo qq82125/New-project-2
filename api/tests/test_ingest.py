@@ -339,3 +339,65 @@ def test_ingest_filters_invalid_product_name(monkeypatch) -> None:
     assert stats['filtered'] == 1
     assert stats['success'] == 1
     assert called['upsert'] == 1
+
+
+def test_ingest_quality_gate_blocks_semantic_parse_failed_regno(monkeypatch) -> None:
+    from app.services.ingest import ingest_staging_records
+
+    db = FakeDB()
+    calls = {"reg_upsert": 0, "product_upsert": 0}
+
+    monkeypatch.setattr(
+        "app.services.ingest.classify",
+        lambda _raw, version=None: {
+            "is_ivd": True,
+            "ivd_category": "reagent",
+            "ivd_subtypes": [],
+            "reason": {"by": "unit_test", "needs_review": False},
+            "version": "ivd_v1_20260213",
+            "rule_version": 1,
+            "source": "RULE",
+            "confidence": 0.9,
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.ingest.map_raw_record",
+        lambda raw: SimpleNamespace(
+            name=raw.get("name") or "x",
+            reg_no=raw.get("reg_no"),
+            udi_di=raw.get("udi_di") or "U1",
+            status="active",
+            approved_date=None,
+            expiry_date=None,
+            class_name="22",
+            company_name=None,
+            company_country=None,
+            raw=dict(raw),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.ingest.parse_registration_no",
+        lambda _reg: SimpleNamespace(parse_ok=False),
+    )
+
+    def _reg_upsert(*_args, **_kwargs):
+        calls["reg_upsert"] += 1
+        return SimpleNamespace(registration_id=uuid.uuid4(), registration_no="X")
+
+    def _product_upsert(*_args, **_kwargs):
+        calls["product_upsert"] += 1
+        return "added", None, None, None
+
+    monkeypatch.setattr("app.services.ingest.upsert_registration_with_contract", _reg_upsert)
+    monkeypatch.setattr("app.services.ingest.upsert_product_record", _product_upsert)
+
+    stats = ingest_staging_records(
+        db,
+        [{"name": "解析失败样例", "udi_di": "U-PARSE-FAIL", "reg_no": "国械注准TESTBAD"}],
+        source_run_id=1,
+    )
+    assert stats["total"] == 1
+    assert stats["filtered"] == 1
+    assert stats["success"] == 0
+    assert calls["reg_upsert"] == 0
+    assert calls["product_upsert"] == 0

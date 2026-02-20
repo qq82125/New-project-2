@@ -6,7 +6,8 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 
-from app.models import Registration, UdiDiMaster
+from app.models import PendingUdiLink, RawSourceRecord, Registration, UdiDiMaster
+from app.services.normalize_keys import normalize_registration_no
 from app.services.source_contract import write_udi_contract_record
 from it_pg_utils import apply_sql_migrations, require_it_db_url
 
@@ -86,6 +87,22 @@ def test_udi_full_contract_parses_packaging_and_storage_and_enforces_anchor() ->
         # The ok row may create a stub registration (canonical anchor).
         assert db.scalar(select(Registration).where(Registration.registration_no == r1.registration_no_norm)) is not None
 
+        map_row = db.execute(
+            text(
+                """
+                SELECT confidence, match_reason, reversible, linked_by
+                FROM product_udi_map
+                WHERE registration_no = :reg_no AND di = :di
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"reg_no": r1.registration_no_norm, "di": di},
+        ).mappings().first()
+        assert map_row is not None
+        assert float(map_row["confidence"] or 0.0) > 0.0
+        assert str(map_row["match_reason"] or "") != ""
+
         # Anchor gate: missing reg_no must not create any additional registrations.
         assert after_regs - before_regs == 1
 
@@ -94,3 +111,97 @@ def test_udi_full_contract_parses_packaging_and_storage_and_enforces_anchor() ->
         assert master2.has_cert is False
         assert isinstance(master2.storage_json, dict)
         assert master2.storage_json["storages"][0]["type"] == "TEXT"
+
+
+@pytest.mark.integration
+def test_udi_full_contract_quality_gate_blocks_semantic_parse_failed_registration() -> None:
+    url = require_it_db_url()
+    engine = create_engine(url, pool_pre_ping=True)
+    with engine.begin() as conn:
+        apply_sql_migrations(conn)
+
+    tag = uuid4().hex[:12]
+    di = f"06942221705088{tag}"
+    bad_reg = f"国械注准TEST{tag}"
+    bad_reg_norm = normalize_registration_no(bad_reg)
+    assert bad_reg_norm is not None
+
+    row_bad = {
+        "zxxsdycpbs": di,
+        "zczbhhzbapzbh": bad_reg,
+        "sfyzcbayz": "是",
+    }
+
+    with Session(engine) as db:
+        before = int(db.execute(text("SELECT COUNT(1) FROM registrations WHERE registration_no = :n"), {"n": bad_reg_norm}).scalar_one())
+        result = write_udi_contract_record(
+            db,
+            row=row_bad,
+            source="UDI_DI",
+            source_run_id=2,
+            source_url="https://udi.nmpa.gov.cn/download.html",
+            evidence_grade="B",
+        )
+        db.commit()
+
+        after = int(db.execute(text("SELECT COUNT(1) FROM registrations WHERE registration_no = :n"), {"n": bad_reg_norm}).scalar_one())
+        assert before == after
+        assert result.map_written is False
+        assert result.pending_written is True
+
+        raw_row = db.scalar(select(RawSourceRecord).where(RawSourceRecord.id == result.raw_record_id))
+        assert raw_row is not None
+        assert str(raw_row.parse_status or "") in {"PENDING_REG_NO", "FAILED"}
+
+        pending = db.scalar(select(PendingUdiLink).where(PendingUdiLink.di == di))
+        assert pending is not None
+        assert pending.reason_code == "REGNO_PARSE_FAILED"
+
+
+@pytest.mark.integration
+def test_udi_link_auto_mapping_writes_confidence_and_quality_fields() -> None:
+    url = require_it_db_url()
+    engine = create_engine(url, pool_pre_ping=True)
+    with engine.begin() as conn:
+        apply_sql_migrations(conn)
+
+    tag = uuid4().hex[:8]
+    di = f"06942221705199{tag}"
+    reg_no = "国械注准202431001234"
+    row_ok = {
+        "zxxsdycpbs": di,
+        "zczbhhzbapzbh": reg_no,
+        "sfyzcbayz": "是",
+        "product_type": "IVD",
+    }
+
+    with Session(engine) as db:
+        result = write_udi_contract_record(
+            db,
+            row=row_ok,
+            source="UDI_DI",
+            source_run_id=3,
+            source_url="https://udi.nmpa.gov.cn/download.html",
+            evidence_grade="B",
+            confidence=0.55,
+        )
+        db.commit()
+
+        assert result.map_written is True
+        map_row = db.execute(
+            text(
+                """
+                SELECT confidence, match_reason, reversible, linked_by
+                FROM product_udi_map
+                WHERE di = :di AND registration_no = :reg_no
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"di": di, "reg_no": result.registration_no_norm},
+        ).mappings().first()
+        assert map_row is not None
+        assert float(map_row["confidence"] or 0.0) > 0.0
+        assert str(map_row["match_reason"] or "") == "direct_registration_match"
+        assert bool(map_row["reversible"]) is True
+        assert str(map_row["linked_by"] or "") == "UDI_DI"

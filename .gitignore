@@ -16,3 +16,4 @@ staging/
 venv/
 web/.dev.log
 data/
+backups/postgres/

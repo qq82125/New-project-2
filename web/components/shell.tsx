@@ -20,7 +20,8 @@ function AppHeader() {
   const navItems: Array<{ href: string; label: string }> = [
     { href: '/', label: '仪表盘' },
     { href: '/search', label: '搜索' },
-    { href: '/subscriptions', label: '订阅与投递' },
+    { href: '/benchmarks', label: '对标' },
+    { href: '/pro', label: '专业版' },
   ];
 
   return (
@@ -31,8 +32,8 @@ function AppHeader() {
             <span />
           </div>
           <div className="app-brand__text">
-            <div className="app-brand__name">IVD智慧大脑</div>
-            <div className="app-brand__tag">仪表盘 / 搜索 / 订阅与投递</div>
+            <div className="app-brand__name">DeepIVD</div>
+            <div className="app-brand__tag">仪表盘 / 搜索 / 对标 / 专业版</div>
           </div>
         </div>
         <nav className="app-header__nav" aria-label="顶部导航">
@@ -64,8 +65,8 @@ function SideNav({ isAdmin }: { isAdmin: boolean }) {
   const items: Array<{ href: string; label: string }> = [
     { href: '/', label: '仪表盘' },
     { href: '/search', label: '搜索' },
-    { href: '/subscriptions', label: '订阅与投递' },
-    { href: '/account', label: '用户中心' },
+    { href: '/benchmarks', label: '对标' },
+    { href: '/pro', label: '专业版' },
   ];
 
   return (
@@ -129,7 +130,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
     <div className="auth-shell">
       <div className="auth-shell__inner">
         <Link href="/" className="auth-shell__brand">
-          IVD智慧大脑
+          DeepIVD
         </Link>
         {children}
         <p className="auth-shell__hint">登录后可查看仪表盘、搜索与状态页。</p>

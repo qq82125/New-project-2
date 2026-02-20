@@ -1,6 +1,6 @@
 # 字段名表（DB Schema Dictionary）
 
-本文件描述“IVD产品雷达”仓库当前使用的 **Postgres 表与字段名**（以 `migrations/*.sql` 与 `api/app/models/entities.py` 为准）。
+本文件描述“DeepIVD”仓库当前使用的 **Postgres 表与字段名**（以 `migrations/*.sql` 与 `api/app/models/entities.py` 为准）。
 
 说明：
 - `products` 主表严格口径：前台检索/详情等默认只读 `is_ivd = true`。
