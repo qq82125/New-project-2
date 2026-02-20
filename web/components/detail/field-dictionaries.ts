@@ -119,3 +119,29 @@ export function buildRegistrationOverviewGroups(registration: RegistrationSummar
 export function buildProductOverviewGroups(product: ProductFieldSource, registrationNo: string, diList: string[]): FieldGroupDictionary[] {
   return buildFieldGroups(productOverviewConfig, { product, registrationNo, diList });
 }
+
+const FIELD_GROUP_TITLE_BY_KEY: Record<string, string> = {};
+const FIELD_LABEL_BY_KEY: Record<string, string> = {};
+
+for (const group of [...registrationOverviewConfig, ...productOverviewConfig]) {
+  for (const field of group.fields) {
+    FIELD_GROUP_TITLE_BY_KEY[field.key] = group.title;
+    FIELD_LABEL_BY_KEY[field.key] = field.label;
+  }
+}
+
+function normalizeFieldKey(fieldName: string): string {
+  const raw = String(fieldName || '').trim();
+  if (!raw) return '';
+  return raw.split('.').at(-1) || raw;
+}
+
+export function resolveFieldGroupTitle(fieldName: string): string {
+  const key = normalizeFieldKey(fieldName);
+  return FIELD_GROUP_TITLE_BY_KEY[key] || '其他';
+}
+
+export function resolveFieldLabel(fieldName: string): string {
+  const key = normalizeFieldKey(fieldName);
+  return FIELD_LABEL_BY_KEY[key] || key || '未知字段';
+}

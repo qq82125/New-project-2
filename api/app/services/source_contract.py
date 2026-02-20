@@ -16,6 +16,7 @@ from app.models import (
     ChangeLog,
     ConflictQueue,
     PendingUdiLink,
+    Product,
     ProductUdiMap,
     RawSourceRecord,
     Registration,
@@ -920,6 +921,72 @@ def write_udi_contract_record(
         db.execute(master_stmt)
 
     if reg_norm:
+        def _ensure_anchor_product(registration_id: UUID, registration_no: str, payload: dict[str, Any]) -> None:
+            # Keep one lightweight "anchor product" so search/workbench can reach this registration.
+            product = db.scalar(
+                select(Product)
+                .where(Product.registration_id == registration_id)
+                .order_by(Product.updated_at.desc(), Product.created_at.desc())
+                .limit(1)
+            )
+            if product is None:
+                product = db.scalar(select(Product).where(Product.reg_no == registration_no).order_by(Product.updated_at.desc()).limit(1))
+            if product is None:
+                product = db.scalar(select(Product).where(Product.udi_di == f"reg:{registration_no}").limit(1))
+
+            name = (
+                _pick_text(payload, "product_name", "name", "catalog_item_std", "catalog_item_raw")
+                or registration_no
+            )[:500]
+            status = (_pick_text(payload, "status", "registration_status") or "UNKNOWN")[:20]
+            ivd_category = _pick_text(payload, "ivd_category", "category", "product_type", "cplb")
+
+            if product is None:
+                product = Product(
+                    udi_di=f"reg:{registration_no}",
+                    reg_no=registration_no,
+                    name=name,
+                    status=status,
+                    approved_date=None,
+                    expiry_date=None,
+                    class_name=None,
+                    model=None,
+                    specification=None,
+                    category=None,
+                    is_ivd=True,
+                    ivd_category=ivd_category,
+                    ivd_subtypes=None,
+                    ivd_reason=None,
+                    ivd_version=1,
+                    ivd_source="UDI_CONTRACT",
+                    ivd_confidence=0.40,
+                    company_id=None,
+                    registration_id=registration_id,
+                    raw_json={"_stub": {"source_hint": "UDI", "verified_by_nmpa": False, "evidence_level": "LOW"}},
+                    raw={},
+                )
+                db.add(product)
+                return
+
+            changed = False
+            if not getattr(product, "registration_id", None):
+                product.registration_id = registration_id
+                changed = True
+            if not str(getattr(product, "reg_no", "") or "").strip():
+                product.reg_no = registration_no
+                changed = True
+            if not str(getattr(product, "name", "") or "").strip():
+                product.name = name
+                changed = True
+            if not str(getattr(product, "status", "") or "").strip():
+                product.status = status
+                changed = True
+            if getattr(product, "is_ivd", None) is None:
+                product.is_ivd = True
+                changed = True
+            if changed:
+                db.add(product)
+
         reg_res = upsert_registration_with_contract(
             db,
             registration_no=reg_norm,
@@ -958,6 +1025,7 @@ def write_udi_contract_record(
             },
         )
         db.execute(map_stmt)
+        _ensure_anchor_product(reg_res.registration_id, reg_norm, row)
         # Resolve existing pending item if direct mapping succeeded.
         db.execute(
             text(

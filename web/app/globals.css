@@ -1,12 +1,12 @@
 :root {
-  --bg: #f3f7fb;
+  --bg: #f4f7ff;
   --panel: #ffffff;
-  --ink: #0f1b2d;
-  --muted: #5e6f86;
-  --accent: #1d4ed8;
-  --accent-2: #1e40af;
-  --border: #d7e3f1;
-  --danger: #b42318;
+  --ink: #0f172a;
+  --muted: #5b6b89;
+  --accent: #315cff;
+  --accent-2: #2548d9;
+  --border: #dce5ff;
+  --danger: #c52828;
   --shadow: 0 16px 38px rgba(12, 28, 54, 0.08), 0 2px 10px rgba(12, 28, 54, 0.06);
   --shadow-sm: 0 10px 22px rgba(12, 28, 54, 0.06), 0 2px 8px rgba(12, 28, 54, 0.05);
   --radius: 14px;
@@ -23,8 +23,8 @@ body {
   font-family: "Source Sans 3", "Noto Sans SC", ui-sans-serif, sans-serif;
   color: var(--ink);
   background:
-    radial-gradient(circle at 0% 0%, rgba(226, 236, 250, 1) 0%, transparent 45%),
-    radial-gradient(circle at 100% 0%, rgba(238, 244, 251, 1) 0%, transparent 42%),
+    radial-gradient(circle at 0% 0%, rgba(231, 239, 255, 1) 0%, transparent 45%),
+    radial-gradient(circle at 100% 0%, rgba(241, 246, 255, 1) 0%, transparent 42%),
     var(--bg);
 }
 
@@ -152,7 +152,7 @@ button {
 .spark-bar {
   height: 8px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #60a5fa, #1d4ed8);
+  background: linear-gradient(90deg, #315cff, #7b6dff);
 }
 
 .dashboard-compact {
@@ -238,7 +238,7 @@ button {
   width: 34px;
   height: 34px;
   border-radius: 12px;
-  background: linear-gradient(135deg, rgba(29, 78, 216, 1), rgba(89, 169, 142, 1));
+  background: linear-gradient(135deg, rgba(49, 92, 255, 1), rgba(123, 109, 255, 1), rgba(149, 213, 255, 1));
   box-shadow: 0 12px 22px rgba(29, 78, 216, 0.2);
   position: relative;
   flex: 0 0 auto;
@@ -516,7 +516,7 @@ button {
 }
 
 .ui-btn--default {
-  background: linear-gradient(135deg, #2563eb, var(--accent-2));
+  background: linear-gradient(135deg, #315cff 0%, #7b6dff 55%, #95d5ff 100%);
   border-color: rgba(29, 78, 216, 0.34);
   color: #fff;
   box-shadow: 0 12px 22px rgba(29, 78, 216, 0.18);
@@ -696,21 +696,21 @@ button {
 }
 
 .ui-badge--success {
-  border-color: rgba(29, 78, 216, 0.28);
-  background: rgba(29, 78, 216, 0.1);
-  color: rgba(30, 64, 175, 1);
+  border-color: rgba(14, 165, 164, 0.3);
+  background: rgba(14, 165, 164, 0.11);
+  color: rgba(13, 124, 123, 1);
 }
 
 .ui-badge--warning {
-  border-color: rgba(178, 90, 0, 0.28);
-  background: rgba(178, 90, 0, 0.1);
-  color: rgba(120, 56, 0, 1);
+  border-color: rgba(208, 135, 0, 0.3);
+  background: rgba(208, 135, 0, 0.12);
+  color: rgba(133, 84, 0, 1);
 }
 
 .ui-badge--danger {
-  border-color: rgba(180, 35, 24, 0.28);
-  background: rgba(180, 35, 24, 0.1);
-  color: rgba(115, 20, 14, 1);
+  border-color: rgba(197, 40, 40, 0.3);
+  background: rgba(197, 40, 40, 0.11);
+  color: rgba(137, 27, 27, 1);
 }
 
 .ui-skeleton {

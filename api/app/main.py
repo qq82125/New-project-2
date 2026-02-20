@@ -30,11 +30,14 @@ from app.models import (
     MethodologyMaster,
     LriScore,
     NmpaSnapshot,
+    FieldDiff,
     PendingDocument,
     PendingRecord,
     PendingUdiLink,
     ProcurementLot,
+    Product,
     ProductUdiMap,
+    ProductParam,
     ProductVariant,
     ProductRejected,
     RawDocument,
@@ -237,6 +240,259 @@ def _ok(data):
     return {'code': 0, 'message': 'ok', 'data': data}
 
 
+_DIFF_GROUPS: dict[str, tuple[str, ...]] = {
+    '基本信息': ('registration_no', 'filing_no', 'status', 'approval_date', 'expiry_date', 'company'),
+    '适用范围': ('track', 'is_domestic', 'ivd_category', 'category', 'class', 'class_name'),
+    '结构组成': ('udi_di', 'di', 'di_list', 'model', 'model_spec', 'specification', 'manufacturer', 'packaging'),
+}
+
+
+def _group_for_field_name(field_name: str) -> str:
+    raw = str(field_name or '').strip().lower()
+    if not raw:
+        return '其他'
+    key = raw.split('.')[-1]
+    for group, fields in _DIFF_GROUPS.items():
+        if key in fields:
+            return group
+    return '其他'
+
+
+def _iso(v) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, dt_date):
+        return v.isoformat()
+    return str(v)
+
+
+def _to_float(v, default: float = 0.0) -> float:
+    try:
+        if v is None:
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def _derive_risk_level(*, status: str | None, expiry_date: dt_date | None, change_count_30d: int) -> str:
+    x = str(status or '').strip().lower()
+    if x in {'cancel', 'cancelled', 'canceled', 'inactive', 'invalid'}:
+        return 'high'
+    if change_count_30d >= 10:
+        return 'high'
+    if change_count_30d >= 3:
+        return 'medium'
+    if expiry_date:
+        days_left = (expiry_date - dt_date.today()).days
+        if days_left <= 90:
+            return 'high'
+        if days_left <= 180:
+            return 'medium'
+    return 'low'
+
+
+@app.post('/api/registrations/batch')
+def get_registrations_batch(payload: dict, db: Session = Depends(get_db)) -> dict:
+    nos_raw = payload.get('nos')
+    if not isinstance(nos_raw, list):
+        raise HTTPException(status_code=400, detail='nos must be a list')
+
+    input_nos = [normalize_registration_no(str(x)) for x in nos_raw]
+    normalized_nos = [x for x in input_nos if x]
+    normalized_nos = list(dict.fromkeys(normalized_nos))
+    if len(normalized_nos) > 500:
+        raise HTTPException(status_code=400, detail='nos exceeds max 500')
+
+    if not normalized_nos:
+        return _ok({'items': [], 'total': 0})
+
+    regs = (
+        db.execute(select(Registration).where(Registration.registration_no.in_(normalized_nos)))
+        .scalars()
+        .all()
+    )
+    if not regs:
+        return _ok({'items': [], 'total': 0})
+
+    reg_by_no = {r.registration_no: r for r in regs}
+    reg_by_id = {r.id: r for r in regs}
+    reg_ids = list(reg_by_id.keys())
+    reg_nos = list(reg_by_no.keys())
+
+    product_rows = (
+        db.execute(
+            select(
+                Product.id,
+                Product.registration_id,
+                Product.name,
+                Product.status,
+                Product.expiry_date,
+                Product.ivd_category,
+                Product.category,
+                Product.updated_at,
+                Company.name.label('company_name'),
+            )
+            .select_from(Product)
+            .outerjoin(Company, Company.id == Product.company_id)
+            .where(Product.registration_id.in_(reg_ids))
+            .order_by(Product.updated_at.desc(), Product.created_at.desc())
+        )
+        .all()
+    )
+
+    primary_product_by_reg: dict = {}
+    product_ids_by_reg: dict = {rid: [] for rid in reg_ids}
+    product_id_to_reg_id: dict = {}
+    for row in product_rows:
+        if row.registration_id not in reg_by_id:
+            continue
+        if row.registration_id not in primary_product_by_reg:
+            primary_product_by_reg[row.registration_id] = row
+        product_ids_by_reg[row.registration_id].append(row.id)
+        product_id_to_reg_id[row.id] = row.registration_id
+
+    di_count_by_reg: dict = {rid: 0 for rid in reg_ids}
+    di_rows = (
+        db.execute(
+            select(ProductVariant.registration_id, func.count(ProductVariant.id))
+            .where(ProductVariant.registration_id.in_(reg_ids))
+            .group_by(ProductVariant.registration_id)
+        )
+        .all()
+    )
+    for rid, cnt in di_rows:
+        di_count_by_reg[rid] = int(cnt or 0)
+
+    legacy_di_rows = (
+        db.execute(
+            select(ProductVariant.registry_no, func.count(ProductVariant.id))
+            .where(
+                ProductVariant.registration_id.is_(None),
+                ProductVariant.registry_no.in_(reg_nos),
+            )
+            .group_by(ProductVariant.registry_no)
+        )
+        .all()
+    )
+    for reg_no, cnt in legacy_di_rows:
+        reg = reg_by_no.get(str(reg_no))
+        if reg:
+            di_count_by_reg[reg.id] = int(di_count_by_reg.get(reg.id, 0) + int(cnt or 0))
+
+    cutoff_dt = datetime.utcnow() - timedelta(days=30)
+    cutoff_date = cutoff_dt.date()
+
+    reg_change_rows = (
+        db.execute(
+            select(ChangeLog.entity_id, func.count(ChangeLog.id))
+            .where(
+                ChangeLog.entity_type == 'registration',
+                ChangeLog.entity_id.in_(reg_ids),
+                ChangeLog.change_date >= cutoff_dt,
+            )
+            .group_by(ChangeLog.entity_id)
+        )
+        .all()
+    )
+    change_count_by_reg: dict = {rid: int(cnt or 0) for rid, cnt in reg_change_rows}
+
+    prod_change_rows = (
+        db.execute(
+            select(Product.registration_id, func.count(ChangeLog.id))
+            .select_from(ChangeLog)
+            .join(Product, Product.id == ChangeLog.product_id)
+            .where(
+                Product.registration_id.in_(reg_ids),
+                ChangeLog.change_date >= cutoff_dt,
+            )
+            .group_by(Product.registration_id)
+        )
+        .all()
+    )
+    for rid, cnt in prod_change_rows:
+        change_count_by_reg[rid] = int(change_count_by_reg.get(rid, 0) + int(cnt or 0))
+
+    fallback_diff_rows = (
+        db.execute(
+            select(FieldDiff.registration_id, func.count(FieldDiff.id))
+            .select_from(FieldDiff)
+            .join(NmpaSnapshot, NmpaSnapshot.id == FieldDiff.snapshot_id)
+            .where(
+                FieldDiff.registration_id.in_(reg_ids),
+                NmpaSnapshot.snapshot_date >= cutoff_date,
+            )
+            .group_by(FieldDiff.registration_id)
+        )
+        .all()
+    )
+    fallback_diff_by_reg = {rid: int(cnt or 0) for rid, cnt in fallback_diff_rows}
+
+    param_codes_by_reg: dict = {rid: set() for rid in reg_ids}
+    if product_id_to_reg_id:
+        param_by_product_rows = (
+            db.execute(
+                select(ProductParam.product_id, ProductParam.param_code).where(
+                    ProductParam.product_id.in_(list(product_id_to_reg_id.keys()))
+                )
+            )
+            .all()
+        )
+        for product_id, param_code in param_by_product_rows:
+            rid = product_id_to_reg_id.get(product_id)
+            if rid and param_code:
+                param_codes_by_reg[rid].add(str(param_code))
+
+    param_by_reg_no_rows = (
+        db.execute(
+            select(ProductParam.registry_no, ProductParam.param_code).where(ProductParam.registry_no.in_(reg_nos))
+        )
+        .all()
+    )
+    for reg_no, param_code in param_by_reg_no_rows:
+        reg = reg_by_no.get(str(reg_no or ''))
+        if reg and param_code:
+            param_codes_by_reg[reg.id].add(str(param_code))
+
+    items = []
+    for reg_no in normalized_nos:
+        reg = reg_by_no.get(reg_no)
+        if not reg:
+            continue
+        primary = primary_product_by_reg.get(reg.id)
+        status = str((getattr(primary, 'status', None) or reg.status or '')).strip() or None
+        expiry = getattr(primary, 'expiry_date', None) or reg.expiry_date
+        track = str((getattr(primary, 'ivd_category', None) or getattr(primary, 'category', None) or '')).strip() or None
+        company = str((getattr(primary, 'company_name', None) or '')).strip() or None
+        name = str((getattr(primary, 'name', None) or reg.registration_no)).strip()
+        changes = int(change_count_by_reg.get(reg.id, 0) or 0)
+        if changes == 0:
+            changes = int(fallback_diff_by_reg.get(reg.id, 0) or 0)
+        di_count = int(di_count_by_reg.get(reg.id, 0) or 0)
+        params_coverage = len(param_codes_by_reg.get(reg.id, set()))
+        risk_level = _derive_risk_level(status=status, expiry_date=expiry, change_count_30d=changes)
+
+        items.append(
+            {
+                'registration_no': reg.registration_no,
+                'name': name,
+                'company': company,
+                'status': status,
+                'expiry': _iso(expiry),
+                'track': track,
+                'di_count': di_count,
+                'change_count_30d': changes,
+                'params_coverage': params_coverage,
+                'risk_level': risk_level,
+                'risk_method': 'heuristic',
+            }
+        )
+
+    return _ok({'items': items, 'total': len(items)})
+
+
 @app.get('/api/registrations/{registration_no}')
 def get_registration_detail(registration_no: str, db: Session = Depends(get_db)) -> ApiResponseRegistration:
     reg_no_norm = normalize_registration_no(str(registration_no))
@@ -288,6 +544,147 @@ def get_registration_detail(registration_no: str, db: Session = Depends(get_db))
             verified_by_nmpa=verified_by_nmpa,
             variants=items,
         )
+    )
+
+
+@app.get('/api/registrations/{registration_no}/diffs')
+def get_registration_diffs(
+    registration_no: str,
+    limit: int = Query(5, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    reg_no_norm = normalize_registration_no(str(registration_no))
+    if not reg_no_norm:
+        raise HTTPException(status_code=400, detail='invalid registration_no')
+
+    reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
+    if reg is None:
+        raise HTTPException(status_code=404, detail='registration not found')
+
+    rows = (
+        db.execute(
+            select(
+                NmpaSnapshot.id.label('snapshot_id'),
+                NmpaSnapshot.snapshot_date.label('snapshot_date'),
+                NmpaSnapshot.created_at.label('snapshot_created_at'),
+                NmpaSnapshot.source_url.label('snapshot_source_url'),
+                RawDocument.id.label('raw_document_id'),
+                RawDocument.source.label('raw_source'),
+                RawDocument.source_url.label('raw_source_url'),
+                RawDocument.fetched_at.label('raw_fetched_at'),
+                FieldDiff.field_name.label('field_name'),
+                FieldDiff.old_value.label('old_value'),
+                FieldDiff.new_value.label('new_value'),
+            )
+            .select_from(FieldDiff)
+            .join(NmpaSnapshot, NmpaSnapshot.id == FieldDiff.snapshot_id)
+            .outerjoin(RawDocument, RawDocument.id == NmpaSnapshot.raw_document_id)
+            .where(FieldDiff.registration_id == reg.id)
+            .order_by(NmpaSnapshot.snapshot_date.desc(), NmpaSnapshot.created_at.desc(), FieldDiff.created_at.desc())
+        )
+        .all()
+    )
+
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        snap_id = str(row.snapshot_id)
+        observed_at = row.raw_fetched_at or row.snapshot_created_at or row.snapshot_date
+        if snap_id not in grouped:
+            grouped[snap_id] = {
+                'snapshot_id': snap_id,
+                'observed_at': observed_at,
+                'snapshot_date': row.snapshot_date,
+                'snapshot_key': row.snapshot_date.isoformat() if row.snapshot_date else None,
+                'source': row.raw_source or 'nmpa_snapshot',
+                'source_url': row.raw_source_url or row.snapshot_source_url,
+                'diffs': [],
+            }
+        grouped[snap_id]['diffs'].append(
+            {
+                'field': row.field_name,
+                'group': _group_for_field_name(row.field_name),
+                'before': row.old_value,
+                'after': row.new_value,
+                'source': row.raw_source or 'nmpa_snapshot',
+                'evidence_raw_document_id': str(row.raw_document_id) if row.raw_document_id else None,
+            }
+        )
+
+    events = sorted(
+        grouped.values(),
+        key=lambda x: (
+            x.get('observed_at') or dt_date.min,
+            x.get('snapshot_date') or dt_date.min,
+        ),
+        reverse=True,
+    )
+    total = len(events)
+    page_items = events[offset : offset + limit]
+
+    items = [
+        {
+            'observed_at': _iso(item.get('observed_at')),
+            'snapshot_key': item.get('snapshot_key'),
+            'source': item.get('source'),
+            'source_url': item.get('source_url'),
+            'diffs': item.get('diffs', []),
+        }
+        for item in page_items
+    ]
+    return _ok({'items': items, 'total': total})
+
+
+@app.get('/api/evidence/{raw_document_id}')
+def get_evidence_detail(raw_document_id: UUID, db: Session = Depends(get_db)) -> dict:
+    raw_doc = db.get(RawDocument, raw_document_id)
+    if raw_doc is None:
+        raise HTTPException(status_code=404, detail='evidence not found')
+
+    excerpt_rows = (
+        db.execute(
+            select(
+                ProductParam.evidence_text,
+                ProductParam.param_code,
+                ProductParam.evidence_page,
+                ProductParam.registry_no,
+                ProductParam.observed_at,
+            )
+            .where(ProductParam.raw_document_id == raw_document_id)
+            .order_by(ProductParam.observed_at.desc(), ProductParam.created_at.desc())
+            .limit(30)
+        )
+        .all()
+    )
+
+    excerpts = []
+    observed_at = raw_doc.fetched_at
+    for row in excerpt_rows:
+        if row.observed_at and (observed_at is None or row.observed_at > observed_at):
+            observed_at = row.observed_at
+        excerpts.append(
+            {
+                'text': row.evidence_text,
+                'field': row.param_code,
+                'page': row.evidence_page,
+                'registration_no': row.registry_no,
+            }
+        )
+
+    return _ok(
+        {
+            'id': str(raw_doc.id),
+            'source_name': str(raw_doc.source or ''),
+            'source_url': str(raw_doc.source_url or ''),
+            'observed_at': _iso(observed_at),
+            'title': None,
+            'excerpts': excerpts,
+            'parse_meta': {
+                'parse_status': getattr(raw_doc, 'parse_status', None),
+                'run_id': getattr(raw_doc, 'run_id', None),
+                'fetched_at': _iso(getattr(raw_doc, 'fetched_at', None)),
+            },
+        }
     )
 
 
@@ -1265,6 +1662,10 @@ def search(
     company: str | None = Query(default=None),
     reg_no: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    track: str | None = Query(default=None),
+    change_type: str | None = Query(default=None, description='new|update|cancel'),
+    date_range: str | None = Query(default=None, description='7d|30d|90d|12m'),
+    sort: str | None = Query(default=None, description='recency|risk|lri|competition'),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     sort_by: SortBy = Query(default='updated_at'),
@@ -1304,6 +1705,10 @@ def search(
         company=company,
         reg_no=reg_no,
         status=status,
+        track=track,
+        change_type=change_type,
+        date_range=date_range,
+        sort=sort,
         include_unverified=bool(include_unverified),
         page=page,
         page_size=page_size,

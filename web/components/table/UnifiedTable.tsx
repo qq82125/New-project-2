@@ -73,6 +73,16 @@ export default function UnifiedTable({
                 if (col === 'status') return <td key={col}>{row.status || '-'}</td>;
                 if (col === 'expiry_date') return <td key={col}>{row.expiry_date || '-'}</td>;
                 if (col === 'udi_di') return <td key={col}>{row.udi_di || '-'}</td>;
+                if (col === 'change_count_30d') return <td key={col}>{row.change_count_30d ?? '-'}</td>;
+                if (col === 'di_count') return <td key={col}>{row.di_count ?? '-'}</td>;
+                if (col === 'params_coverage') return <td key={col}>{row.params_coverage ?? '-'}</td>;
+                if (col === 'risk_level') {
+                  return (
+                    <td key={col}>
+                      {row.risk_level ? <UnifiedBadge token={{ kind: 'risk', value: row.risk_level }} /> : '-'}
+                    </td>
+                  );
+                }
                 if (col === 'badges') {
                   return (
                     <td key={col}>

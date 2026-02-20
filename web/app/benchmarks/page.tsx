@@ -7,13 +7,17 @@ import BenchmarkTable from '../../components/benchmarks/BenchmarkTable';
 import { useBenchmarkSets } from '../../lib/benchmarks-store';
 import type { UnifiedTableRow } from '../../components/table/columns';
 
-type RegistrationSummary = {
+type BenchmarkBatchItem = {
   registration_no: string;
+  name?: string | null;
   company?: string | null;
   track?: string | null;
   status?: string | null;
-  expiry_date?: string | null;
-  variants?: Array<{ di?: string | null }>;
+  expiry?: string | null;
+  di_count?: number | null;
+  change_count_30d?: number | null;
+  params_coverage?: number | null;
+  risk_level?: string | null;
 };
 
 type ApiEnvelope<T> = {
@@ -22,15 +26,25 @@ type ApiEnvelope<T> = {
   data: T;
 };
 
-async function fetchRegistration(no: string): Promise<RegistrationSummary | null> {
+type BatchData = {
+  items: BenchmarkBatchItem[];
+  total: number;
+};
+
+async function fetchRegistrationBatch(nos: string[]): Promise<BenchmarkBatchItem[]> {
   try {
-    const res = await fetch(`/api/registrations/${encodeURIComponent(no)}`, { cache: 'no-store' });
-    if (!res.ok) return null;
-    const body = (await res.json()) as ApiEnvelope<RegistrationSummary>;
-    if (body.code !== 0 || !body.data) return null;
-    return body.data;
+    const res = await fetch('/api/registrations/batch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nos }),
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as ApiEnvelope<BatchData>;
+    if (body.code !== 0 || !body.data || !Array.isArray(body.data.items)) return [];
+    return body.data.items;
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -47,19 +61,22 @@ export default function BenchmarksPage() {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const results = await Promise.all(activeSet.items.map((no) => fetchRegistration(no)));
+      const results = await fetchRegistrationBatch(activeSet.items);
       if (cancelled) return;
       const back = encodeURIComponent(`/benchmarks?set=${encodeURIComponent(activeSet.id)}`);
       const mapped: UnifiedTableRow[] = results
-        .filter((item): item is RegistrationSummary => Boolean(item))
         .map((item) => ({
           id: item.registration_no,
-          product_name: item.track || item.registration_no,
+          product_name: item.name || item.track || item.registration_no,
           company_name: item.company || '-',
           registration_no: item.registration_no,
           status: item.status || '-',
-          expiry_date: item.expiry_date || '-',
-          udi_di: item.variants?.[0]?.di || '-',
+          expiry_date: item.expiry || '-',
+          udi_di: '-',
+          change_count_30d: Number(item.change_count_30d || 0),
+          di_count: Number(item.di_count || 0),
+          params_coverage: Number(item.params_coverage || 0),
+          risk_level: item.risk_level || 'low',
           badges: [
             ...(item.track ? [{ kind: 'track' as const, value: item.track }] : []),
           ],

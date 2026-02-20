@@ -4,8 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../..
 import CopyButton from '../../../components/common/CopyButton';
 import StatusBadge from '../../../components/common/StatusBadge';
 import AddToBenchmarkButton from '../../../components/common/AddToBenchmarkButton';
-import { getRegistration, getRegistrationTimeline } from '../../../lib/api/registrations';
-import type { TimelineEvent } from '../../../lib/api/types';
+import { getRegistration, getRegistrationDiffs, getRegistrationTimeline } from '../../../lib/api/registrations';
+import type { RegistrationDiffItem, TimelineEvent } from '../../../lib/api/types';
 import { ApiHttpError } from '../../../lib/api/client';
 import { toChangeRows, toEvidenceRows } from '../../../lib/detail';
 import { buildSearchUrl } from '../../../lib/search-filters';
@@ -150,9 +150,10 @@ export default async function RegistrationDetailPage({
     ? backRaw
     : buildSearchUrl({ q: registration_no });
 
-  const [registrationResult, timelineResult] = await Promise.allSettled([
+  const [registrationResult, timelineResult, diffsResult] = await Promise.allSettled([
     getRegistration(registration_no),
     getRegistrationTimeline(registration_no),
+    getRegistrationDiffs(registration_no, 5, 0),
   ]);
 
   const registrationNotFound = registrationResult.status === 'rejected' && isNotFound(registrationResult.reason);
@@ -160,6 +161,9 @@ export default async function RegistrationDetailPage({
 
   const registration = registrationResult.status === 'fulfilled' ? registrationResult.value : null;
   const timeline = timelineResult.status === 'fulfilled' ? timelineResult.value : [];
+  const diffItems: RegistrationDiffItem[] =
+    diffsResult.status === 'fulfilled' && Array.isArray(diffsResult.value.items) ? diffsResult.value.items : [];
+  const diffTotal = diffsResult.status === 'fulfilled' ? diffsResult.value.total : 0;
 
   const variants = registration?.variants || [];
   const evidenceRows = toEvidenceRows(timeline as TimelineEvent[]);
@@ -232,7 +236,12 @@ export default async function RegistrationDetailPage({
                       timelineResult.status === 'rejected' && !timelineNotFound ? (
                         <ErrorState text={`变更加载失败（${formatError(timelineResult.reason)}）`} />
                       ) : (
-                        <ChangesTimeline changes={changeRows} />
+                        <ChangesTimeline
+                          changes={changeRows}
+                          registrationNo={registration.registration_no}
+                          initialDiffItems={diffItems}
+                          initialDiffTotal={diffTotal}
+                        />
                       ),
                   },
                   {

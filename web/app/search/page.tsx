@@ -78,30 +78,41 @@ function parsePage(raw: string | null | undefined, fallback: number): number {
 
 function mapFiltersToApi(filters: SearchFilters): {
   q?: string;
+  track?: string;
   company?: string;
   status?: string;
+  change_type?: string;
+  date_range?: string;
+  sort?: string;
   sort_by: 'updated_at' | 'approved_date' | 'expiry_date' | 'name';
   sort_order: 'asc' | 'desc';
 } {
-  let status = filters.status || undefined;
-  if (!status && filters.change_type === 'cancel') {
-    status = 'cancelled';
-  }
-  // TODO(PR0): `track/change_type(new|update)/date_range/risk/sort(risk|lri|competition)` are preserved in URL for sharing,
-  // but current backend /api/search does not support them yet.
-  let sort_by: 'updated_at' | 'approved_date' | 'expiry_date' | 'name' = 'approved_date';
+  let sort_by: 'updated_at' | 'approved_date' | 'expiry_date' | 'name' = 'updated_at';
   let sort_order: 'asc' | 'desc' = 'desc';
-  if (filters.sort === 'recency') {
-    sort_by = 'approved_date';
-    sort_order = 'desc';
-  }
+  // Backend currently only executes `sort=recency`; other values are accepted and downgraded.
+  const backendSort = filters.sort === 'recency' ? 'recency' : undefined;
   return {
     q: filters.q || undefined,
+    track: filters.track || undefined,
     company: filters.company || undefined,
-    status,
+    status: filters.status || undefined,
+    change_type: filters.change_type || undefined,
+    date_range: filters.date_range || undefined,
+    sort: backendSort,
     sort_by,
     sort_order,
   };
+}
+
+function buildDegradeHints(filters: SearchFilters): string[] {
+  const hints: string[] = [];
+  if (filters.risk) {
+    hints.push('risk 过滤后端暂未支持，已降级为常规检索。');
+  }
+  if (filters.sort && filters.sort !== 'recency') {
+    hints.push(`sort=${filters.sort} 暂未启用，已降级为 recency。`);
+  }
+  return hints;
 }
 
 function buildPagedSearchUrl(filters: SearchFilters, page: number, pageSize: number): string {
@@ -142,18 +153,24 @@ async function SearchResultsSection({
   pageSize,
   isPro,
   currentSearchHref,
+  degradeHints,
 }: {
   filters: SearchFilters;
   page: number;
   pageSize: number;
   isPro: boolean;
   currentSearchHref: string;
+  degradeHints: string[];
 }) {
   const apiMapped = mapFiltersToApi(filters);
   const query = qs({
     q: apiMapped.q,
+    track: apiMapped.track,
     company: apiMapped.company,
     status: apiMapped.status,
+    change_type: apiMapped.change_type,
+    date_range: apiMapped.date_range,
+    sort: apiMapped.sort,
     page,
     page_size: pageSize,
     sort_by: apiMapped.sort_by,
@@ -242,6 +259,7 @@ async function SearchResultsSection({
             <CardTitle>结果列表</CardTitle>
             <CardDescription>
               统一列顺序与 Badge 规则。{signalError ? `信号加载降级：${signalError}` : '点击行进入详情。'}
+              {degradeHints.length ? ` ${degradeHints.join(' ')}` : ''}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -309,6 +327,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
   const queryString = urlParams.toString();
   const currentSearchHref = queryString ? `/search?${queryString}` : '/search';
   const exportHref = `/api/export/search.csv${qs({ q: filters.q, company: filters.company })}`;
+  const degradeHints = buildDegradeHints(filters);
 
   return (
     <div className="grid">
@@ -335,6 +354,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
           pageSize={pageSize}
           isPro={isPro}
           currentSearchHref={currentSearchHref}
+          degradeHints={degradeHints}
         />
       </Suspense>
     </div>
