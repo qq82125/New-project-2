@@ -59,6 +59,11 @@ def _day_end(target: date) -> date:
     return target + timedelta(days=1)
 
 
+def _window_start(as_of: date, *, window_days: int) -> date:
+    days = max(1, int(window_days))
+    return as_of - timedelta(days=days - 1)
+
+
 def _has_registration_semantic_columns(db: Session) -> bool:
     cols = db.execute(
         text(
@@ -75,7 +80,8 @@ def _has_registration_semantic_columns(db: Session) -> bool:
     return {"parse_ok", "regno_type", "is_legacy_format"}.issubset(got)
 
 
-def _compute_regno_metrics(db: Session, *, as_of: date) -> dict[str, QualityMetricEntry]:
+def _compute_regno_metrics(db: Session, *, as_of: date, window_days: int) -> dict[str, QualityMetricEntry]:
+    window_start = _window_start(as_of, window_days=window_days)
     day_end = _day_end(as_of)
     if _has_registration_semantic_columns(db):
         row = (
@@ -88,10 +94,11 @@ def _compute_regno_metrics(db: Session, *, as_of: date) -> dict[str, QualityMetr
                       SUM(CASE WHEN COALESCE(regno_type, 'unknown') = 'unknown' THEN 1 ELSE 0 END) AS unknown_count,
                       SUM(CASE WHEN is_legacy_format IS TRUE THEN 1 ELSE 0 END) AS legacy_count
                     FROM registrations
-                    WHERE created_at < :day_end
+                    WHERE created_at >= :window_start
+                      AND created_at < :day_end
                     """
                 ),
-                {"day_end": day_end},
+                {"day_end": day_end, "window_start": window_start},
             )
             .mappings()
             .first()
@@ -107,10 +114,11 @@ def _compute_regno_metrics(db: Session, *, as_of: date) -> dict[str, QualityMetr
                 """
                 SELECT registration_no
                 FROM registrations
-                WHERE created_at < :day_end
+                WHERE created_at >= :window_start
+                  AND created_at < :day_end
                 """
             ),
-            {"day_end": day_end},
+            {"day_end": day_end, "window_start": window_start},
         ).fetchall()
         total = len(rows)
         parse_ok_count = 0
@@ -129,15 +137,15 @@ def _compute_regno_metrics(db: Session, *, as_of: date) -> dict[str, QualityMetr
     return {
         "regno_parse_ok_rate": QualityMetricEntry(
             value=_ratio(parse_ok_count, total),
-            meta={"total": total, "parse_ok_count": parse_ok_count},
+            meta={"total": total, "parse_ok_count": parse_ok_count, "window_days": int(window_days)},
         ),
         "regno_unknown_rate": QualityMetricEntry(
             value=_ratio(unknown_count, total),
-            meta={"total": total, "unknown_count": unknown_count},
+            meta={"total": total, "unknown_count": unknown_count, "window_days": int(window_days)},
         ),
         "legacy_share": QualityMetricEntry(
             value=_ratio(legacy_count, total),
-            meta={"total": total, "legacy_count": legacy_count},
+            meta={"total": total, "legacy_count": legacy_count, "window_days": int(window_days)},
         ),
     }
 
@@ -210,7 +218,8 @@ def _compute_udi_pending_count(db: Session) -> QualityMetricEntry:
     return QualityMetricEntry(value=float(cnt), meta={"pending_count": cnt})
 
 
-def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date) -> QualityMetricEntry:
+def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date, window_days: int) -> QualityMetricEntry:
+    window_start = _window_start(as_of, window_days=window_days)
     day_end = _day_end(as_of)
     total = int(
         db.execute(
@@ -218,10 +227,11 @@ def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date) -> Qualit
                 """
                 SELECT COUNT(1)
                 FROM registrations
-                WHERE created_at < :day_end
+                WHERE created_at >= :window_start
+                  AND created_at < :day_end
                 """
             ),
-            {"day_end": day_end},
+            {"day_end": day_end, "window_start": window_start},
         ).scalar()
         or 0
     )
@@ -234,11 +244,12 @@ def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date) -> Qualit
                     """
                     SELECT COUNT(1)
                     FROM registrations
-                    WHERE created_at < :day_end
+                    WHERE created_at >= :window_start
+                      AND created_at < :day_end
                       AND jsonb_typeof(field_meta -> :field_name) = 'object'
                     """
                 ),
-                {"day_end": day_end, "field_name": field},
+                {"day_end": day_end, "window_start": window_start, "field_name": field},
             ).scalar()
             or 0
         )
@@ -253,6 +264,7 @@ def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date) -> Qualit
         value=coverage_rate,
         meta={
             "total_registrations": total,
+            "window_days": int(window_days),
             "fields": list(_CRITICAL_META_FIELDS),
             "field_counts": field_cnt,
             "field_rates": field_cov,
@@ -260,12 +272,16 @@ def _compute_field_evidence_coverage_rate(db: Session, *, as_of: date) -> Qualit
     )
 
 
-def compute_daily_quality_metrics(db: Session, *, as_of: date) -> DailyQualityReport:
+def compute_daily_quality_metrics(db: Session, *, as_of: date, window_days: int = 365) -> DailyQualityReport:
     metrics: dict[str, QualityMetricEntry] = {}
-    metrics.update(_compute_regno_metrics(db, as_of=as_of))
+    metrics.update(_compute_regno_metrics(db, as_of=as_of, window_days=window_days))
     metrics["diff_success_rate"] = _compute_diff_success_rate(db, as_of=as_of)
     metrics["udi_pending_count"] = _compute_udi_pending_count(db)
-    metrics["field_evidence_coverage_rate"] = _compute_field_evidence_coverage_rate(db, as_of=as_of)
+    metrics["field_evidence_coverage_rate"] = _compute_field_evidence_coverage_rate(
+        db,
+        as_of=as_of,
+        window_days=window_days,
+    )
 
     # Keep output contract stable and explicit.
     for key in _METRIC_KEYS:

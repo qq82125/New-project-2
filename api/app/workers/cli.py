@@ -95,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     quality_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     quality_mode.add_argument('--execute', action='store_true', help='Write daily_quality_metrics')
     quality_metrics_parser.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
+    quality_metrics_parser.add_argument('--window-days', dest='window_days', type=int, default=365, help='Rolling window days (default: 365)')
 
     local_supp_parser = sub.add_parser('local_registry_supplement', help='Supplement local products from local registry xlsx/zip files')
     local_supp_parser.add_argument('--folder', required=True, help='Folder containing xlsx/zip files')
@@ -530,15 +531,16 @@ def _run_quality_metrics_compute(args: argparse.Namespace) -> int:
     from app.services.quality_metrics import compute_daily_quality_metrics, upsert_daily_quality_metrics
 
     as_of = date.fromisoformat(str(args.as_of)) if getattr(args, "as_of", None) else date.today()
+    window_days = max(1, int(getattr(args, "window_days", 365) or 365))
     dry_run = not bool(getattr(args, "execute", False))
 
     db = SessionLocal()
     try:
-        report = compute_daily_quality_metrics(db, as_of=as_of)
+        report = compute_daily_quality_metrics(db, as_of=as_of, window_days=window_days)
         if not dry_run:
             upsert_daily_quality_metrics(db, report)
             db.commit()
-        print(json.dumps({"ok": True, "dry_run": dry_run, **report.as_json()}, ensure_ascii=False, default=str))
+        print(json.dumps({"ok": True, "dry_run": dry_run, "window_days": window_days, **report.as_json()}, ensure_ascii=False, default=str))
         return 0
     finally:
         db.close()

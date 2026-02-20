@@ -40,7 +40,7 @@ def test_quality_metrics_cli_dry_run(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr("app.services.quality_metrics.upsert_daily_quality_metrics", _upsert)
 
-    rc = cli._run_quality_metrics_compute(SimpleNamespace(as_of="2026-02-20", execute=False))  # type: ignore[attr-defined]
+    rc = cli._run_quality_metrics_compute(SimpleNamespace(as_of="2026-02-20", execute=False, window_days=365))  # type: ignore[attr-defined]
     assert rc == 0
     assert called["upsert"] == 0
 
@@ -60,14 +60,15 @@ def test_quality_metrics_cli_execute_writes(monkeypatch) -> None:
 
     monkeypatch.setattr("app.services.quality_metrics.upsert_daily_quality_metrics", _upsert)
 
-    rc = cli._run_quality_metrics_compute(SimpleNamespace(as_of="2026-02-20", execute=True))  # type: ignore[attr-defined]
+    rc = cli._run_quality_metrics_compute(SimpleNamespace(as_of="2026-02-20", execute=True, window_days=365))  # type: ignore[attr-defined]
     assert rc == 0
     assert called["upsert"] == 1
 
 
 def test_quality_metrics_cli_parser() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["metrics:quality-compute", "--as-of", "2026-02-20", "--dry-run"])
+    args = parser.parse_args(["metrics:quality-compute", "--as-of", "2026-02-20", "--window-days", "90", "--dry-run"])
     assert args.cmd == "metrics:quality-compute"
     assert args.as_of == "2026-02-20"
+    assert args.window_days == 90
     assert args.dry_run is True

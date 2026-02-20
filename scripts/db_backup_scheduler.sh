@@ -19,11 +19,11 @@ while true; do
 
   if [[ "${now_time}" == "${BACKUP_RUN_AT}" && "${last_date}" != "${now_date}" ]]; then
     echo "[backup-scheduler] daily cycle start date=${now_date} time=${now_time}"
-    /scripts/backup_pg_wal_daily.sh
+    sh /scripts/backup_pg_wal_daily.sh
 
     weekday="$(date +%u)"
     if [[ "${weekday}" == "${FULL_BACKUP_WEEKDAY}" ]]; then
-      /scripts/backup_pg_weekly_full.sh
+      sh /scripts/backup_pg_weekly_full.sh
     fi
 
     echo "${now_date}" > "${STATE_FILE}"
@@ -34,4 +34,3 @@ while true; do
 
   sleep 20
 done
-
