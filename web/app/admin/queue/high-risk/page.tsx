@@ -21,7 +21,7 @@ export default async function AdminQueueHighRiskPage() {
       <Card>
         <CardHeader>
           <CardTitle>LRI 高风险</CardTitle>
-          <CardDescription>队列页：支持筛选、分页加载与批量忽略。</CardDescription>
+          <CardDescription>队列页：支持筛选、分页加载与统一表格展示。</CardDescription>
         </CardHeader>
         <CardContent />
       </Card>

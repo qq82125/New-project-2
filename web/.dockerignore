@@ -2,7 +2,7 @@ node_modules/
 .next/
 tsconfig.tsbuildinfo
 tsconfig 2.tsbuildinfo
+*.log
 .DS_Store
 .idea/
 .vscode/
-

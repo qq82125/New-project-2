@@ -28,6 +28,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql
 
+      - name: Validate core parameter dictionary
+        run: |
+          pip install PyYAML
+          python scripts/validate_core_param_dictionary.py
+
       - name: Run tests
         run: |
           pytest api/tests

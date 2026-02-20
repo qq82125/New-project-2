@@ -28,6 +28,7 @@ from app.pipeline.ingest import save_raw_document
 from app.repositories.source_runs import finish_source_run, start_source_run
 from app.services.normalize_keys import normalize_registration_no
 from app.services.pending_mode import should_enqueue_pending_documents, should_enqueue_pending_records
+from app.services.registration_no_parser import parse_registration_no
 from app.services.source_contract import upsert_registration_with_contract
 
 
@@ -155,7 +156,7 @@ def enforce_registration_anchor(record: dict[str, Any], source_key: str) -> Anch
             ok=False,
             normalized_registration_no=None,
             error_code=IngestErrorCode.E_REG_NO_NORMALIZE_FAILED.value,
-            reason_code="PARSE_ERROR",
+            reason_code="REGNO_MISSING",
             reason=f"registration_no normalize failed: {reg_no_raw}",
         )
 
@@ -171,6 +172,15 @@ def enforce_registration_anchor(record: dict[str, Any], source_key: str) -> Anch
                 reason_code="PARSE_ERROR",
                 reason=f"registration_no conflict: {reg_a_raw} != {reg_b_raw}",
             )
+    parsed = parse_registration_no(reg_no)
+    if not parsed.parse_ok:
+        return AnchorGateResult(
+            ok=False,
+            normalized_registration_no=None,
+            error_code=IngestErrorCode.E_PARSE_FAILED.value,
+            reason_code="REGNO_PARSE_FAILED",
+            reason=f"registration_no semantic parse failed: {reg_no}",
+        )
     return AnchorGateResult(
         ok=True,
         normalized_registration_no=reg_no,

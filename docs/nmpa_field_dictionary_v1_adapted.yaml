@@ -1,5 +1,5 @@
 version: "1.0-adapted"
-project: "IVD产品雷达"
+project: "DeepIVD"
 canonical:
   registration_no: "registrations.registration_no"
   product_table: "products"

@@ -7,12 +7,14 @@ from datetime import date
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import ChangeLog, FieldDiff, NmpaSnapshot, RawDocument, Registration
-from app.services.mapping import ProductRecord
+from app.models import ChangeLog, FieldDiff, NmpaSnapshot, RawDocument, RawSourceRecord, Registration, ShadowDiffError
+from app.services.mapping import ProductRecord, map_raw_record
+from app.services.normalize_keys import normalize_registration_no
+from app.services.registration_no_parser import parse_registration_no
 from app.services.source_contract import upsert_registration_with_contract
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ _SEVERITY: dict[str, str] = {
 _FILING_ALIASES = ("filing_no", "备案号", "备案凭证编号", "filingNo", "filingNO")
 _MODEL_ALIASES = ("model", "型号", "xh", "xhao")
 _SPEC_ALIASES = ("specification", "规格", "gg", "guige")
+REASON_CODES: tuple[str, ...] = ("FIELD_MISSING", "TYPE_MISMATCH", "VALUE_TOO_LONG", "PARSE_ERROR", "UNKNOWN")
 
 
 def _pick(raw: dict[str, Any], keys: tuple[str, ...]) -> str | None:
@@ -97,6 +100,97 @@ class ShadowWriteResult:
     snapshot_id: Optional[UUID] = None
     diffs_written: int = 0
     error: str | None = None
+
+
+@dataclass
+class ShadowDiffReplayReport:
+    source_run_id: int
+    dry_run: bool
+    total_records: int = 0
+    diff_success: int = 0
+    diff_failed: int = 0
+    diffs_written: int = 0
+    reason_counts: dict[str, int] | None = None
+
+    @property
+    def diff_success_rate(self) -> float:
+        if self.total_records <= 0:
+            return 0.0
+        return round(float(self.diff_success) / float(self.total_records), 4)
+
+    @property
+    def top_reason_codes(self) -> list[dict[str, Any]]:
+        counts = self.reason_counts or {}
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return [{"reason_code": code, "count": int(cnt)} for code, cnt in ranked[:5]]
+
+    def bump_reason(self, code: str) -> None:
+        normalized = code if code in REASON_CODES else "UNKNOWN"
+        current = dict(self.reason_counts or {})
+        current[normalized] = int(current.get(normalized, 0)) + 1
+        self.reason_counts = current
+
+
+def classify_shadow_diff_reason(error: str | None) -> str:
+    msg = str(error or "").strip().lower()
+    if not msg:
+        return "UNKNOWN"
+    if "missing" in msg and ("registration" in msg or "reg_no" in msg or "payload" in msg):
+        return "FIELD_MISSING"
+    if "not found" in msg and "registration" in msg:
+        return "FIELD_MISSING"
+    if "too long" in msg or "value too long" in msg or "right truncation" in msg:
+        return "VALUE_TOO_LONG"
+    if "type mismatch" in msg:
+        return "TYPE_MISMATCH"
+    if "invalid input syntax" in msg:
+        return "TYPE_MISMATCH"
+    if "parse" in msg or "normalize" in msg or "invalid date" in msg:
+        return "PARSE_ERROR"
+    return "UNKNOWN"
+
+
+def _build_after_surface(record: ProductRecord) -> dict[str, Any]:
+    return {
+        "registration_no": record.reg_no,
+        "filing_no": _pick(record.raw, _FILING_ALIASES),
+        "approval_date": _to_text(record.approved_date),
+        "expiry_date": _to_text(record.expiry_date),
+        "status": record.status,
+        "product_name": record.name,
+        "class": record.class_name,
+        "model": _pick(record.raw, _MODEL_ALIASES),
+        "specification": _pick(record.raw, _SPEC_ALIASES),
+    }
+
+
+def _insert_snapshot(
+    db: Session,
+    *,
+    registration_id: UUID,
+    source_run_id: int | None,
+    raw_document_id: UUID | None,
+    source_url: str | None,
+    sha256: str | None,
+) -> UUID:
+    snap_stmt = insert(NmpaSnapshot).values(
+        registration_id=registration_id,
+        raw_document_id=raw_document_id,
+        source_run_id=source_run_id,
+        snapshot_date=date.today(),
+        source_url=source_url,
+        sha256=sha256,
+    )
+    snap_stmt = snap_stmt.on_conflict_do_update(
+        index_elements=[NmpaSnapshot.registration_id, NmpaSnapshot.source_run_id],
+        set_={
+            "raw_document_id": snap_stmt.excluded.raw_document_id,
+            "snapshot_date": snap_stmt.excluded.snapshot_date,
+            "source_url": snap_stmt.excluded.source_url,
+            "sha256": snap_stmt.excluded.sha256,
+        },
+    ).returning(NmpaSnapshot.id)
+    return db.execute(snap_stmt).scalar_one()
 
 
 def shadow_write_nmpa_snapshot_and_diffs(
@@ -160,17 +254,8 @@ def shadow_write_nmpa_snapshot_and_diffs(
 
     # Build a minimal diff surface per SSOT (docs/nmpa_field_dictionary_v1_adapted.yaml).
     before_surface: dict[str, Any] = dict(reg_before)
-    after_surface: dict[str, Any] = {
-        "registration_no": reg.registration_no,
-        "filing_no": _pick(record.raw, _FILING_ALIASES),
-        "approval_date": _to_text(record.approved_date),
-        "expiry_date": _to_text(record.expiry_date),
-        "status": record.status,
-        "product_name": record.name,
-        "class": record.class_name,
-        "model": _pick(record.raw, _MODEL_ALIASES),
-        "specification": _pick(record.raw, _SPEC_ALIASES),
-    }
+    after_surface: dict[str, Any] = _build_after_surface(record)
+    after_surface["registration_no"] = reg.registration_no
 
     # Merge in product before/after if provided. Existing product change tracking doesn't include model/spec yet.
     if product_before:
@@ -192,24 +277,14 @@ def shadow_write_nmpa_snapshot_and_diffs(
         except Exception:
             pass
 
-    snap_stmt = insert(NmpaSnapshot).values(
+    snapshot_id = _insert_snapshot(
+        db,
         registration_id=reg.id,
-        raw_document_id=raw_document_id,
         source_run_id=source_run_id,
-        snapshot_date=date.today(),
+        raw_document_id=raw_document_id,
         source_url=src_url,
         sha256=sha256,
     )
-    snap_stmt = snap_stmt.on_conflict_do_update(
-        index_elements=[NmpaSnapshot.registration_id, NmpaSnapshot.source_run_id],
-        set_={
-            "raw_document_id": snap_stmt.excluded.raw_document_id,
-            "snapshot_date": snap_stmt.excluded.snapshot_date,
-            "source_url": snap_stmt.excluded.source_url,
-            "sha256": snap_stmt.excluded.sha256,
-        },
-    ).returning(NmpaSnapshot.id)
-    snapshot_id = db.execute(snap_stmt).scalar_one()
 
     changed: dict[str, dict[str, Any]] = {}
     for f in DIFF_FIELDS:
@@ -269,14 +344,30 @@ def record_shadow_diff_failure(
     db: Session,
     *,
     raw_document_id: UUID | None,
+    raw_source_record_id: UUID | None = None,
     source_run_id: int | None,
     registration_no: str | None,
+    reason_code: str | None = None,
     error: str,
 ) -> None:
-    """Best-effort: append a diff failure record into raw_documents.parse_log.
+    """Best-effort failure sink for shadow diff.
 
-    This must never block the main ingest transaction. Callers should already be in a try/except.
+    Writes to structured table first, then keeps backward-compatible parse_log append.
+    This must never block the main ingest transaction.
     """
+    code = reason_code or classify_shadow_diff_reason(error)
+    if code not in REASON_CODES:
+        code = "UNKNOWN"
+    db.add(
+        ShadowDiffError(
+            raw_document_id=raw_document_id,
+            raw_source_record_id=raw_source_record_id,
+            source_run_id=source_run_id,
+            registration_no=(str(registration_no).strip() or None) if registration_no else None,
+            reason_code=code,
+            error=str(error),
+        )
+    )
     if raw_document_id is None:
         return
     doc = db.get(RawDocument, raw_document_id)
@@ -291,12 +382,170 @@ def record_shadow_diff_failure(
             "ts": datetime.now(timezone.utc).isoformat(),
             "source_run_id": int(source_run_id) if source_run_id is not None else None,
             "registration_no": (str(registration_no).strip() or None) if registration_no else None,
+            "reason_code": code,
             "error": str(error),
         }
     )
-    # Cap to avoid unbounded growth for a single package document.
     if len(errors) > 50:
         errors = errors[-50:]
     payload["shadow_diff_errors"] = errors
     doc.parse_log = payload
     db.add(doc)
+
+
+def replay_nmpa_snapshot_diffs_for_source_run(
+    db: Session,
+    *,
+    source_run_id: int,
+    dry_run: bool = True,
+) -> ShadowDiffReplayReport:
+    report = ShadowDiffReplayReport(source_run_id=int(source_run_id), dry_run=bool(dry_run))
+    rows = db.scalars(
+        select(RawSourceRecord).where(RawSourceRecord.source_run_id == int(source_run_id)).order_by(RawSourceRecord.created_at.asc())
+    ).all()
+    report.total_records = len(rows)
+    if not rows:
+        return report
+
+    if not dry_run:
+        db.execute(delete(FieldDiff).where(FieldDiff.source_run_id == int(source_run_id)))
+        db.execute(delete(NmpaSnapshot).where(NmpaSnapshot.source_run_id == int(source_run_id)))
+        db.execute(delete(ShadowDiffError).where(ShadowDiffError.source_run_id == int(source_run_id)))
+
+    for row in rows:
+        payload = row.payload if isinstance(row.payload, dict) else None
+        if payload is None:
+            msg = "missing payload for raw_source_record"
+            report.diff_failed += 1
+            report.bump_reason("FIELD_MISSING")
+            if not dry_run:
+                record_shadow_diff_failure(
+                    db,
+                    raw_document_id=None,
+                    raw_source_record_id=row.id,
+                    source_run_id=source_run_id,
+                    registration_no=None,
+                    reason_code="FIELD_MISSING",
+                    error=msg,
+                )
+            continue
+
+        try:
+            mapped = map_raw_record(payload)
+        except Exception as exc:
+            report.diff_failed += 1
+            report.bump_reason("PARSE_ERROR")
+            if not dry_run:
+                record_shadow_diff_failure(
+                    db,
+                    raw_document_id=None,
+                    raw_source_record_id=row.id,
+                    source_run_id=source_run_id,
+                    registration_no=None,
+                    reason_code="PARSE_ERROR",
+                    error=str(exc),
+                )
+            continue
+
+        reg_no_norm = normalize_registration_no(mapped.reg_no)
+        if not reg_no_norm:
+            msg = "missing registration_no after normalize"
+            report.diff_failed += 1
+            report.bump_reason("FIELD_MISSING")
+            if not dry_run:
+                record_shadow_diff_failure(
+                    db,
+                    raw_document_id=None,
+                    raw_source_record_id=row.id,
+                    source_run_id=source_run_id,
+                    registration_no=mapped.reg_no,
+                    reason_code="FIELD_MISSING",
+                    error=msg,
+                )
+            continue
+
+        parsed = parse_registration_no(reg_no_norm)
+        if not parsed.parse_ok:
+            msg = f"registration_no semantic parse failed: {reg_no_norm}"
+            report.diff_failed += 1
+            report.bump_reason("PARSE_ERROR")
+            if not dry_run:
+                record_shadow_diff_failure(
+                    db,
+                    raw_document_id=None,
+                    raw_source_record_id=row.id,
+                    source_run_id=source_run_id,
+                    registration_no=reg_no_norm,
+                    reason_code="PARSE_ERROR",
+                    error=msg,
+                )
+            continue
+
+        reg = db.scalar(select(Registration).where(Registration.registration_no == reg_no_norm))
+        if reg is None:
+            msg = f"registration not found: {reg_no_norm}"
+            report.diff_failed += 1
+            report.bump_reason("FIELD_MISSING")
+            if not dry_run:
+                record_shadow_diff_failure(
+                    db,
+                    raw_document_id=None,
+                    raw_source_record_id=row.id,
+                    source_run_id=source_run_id,
+                    registration_no=reg_no_norm,
+                    reason_code="FIELD_MISSING",
+                    error=msg,
+                )
+            continue
+
+        before_surface = {
+            "registration_no": reg.registration_no,
+            "filing_no": reg.filing_no,
+            "approval_date": _to_text(reg.approval_date),
+            "expiry_date": _to_text(reg.expiry_date),
+            "status": reg.status,
+        }
+        mapped.reg_no = reg_no_norm
+        after_surface = _build_after_surface(mapped)
+
+        changed: dict[str, dict[str, Any]] = {}
+        for field in DIFF_FIELDS:
+            old = _to_text(before_surface.get(field))
+            new = _to_text(after_surface.get(field))
+            if old != new:
+                changed[field] = {"old": old, "new": new}
+
+        report.diff_success += 1
+        report.diffs_written += len(changed)
+        if dry_run:
+            continue
+        snapshot_id = _insert_snapshot(
+            db,
+            registration_id=reg.id,
+            source_run_id=source_run_id,
+            raw_document_id=None,
+            source_url=row.source_url,
+            sha256=None,
+        )
+        if changed:
+            rows_to_insert: list[dict[str, Any]] = []
+            change_type = _change_type_for(before_surface, after_surface)
+            for field_name, values in changed.items():
+                rows_to_insert.append(
+                    {
+                        "snapshot_id": snapshot_id,
+                        "registration_id": reg.id,
+                        "field_name": field_name,
+                        "old_value": values.get("old"),
+                        "new_value": values.get("new"),
+                        "change_type": change_type,
+                        "severity": _SEVERITY.get(field_name, "LOW"),
+                        "confidence": 0.80,
+                        "source_run_id": source_run_id,
+                    }
+                )
+            db.execute(insert(FieldDiff), rows_to_insert)
+
+    if not dry_run:
+        db.commit()
+    return report

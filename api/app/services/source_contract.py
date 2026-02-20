@@ -16,6 +16,7 @@ from app.models import (
     ChangeLog,
     ConflictQueue,
     PendingUdiLink,
+    Product,
     ProductUdiMap,
     RawSourceRecord,
     Registration,
@@ -25,6 +26,7 @@ from app.models import (
     UdiDiMaster,
 )
 from app.services.normalize_keys import normalize_registration_no
+from app.services.registration_no_parser import parse_registration_no
 
 
 def _utcnow() -> datetime:
@@ -195,6 +197,22 @@ def _as_dt(v: Any) -> datetime:
         except Exception:
             pass
     return _utcnow()
+
+
+def _field_meta_entry(
+    *,
+    source_key: str,
+    incoming_meta: dict[str, Any],
+    decision: str,
+) -> dict[str, Any]:
+    return {
+        "source_key": str(incoming_meta.get("source_key") or source_key or "UNKNOWN"),
+        "evidence_grade": str(incoming_meta.get("evidence_grade") or ""),
+        "observed_at": str(incoming_meta.get("observed_at") or ""),
+        "raw_id": (str(incoming_meta.get("raw_source_record_id")) if incoming_meta.get("raw_source_record_id") else None),
+        "decision": str(decision or "unknown"),
+        "updated_at": _utcnow().isoformat(),
+    }
 
 
 def _decision_tuple(meta: dict[str, Any]) -> tuple[int, int, datetime]:
@@ -662,6 +680,7 @@ def upsert_registration_with_contract(
     }
 
     reg_raw = copy.deepcopy(reg.raw_json) if isinstance(reg.raw_json, dict) else {}
+    field_meta = copy.deepcopy(reg.field_meta) if isinstance(reg.field_meta, dict) else {}
     prov = reg_raw.get("_contract_provenance")
     if not isinstance(prov, dict):
         prov = {}
@@ -691,6 +710,11 @@ def upsert_registration_with_contract(
             continue
         if decision.action == "conflict":
             reason = "same_grade_priority_time_requires_manual"
+            field_meta[k] = _field_meta_entry(
+                source_key=str(source or "UNKNOWN"),
+                incoming_meta=decision.incoming_meta,
+                decision=reason,
+            )
             candidates = _queue_conflict_candidates(
                 old_value=old_text,
                 incoming_value=incoming_text,
@@ -723,6 +747,11 @@ def upsert_registration_with_contract(
             )
             continue
         if decision.action == "keep":
+            field_meta[k] = _field_meta_entry(
+                source_key=str(source or "UNKNOWN"),
+                incoming_meta=decision.incoming_meta,
+                decision=str(decision.reason or "keep"),
+            )
             db.add(
                 RegistrationConflictAudit(
                     registration_id=reg.id,
@@ -749,6 +778,11 @@ def upsert_registration_with_contract(
             setattr(reg, k, incoming_text)
         changed[k] = {"old": old_text, "new": incoming_text}
         prov[k] = dict(decision.incoming_meta)
+        field_meta[k] = _field_meta_entry(
+            source_key=str(source or "UNKNOWN"),
+            incoming_meta=decision.incoming_meta,
+            decision=str(decision.reason or "apply"),
+        )
         db.add(
             RegistrationConflictAudit(
                 registration_id=reg.id,
@@ -770,6 +804,7 @@ def upsert_registration_with_contract(
     if payload:
         reg_raw["_latest_payload"] = _json_payload(payload)
     reg.raw_json = reg_raw
+    reg.field_meta = field_meta
     db.add(reg)
 
     if write_change_log and (created or changed):
@@ -842,17 +877,23 @@ def write_udi_contract_record(
         _pick_text(row, "registry_no", "reg_no", "registration_no", "zczbhhzbapzbh")
     )
     reg_norm = normalize_registration_no(raw_reg_no)
+    parsed_reg = parse_registration_no(reg_norm) if reg_norm else None
     has_cert = _parse_bool_zh(_pick_text(row, "sfyzcbayz", "has_cert"))
     packaging_json = _parse_packaging_json(row)
     storage_json = _parse_storage_json(row)
 
     parse_error: str | None = None
+    gate_reason_code: str | None = None
     if not di:
         parse_error = "missing di"
+    elif not reg_norm:
+        gate_reason_code = "REGNO_MISSING"
+    elif parsed_reg is not None and not parsed_reg.parse_ok:
+        gate_reason_code = "REGNO_PARSE_FAILED"
 
     payload_hash = _payload_hash(row)
     now = _utcnow()
-    parse_status = _parse_status_for(reg_norm, di, parse_error)
+    parse_status = _parse_status_for((reg_norm if gate_reason_code is None else None), di, parse_error)
 
     raw_stmt = insert(RawSourceRecord).values(
         source=str(source or "UNKNOWN"),
@@ -919,7 +960,73 @@ def write_udi_contract_record(
         )
         db.execute(master_stmt)
 
-    if reg_norm:
+    if reg_norm and gate_reason_code is None:
+        def _ensure_anchor_product(registration_id: UUID, registration_no: str, payload: dict[str, Any]) -> None:
+            # Keep one lightweight "anchor product" so search/workbench can reach this registration.
+            product = db.scalar(
+                select(Product)
+                .where(Product.registration_id == registration_id)
+                .order_by(Product.updated_at.desc(), Product.created_at.desc())
+                .limit(1)
+            )
+            if product is None:
+                product = db.scalar(select(Product).where(Product.reg_no == registration_no).order_by(Product.updated_at.desc()).limit(1))
+            if product is None:
+                product = db.scalar(select(Product).where(Product.udi_di == f"reg:{registration_no}").limit(1))
+
+            name = (
+                _pick_text(payload, "product_name", "name", "catalog_item_std", "catalog_item_raw")
+                or registration_no
+            )[:500]
+            status = (_pick_text(payload, "status", "registration_status") or "UNKNOWN")[:20]
+            ivd_category = _pick_text(payload, "ivd_category", "category", "product_type", "cplb")
+
+            if product is None:
+                product = Product(
+                    udi_di=f"reg:{registration_no}",
+                    reg_no=registration_no,
+                    name=name,
+                    status=status,
+                    approved_date=None,
+                    expiry_date=None,
+                    class_name=None,
+                    model=None,
+                    specification=None,
+                    category=None,
+                    is_ivd=True,
+                    ivd_category=ivd_category,
+                    ivd_subtypes=None,
+                    ivd_reason=None,
+                    ivd_version=1,
+                    ivd_source="UDI_CONTRACT",
+                    ivd_confidence=0.40,
+                    company_id=None,
+                    registration_id=registration_id,
+                    raw_json={"_stub": {"source_hint": "UDI", "verified_by_nmpa": False, "evidence_level": "LOW"}},
+                    raw={},
+                )
+                db.add(product)
+                return
+
+            changed = False
+            if not getattr(product, "registration_id", None):
+                product.registration_id = registration_id
+                changed = True
+            if not str(getattr(product, "reg_no", "") or "").strip():
+                product.reg_no = registration_no
+                changed = True
+            if not str(getattr(product, "name", "") or "").strip():
+                product.name = name
+                changed = True
+            if not str(getattr(product, "status", "") or "").strip():
+                product.status = status
+                changed = True
+            if getattr(product, "is_ivd", None) is None:
+                product.is_ivd = True
+                changed = True
+            if changed:
+                db.add(product)
+
         reg_res = upsert_registration_with_contract(
             db,
             registration_no=reg_norm,
@@ -945,6 +1052,9 @@ def write_udi_contract_record(
             source=str(source or "UNKNOWN"),
             match_type="direct",
             confidence=0.95,
+            match_reason="direct_registration_match",
+            reversible=(float(confidence) < 0.60),
+            linked_by=str(source or "UNKNOWN"),
             raw_source_record_id=raw_id,
         )
         map_stmt = map_stmt.on_conflict_do_update(
@@ -953,11 +1063,15 @@ def write_udi_contract_record(
                 "source": map_stmt.excluded.source,
                 "match_type": map_stmt.excluded.match_type,
                 "confidence": map_stmt.excluded.confidence,
+                "match_reason": map_stmt.excluded.match_reason,
+                "reversible": map_stmt.excluded.reversible,
+                "linked_by": map_stmt.excluded.linked_by,
                 "raw_source_record_id": map_stmt.excluded.raw_source_record_id,
                 "updated_at": text("NOW()"),
             },
         )
         db.execute(map_stmt)
+        _ensure_anchor_product(reg_res.registration_id, reg_norm, row)
         # Resolve existing pending item if direct mapping succeeded.
         db.execute(
             text(
@@ -995,13 +1109,21 @@ def write_udi_contract_record(
         "catalog_item_std",
         "catalog_item_raw",
     )
-    reason_code = ("MISSING_REGISTRATION_NO" if raw_reg_no is None else "REGISTRATION_NO_NOT_FOUND")
-    reason_text = ("missing registration_no" if raw_reg_no is None else "registration_no_not_found")
+    reason_code = gate_reason_code or ("REGNO_MISSING" if raw_reg_no is None else "REGISTRATION_NO_NOT_FOUND")
+    reason_text = (
+        "registration_no missing after normalize"
+        if reason_code == "REGNO_MISSING"
+        else ("registration_no semantic parse failed" if reason_code == "REGNO_PARSE_FAILED" else "registration_no_not_found")
+    )
 
     pending_stmt = insert(PendingUdiLink).values(
         di=di,
         reason=reason_text,
         reason_code=reason_code,
+        match_reason=reason_text,
+        confidence=float(confidence),
+        reversible=True,
+        linked_by=str(source or "UNKNOWN"),
         raw_id=raw_id,
         retry_count=0,
         next_retry_at=None,
@@ -1016,6 +1138,10 @@ def write_udi_contract_record(
         set_={
             "reason": pending_stmt.excluded.reason,
             "reason_code": pending_stmt.excluded.reason_code,
+            "match_reason": pending_stmt.excluded.match_reason,
+            "confidence": pending_stmt.excluded.confidence,
+            "reversible": pending_stmt.excluded.reversible,
+            "linked_by": pending_stmt.excluded.linked_by,
             "raw_id": pending_stmt.excluded.raw_id,
             "raw_source_record_id": pending_stmt.excluded.raw_source_record_id,
             "candidate_company_name": pending_stmt.excluded.candidate_company_name,

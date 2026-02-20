@@ -231,3 +231,81 @@ def test_with_registration_no_upserts_registration_before_variant(monkeypatch) -
             assert product.registration_id == reg.id
         finally:
             _cleanup(db, source_key, reg_no=reg_no, dis=[di])
+
+
+@pytest.mark.integration
+def test_semantic_parse_failed_registration_goes_quality_queue_only(monkeypatch) -> None:
+    monkeypatch.delenv("PENDING_QUEUE_MODE", raising=False)
+    url = require_it_db_url()
+    engine = create_engine(url, pool_pre_ping=True)
+    with engine.begin() as conn:
+        apply_sql_migrations(conn)
+
+    source_key = _new_source_key()
+    di = f"DI-PARSE-{uuid4().hex[:8]}".upper()
+    bad_reg = f"国械注准TEST{uuid4().hex[:8]}"
+    bad_reg_norm = normalize_registration_no(bad_reg)
+    assert bad_reg_norm
+
+    with Session(engine) as db:
+        _seed_source(db, source_key)
+        try:
+            monkeypatch.setattr(
+                "app.services.ingest_runner._fetch_rows_from_runtime",
+                lambda _cfg: [{"registration_no": bad_reg, "di": di, "status": "ACTIVE", "product_name": "bad reg sample"}],
+            )
+            stats = run_source_by_key(db, source_key=source_key, execute=True)
+            run_id = int(stats.source_run_id or 0)
+
+            reg_cnt = int(
+                db.execute(
+                    text("SELECT COUNT(1) FROM registrations WHERE registration_no = :n"),
+                    {"n": bad_reg_norm},
+                ).scalar()
+                or 0
+            )
+            raw_cnt = int(
+                db.execute(
+                    text(
+                        """
+                        SELECT COUNT(1)
+                        FROM raw_documents
+                        WHERE source = :sk
+                          AND run_id = :run_id
+                        """
+                    ),
+                    {"sk": source_key, "run_id": f"source_run:{run_id}"},
+                ).scalar()
+                or 0
+            )
+            pending_doc_reason = db.execute(
+                text(
+                    """
+                    SELECT reason_code
+                    FROM pending_documents
+                    WHERE source_run_id = :rid
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"rid": run_id},
+            ).scalar()
+            pending_record_reason = db.execute(
+                text(
+                    """
+                    SELECT reason_code
+                    FROM pending_records
+                    WHERE source_run_id = :rid
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"rid": run_id},
+            ).scalar()
+
+            assert int(stats.missing_registration_no_count) == 1
+            assert reg_cnt == 0
+            assert raw_cnt >= 1
+            assert "REGNO_PARSE_FAILED" in {str(pending_doc_reason or ""), str(pending_record_reason or "")}
+        finally:
+            _cleanup(db, source_key, reg_no=None, dis=[di])
