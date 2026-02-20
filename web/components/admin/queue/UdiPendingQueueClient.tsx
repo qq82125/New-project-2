@@ -7,6 +7,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge } from '../../ui/badge';
 import { toast } from '../../ui/use-toast';
+import { buildSearchUrl } from '../../../lib/search-filters';
 
 type Item = {
   id: string;
@@ -108,7 +109,7 @@ export default function UdiPendingQueueClient({ initialItems }: { initialItems: 
                   <td>{String(it.created_at || '-').slice(0, 19).replace('T', ' ')}</td>
                   <td>{it.reason_code || it.reason || '-'}</td>
                   <td>
-                    <Link href={`/search?q=${encodeURIComponent(it.di || '')}`}>查看</Link>
+                    <Link href={buildSearchUrl({ q: it.di || '' })}>查看</Link>
                   </td>
                 </tr>
               ))}

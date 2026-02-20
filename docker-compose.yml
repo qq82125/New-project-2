@@ -7,13 +7,54 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nmpa}
     ports:
       - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=300
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./.local/pgdata:/var/lib/postgresql/data
+      - ./backups/postgres/wal:/var/lib/postgresql/wal-archive
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nmpa} -d ${POSTGRES_DB:-nmpa}"]
       interval: 5s
       timeout: 3s
       retries: 20
+
+  db-backup:
+    image: postgres:16
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-nmpa}
+      PGHOST: db
+      PGPORT: ${POSTGRES_PORT:-5432}
+      PGUSER: ${POSTGRES_USER:-nmpa}
+      PGDATABASE: ${POSTGRES_DB:-nmpa}
+      BACKUP_DIR: /backup
+      WAL_ARCHIVE_DIR: /wal
+      BACKUP_RUN_AT: ${BACKUP_RUN_AT:-03:30}
+      FULL_BACKUP_WEEKDAY: ${FULL_BACKUP_WEEKDAY:-1}
+      FULL_BACKUP_RETENTION_WEEKS: ${FULL_BACKUP_RETENTION_WEEKS:-4}
+      WAL_RETENTION_DAYS: ${WAL_RETENTION_DAYS:-14}
+      FULL_BACKUP_MAX_RATE: ${FULL_BACKUP_MAX_RATE:-80M}
+      TZ: ${TZ:-Asia/Shanghai}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "chmod +x /scripts/db_backup_scheduler.sh /scripts/backup_pg_weekly_full.sh /scripts/backup_pg_wal_daily.sh &&
+             /scripts/db_backup_scheduler.sh"
+    volumes:
+      - ./scripts/db_backup_scheduler.sh:/scripts/db_backup_scheduler.sh:ro
+      - ./scripts/backup_pg_weekly_full.sh:/scripts/backup_pg_weekly_full.sh:ro
+      - ./scripts/backup_pg_wal_daily.sh:/scripts/backup_pg_wal_daily.sh:ro
+      - ./backups/postgres:/backup
+      - ./backups/postgres/wal:/wal
+    restart: unless-stopped
 
   api:
     build:
@@ -33,6 +74,9 @@ services:
       STAGING_DIR: ${STAGING_DIR:-/app/staging}
       USE_REGISTRATION_ANCHOR: ${USE_REGISTRATION_ANCHOR:-false}
       PENDING_QUEUE_MODE: ${PENDING_QUEUE_MODE:-document_only}
+      REGISTRATION_ANCHOR_GATE_ENABLED: ${REGISTRATION_ANCHOR_GATE_ENABLED:-true}
+      REGISTRATION_ANCHOR_GATE_MAX_RATIO: ${REGISTRATION_ANCHOR_GATE_MAX_RATIO:-0.05}
+      REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT: ${REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT:-500}
     depends_on:
       db:
         condition: service_healthy
@@ -71,6 +115,9 @@ services:
       DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-https://udi.nmpa.gov.cn}
       USE_REGISTRATION_ANCHOR: ${USE_REGISTRATION_ANCHOR:-false}
       PENDING_QUEUE_MODE: ${PENDING_QUEUE_MODE:-document_only}
+      REGISTRATION_ANCHOR_GATE_ENABLED: ${REGISTRATION_ANCHOR_GATE_ENABLED:-true}
+      REGISTRATION_ANCHOR_GATE_MAX_RATIO: ${REGISTRATION_ANCHOR_GATE_MAX_RATIO:-0.05}
+      REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT: ${REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT:-500}
     depends_on:
       db:
         condition: service_healthy
@@ -96,6 +143,3 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
-
-volumes:
-  pgdata:

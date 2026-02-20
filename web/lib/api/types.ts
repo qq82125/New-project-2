@@ -50,3 +50,25 @@ export type TimelineEvent = {
   diff_summary?: string;
   evidence_refs?: EvidenceRef[];
 };
+
+export type RegistrationFieldDiff = {
+  field: string;
+  group?: string | null;
+  before?: string | null;
+  after?: string | null;
+  source?: string | null;
+  evidence_raw_document_id?: string | null;
+};
+
+export type RegistrationDiffItem = {
+  observed_at?: string | null;
+  snapshot_key?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  diffs: RegistrationFieldDiff[];
+};
+
+export type RegistrationDiffList = {
+  items: RegistrationDiffItem[];
+  total: number;
+};

@@ -103,4 +103,5 @@ CREATE TABLE IF NOT EXISTS nhsa_codes (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_nhsa_codes_snapshot_month ON nhsa_codes (snapshot_month);
+-- Legacy bootstrap table in this migration uses `month`; 0017 migrates it to `snapshot_month`.
+CREATE INDEX IF NOT EXISTS idx_nhsa_codes_month ON nhsa_codes (month);

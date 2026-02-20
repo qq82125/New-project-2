@@ -37,6 +37,7 @@ from app.services.ivd_classifier import VERSION as IVD_CLASSIFIER_VERSION
 from app.services.ivd_dictionary import IVD_SCOPE_ALLOWLIST
 from app.services.metrics import generate_daily_metrics
 from app.services.lri_v1 import compute_lri_v1_if_due
+from app.services.registration_anchor_gate import enforce_registration_anchor_gate
 from app.services.subscriptions import dispatch_daily_subscription_digest
 from app.pipeline.ingest import save_raw_document_from_path
 from app.models import RawDocument
@@ -254,6 +255,12 @@ def sync_nmpa_ivd(
     try:
         if primary_source is not None:
             stats = _sync_from_primary_source(db, run, primary_source)
+            gate_metrics = enforce_registration_anchor_gate(
+                db,
+                enabled=bool(getattr(settings, 'registration_anchor_gate_enabled', True)),
+                max_ratio=float(getattr(settings, 'registration_anchor_gate_max_ratio', 0.05)),
+                max_unanchored_count=int(getattr(settings, 'registration_anchor_gate_max_unanchored_count', 500)),
+            )
             finish_source_run(
                 db,
                 run,
@@ -275,6 +282,15 @@ def sync_nmpa_ivd(
                     'source_query_used': bool(stats.get('source_query_used')),
                     'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
                     'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
+                    'registration_anchor_gate': {
+                        'total_regs': int(gate_metrics.total_regs),
+                        'unanchored_regs': int(gate_metrics.unanchored_regs),
+                        'ratio': float(gate_metrics.ratio),
+                        'max_ratio': float(getattr(settings, 'registration_anchor_gate_max_ratio', 0.05)),
+                        'max_unanchored_count': int(
+                            getattr(settings, 'registration_anchor_gate_max_unanchored_count', 500)
+                        ),
+                    },
                 },
             )
             generate_daily_metrics(db)
@@ -374,6 +390,12 @@ def sync_nmpa_ivd(
         except TypeError:
             # Backward-compat for older stubs/mocks that don't accept raw_document_id.
             stats = ingest_staging_records(db, records, run.id)
+        gate_metrics = enforce_registration_anchor_gate(
+            db,
+            enabled=bool(getattr(settings, 'registration_anchor_gate_enabled', True)),
+            max_ratio=float(getattr(settings, 'registration_anchor_gate_max_ratio', 0.05)),
+            max_unanchored_count=int(getattr(settings, 'registration_anchor_gate_max_unanchored_count', 500)),
+        )
 
         # Update evidence chain parse status for this package.
         try:
@@ -418,6 +440,15 @@ def sync_nmpa_ivd(
                 'ivd_classifier_version': int(IVD_CLASSIFIER_VERSION),
                 'ivd_scope_allowlist': list(IVD_SCOPE_ALLOWLIST),
                 'variant_report': variant_report,
+                'registration_anchor_gate': {
+                    'total_regs': int(gate_metrics.total_regs),
+                    'unanchored_regs': int(gate_metrics.unanchored_regs),
+                    'ratio': float(gate_metrics.ratio),
+                    'max_ratio': float(getattr(settings, 'registration_anchor_gate_max_ratio', 0.05)),
+                    'max_unanchored_count': int(
+                        getattr(settings, 'registration_anchor_gate_max_unanchored_count', 500)
+                    ),
+                },
             },
         )
         generate_daily_metrics(db)
