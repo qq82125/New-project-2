@@ -512,6 +512,25 @@ class FieldDiff(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ShadowDiffError(Base):
+    __tablename__ = 'shadow_diff_errors'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True, index=True
+    )
+    raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
+    )
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    registration_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    reason_code: Mapped[str] = mapped_column(Text, nullable=False, default='UNKNOWN', index=True)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class MethodologyNode(Base):
     __tablename__ = 'methodology_nodes'
 

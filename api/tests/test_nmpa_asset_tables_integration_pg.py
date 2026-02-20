@@ -33,6 +33,7 @@ def test_nmpa_asset_tables_exist() -> None:
         apply_sql_migrations(conn)
         assert_table_exists(conn, "nmpa_snapshots")
         assert_table_exists(conn, "field_diffs")
+        assert_table_exists(conn, "shadow_diff_errors")
 
         # Minimal column contract.
         assert_column_exists(conn, "nmpa_snapshots", "registration_id")
@@ -48,6 +49,7 @@ def test_nmpa_asset_tables_exist() -> None:
         assert_column_exists(conn, "field_diffs", "change_type")
         assert_column_exists(conn, "field_diffs", "severity")
         assert_column_exists(conn, "field_diffs", "confidence")
+        assert_column_exists(conn, "shadow_diff_errors", "reason_code")
 
     # Constraint smoke: one snapshot per (registration_id, source_run_id).
     with Session(engine) as db:

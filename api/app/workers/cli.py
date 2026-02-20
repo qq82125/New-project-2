@@ -154,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     nmpa_diff_parser = sub.add_parser('nmpa:diffs', help='Summarize NMPA field diffs for a date (ops/debug)')
     nmpa_diff_parser.add_argument('--date', required=True, help='YYYY-MM-DD')
+    nmpa_replay_parser = sub.add_parser('nmpa:diff-replay', help='Replay NMPA snapshot/diff for one source_run_id')
+    nmpa_replay_mode = nmpa_replay_parser.add_mutually_exclusive_group()
+    nmpa_replay_mode.add_argument('--dry-run', action='store_true', help='Preview only, no writes')
+    nmpa_replay_mode.add_argument('--execute', action='store_true', help='Recompute snapshots/diffs only')
+    nmpa_replay_parser.add_argument('--source-run-id', type=int, required=True, help='source_runs.id to replay')
 
     meth_seed = sub.add_parser('methodology:seed', help='Seed methodology tree (V1) into methodology_nodes')
     meth_seed_mode = meth_seed.add_mutually_exclusive_group()
@@ -580,6 +585,32 @@ def _run_nmpa_diffs(*, target_date: str) -> int:
                 }
                 for r in rows
             ],
+        }
+        print(json.dumps(out, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_nmpa_diff_replay(args: argparse.Namespace) -> int:
+    from app.services.nmpa_assets import replay_nmpa_snapshot_diffs_for_source_run
+
+    dry_run = not bool(getattr(args, "execute", False))
+    source_run_id = int(getattr(args, "source_run_id"))
+
+    db = SessionLocal()
+    try:
+        report = replay_nmpa_snapshot_diffs_for_source_run(db, source_run_id=source_run_id, dry_run=dry_run)
+        out = {
+            "ok": True,
+            "source_run_id": source_run_id,
+            "dry_run": dry_run,
+            "total_records": int(report.total_records),
+            "diff_success": int(report.diff_success),
+            "diff_failed": int(report.diff_failed),
+            "diffs_written": int(report.diffs_written),
+            "diff_success_rate": report.diff_success_rate,
+            "top_reason_codes": report.top_reason_codes,
         }
         print(json.dumps(out, ensure_ascii=True))
         return 0
@@ -1647,6 +1678,8 @@ def main() -> None:
         raise SystemExit(_run_nmpa_snapshots(since=str(args.since)))
     if args.cmd == 'nmpa:diffs':
         raise SystemExit(_run_nmpa_diffs(target_date=str(args.date)))
+    if args.cmd == 'nmpa:diff-replay':
+        raise SystemExit(_run_nmpa_diff_replay(args))
     if args.cmd == 'methodology:seed':
         raise SystemExit(_run_methodology_seed(dry_run=(not bool(args.execute)), file_path=str(args.file)))
     if args.cmd == 'methodology:map':
