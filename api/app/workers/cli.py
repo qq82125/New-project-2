@@ -253,6 +253,37 @@ def build_parser() -> argparse.ArgumentParser:
     udi_index.add_argument('--part-from', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
     udi_index.add_argument('--part-to', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
 
+    source_import = sub.add_parser('source:import-files', help='Recursive versioned offline file import')
+    source_import_mode = source_import.add_mutually_exclusive_group()
+    source_import_mode.add_argument('--dry-run', action='store_true', help='Scan and record dataset/files only')
+    source_import_mode.add_argument('--execute', action='store_true', help='Execute import')
+    source_import.add_argument('--source-key', default='nmpa_legacy_dump', help='Logical source key')
+    source_import.add_argument('--root-path', default='/data/import/nmpa_legacy', help='Root path under /data/import')
+    source_import.add_argument('--dataset-version', default=None, help='Optional version; default YYYYMMDD_HHMMSS')
+    source_import.add_argument('--recursive', dest='recursive', action='store_true', help='Recursive scan (default true)')
+    source_import.add_argument('--no-recursive', dest='recursive', action='store_false', help='Disable recursive scan')
+    source_import.set_defaults(recursive=True)
+    source_import.add_argument('--max-depth', type=int, default=0, help='0 means unlimited depth')
+    source_import.add_argument('--pattern', default='*.csv,*.xlsx,*.xls,*.json,*.ndjson', help='Glob list, comma-separated')
+    source_import.add_argument('--only-new', dest='only_new', action='store_true', help='Import only unseen sha256 files (default)')
+    source_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
+    source_import.set_defaults(only_new=True)
+
+    nmpa_legacy_import = sub.add_parser('nmpa-legacy:import', help='Alias of source:import-files for nmpa legacy dump')
+    nmpa_legacy_mode = nmpa_legacy_import.add_mutually_exclusive_group()
+    nmpa_legacy_mode.add_argument('--dry-run', action='store_true', help='Scan and record dataset/files only')
+    nmpa_legacy_mode.add_argument('--execute', action='store_true', help='Execute import')
+    nmpa_legacy_import.add_argument('--root-path', default='/data/import/nmpa_legacy', help='Root path under /data/import')
+    nmpa_legacy_import.add_argument('--dataset-version', default=None, help='Optional version; default YYYYMMDD_HHMMSS')
+    nmpa_legacy_import.add_argument('--recursive', dest='recursive', action='store_true', help='Recursive scan (default true)')
+    nmpa_legacy_import.add_argument('--no-recursive', dest='recursive', action='store_false', help='Disable recursive scan')
+    nmpa_legacy_import.set_defaults(recursive=True)
+    nmpa_legacy_import.add_argument('--max-depth', type=int, default=0, help='0 means unlimited depth')
+    nmpa_legacy_import.add_argument('--pattern', default='*.csv,*.xlsx,*.xls,*.json,*.ndjson', help='Glob list, comma-separated')
+    nmpa_legacy_import.add_argument('--only-new', dest='only_new', action='store_true', help='Import only unseen sha256 files (default)')
+    nmpa_legacy_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
+    nmpa_legacy_import.set_defaults(only_new=True)
+
     udi_variants = sub.add_parser('udi:variants', help='Promote udi_device_index into registration-anchored product_variants')
     udi_variants_mode = udi_variants.add_mutually_exclusive_group()
     udi_variants_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1340,6 +1371,66 @@ def _run_udi_promote_snapshot(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_source_import_files(args: argparse.Namespace, *, force_source_key: str | None = None) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.offline_import import DEFAULT_PATTERN, DEFAULT_SOURCE_KEY, run_source_import_files
+
+        execute = bool(getattr(args, "execute", False))
+        dry_run = not execute
+        source_key = str(force_source_key or getattr(args, "source_key", DEFAULT_SOURCE_KEY)).strip() or DEFAULT_SOURCE_KEY
+        recursive = bool(getattr(args, "recursive", True))
+        root_path = Path(str(getattr(args, "root_path", "/data/import/nmpa_legacy")))
+        max_depth = int(getattr(args, "max_depth", 0) or 0)
+        pattern = str(getattr(args, "pattern", DEFAULT_PATTERN) or DEFAULT_PATTERN)
+        only_new = bool(getattr(args, "only_new", True))
+        dataset_version = str(getattr(args, "dataset_version", "") or "").strip() or None
+
+        rep = run_source_import_files(
+            db,
+            source_key=source_key,
+            root_path=root_path,
+            recursive=recursive,
+            max_depth=max_depth,
+            pattern=pattern,
+            only_new=only_new,
+            dry_run=dry_run,
+            dataset_version=dataset_version,
+        )
+
+        db.commit()
+        out = {
+            "source_key": rep.source_key,
+            "dataset_id": rep.dataset_id,
+            "dataset_version": rep.dataset_version,
+            "root_path": rep.root_path,
+            "recursive": rep.recursive,
+            "max_depth": rep.max_depth,
+            "pattern": rep.pattern,
+            "only_new": rep.only_new,
+            "dry_run": rep.dry_run,
+            "files_scanned": rep.files_scanned,
+            "files_imported": rep.files_imported,
+            "files_skipped": rep.files_skipped,
+            "rows_written": rep.rows_written,
+            "rows_failed": rep.rows_failed,
+            "new_files_count": rep.new_files_count,
+            "dup_files_count": rep.dup_files_count,
+            "ext_filtered_count": rep.ext_filtered_count,
+            "parse_level_distribution": rep.parse_level_distribution,
+            "top_parse_reasons": rep.top_parse_reasons,
+            "action_suffix_counts": rep.action_suffix_counts,
+            "issuer_alias_counts": rep.issuer_alias_counts,
+        }
+        print(json.dumps(out, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _run_udi_index(args: argparse.Namespace) -> int:
     from app.core.config import Settings
 
@@ -1768,6 +1859,10 @@ def main() -> None:
         raise SystemExit(_run_udi_promote_snapshot(args))
     if args.cmd == 'udi:index':
         raise SystemExit(_run_udi_index(args))
+    if args.cmd == 'source:import-files':
+        raise SystemExit(_run_source_import_files(args))
+    if args.cmd == 'nmpa-legacy:import':
+        raise SystemExit(_run_source_import_files(args, force_source_key='nmpa_legacy_dump'))
     if args.cmd == 'udi:variants':
         raise SystemExit(_run_udi_variants(args))
     if args.cmd == 'udi:products-enrich':
