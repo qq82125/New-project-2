@@ -96,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
     quality_mode.add_argument('--execute', action='store_true', help='Write daily_quality_metrics')
     quality_metrics_parser.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
     quality_metrics_parser.add_argument('--window-days', dest='window_days', type=int, default=365, help='Rolling window days (default: 365)')
+    raw_archive_parser = sub.add_parser('ops:archive-raw', help='Apply raw_documents/raw_source_records retention archive policy')
+    raw_archive_mode = raw_archive_parser.add_mutually_exclusive_group()
+    raw_archive_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    raw_archive_mode.add_argument('--execute', action='store_true', help='Execute archive updates')
+    raw_archive_parser.add_argument('--older-than', required=True, help='Retention threshold, e.g. 180d')
 
     local_supp_parser = sub.add_parser('local_registry_supplement', help='Supplement local products from local registry xlsx/zip files')
     local_supp_parser.add_argument('--folder', required=True, help='Folder containing xlsx/zip files')
@@ -541,6 +546,21 @@ def _run_quality_metrics_compute(args: argparse.Namespace) -> int:
             upsert_daily_quality_metrics(db, report)
             db.commit()
         print(json.dumps({"ok": True, "dry_run": dry_run, "window_days": window_days, **report.as_json()}, ensure_ascii=False, default=str))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_ops_archive_raw(args: argparse.Namespace) -> int:
+    from app.services.raw_archive import archive_raw_data, parse_older_than_days
+
+    days = parse_older_than_days(str(getattr(args, "older_than")))
+    dry_run = not bool(getattr(args, "execute", False))
+
+    db = SessionLocal()
+    try:
+        report = archive_raw_data(db, older_than_days=days, dry_run=dry_run)
+        print(json.dumps({"ok": True, **report.as_json()}, ensure_ascii=False, default=str))
         return 0
     finally:
         db.close()
@@ -1666,6 +1686,8 @@ def main() -> None:
         raise SystemExit(_run_metrics_recompute(scope=str(args.scope), since=args.since))
     if args.cmd == 'metrics:quality-compute':
         raise SystemExit(_run_quality_metrics_compute(args))
+    if args.cmd == 'ops:archive-raw':
+        raise SystemExit(_run_ops_archive_raw(args))
     if args.cmd == 'source:udi':
         raise SystemExit(_run_source_udi(execute=bool(args.execute), date_label=args.date))
     if args.cmd == 'local_registry_supplement':
