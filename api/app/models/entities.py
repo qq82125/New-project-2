@@ -48,6 +48,7 @@ class Registration(Base):
     approval_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    field_meta: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     raw_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

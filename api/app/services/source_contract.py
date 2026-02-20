@@ -199,6 +199,22 @@ def _as_dt(v: Any) -> datetime:
     return _utcnow()
 
 
+def _field_meta_entry(
+    *,
+    source_key: str,
+    incoming_meta: dict[str, Any],
+    decision: str,
+) -> dict[str, Any]:
+    return {
+        "source_key": str(incoming_meta.get("source_key") or source_key or "UNKNOWN"),
+        "evidence_grade": str(incoming_meta.get("evidence_grade") or ""),
+        "observed_at": str(incoming_meta.get("observed_at") or ""),
+        "raw_id": (str(incoming_meta.get("raw_source_record_id")) if incoming_meta.get("raw_source_record_id") else None),
+        "decision": str(decision or "unknown"),
+        "updated_at": _utcnow().isoformat(),
+    }
+
+
 def _decision_tuple(meta: dict[str, Any]) -> tuple[int, int, datetime]:
     grade = _grade(str(meta.get("evidence_grade") or "D"), default="D")
     try:
@@ -664,6 +680,7 @@ def upsert_registration_with_contract(
     }
 
     reg_raw = copy.deepcopy(reg.raw_json) if isinstance(reg.raw_json, dict) else {}
+    field_meta = copy.deepcopy(reg.field_meta) if isinstance(reg.field_meta, dict) else {}
     prov = reg_raw.get("_contract_provenance")
     if not isinstance(prov, dict):
         prov = {}
@@ -693,6 +710,11 @@ def upsert_registration_with_contract(
             continue
         if decision.action == "conflict":
             reason = "same_grade_priority_time_requires_manual"
+            field_meta[k] = _field_meta_entry(
+                source_key=str(source or "UNKNOWN"),
+                incoming_meta=decision.incoming_meta,
+                decision=reason,
+            )
             candidates = _queue_conflict_candidates(
                 old_value=old_text,
                 incoming_value=incoming_text,
@@ -725,6 +747,11 @@ def upsert_registration_with_contract(
             )
             continue
         if decision.action == "keep":
+            field_meta[k] = _field_meta_entry(
+                source_key=str(source or "UNKNOWN"),
+                incoming_meta=decision.incoming_meta,
+                decision=str(decision.reason or "keep"),
+            )
             db.add(
                 RegistrationConflictAudit(
                     registration_id=reg.id,
@@ -751,6 +778,11 @@ def upsert_registration_with_contract(
             setattr(reg, k, incoming_text)
         changed[k] = {"old": old_text, "new": incoming_text}
         prov[k] = dict(decision.incoming_meta)
+        field_meta[k] = _field_meta_entry(
+            source_key=str(source or "UNKNOWN"),
+            incoming_meta=decision.incoming_meta,
+            decision=str(decision.reason or "apply"),
+        )
         db.add(
             RegistrationConflictAudit(
                 registration_id=reg.id,
@@ -772,6 +804,7 @@ def upsert_registration_with_contract(
     if payload:
         reg_raw["_latest_payload"] = _json_payload(payload)
     reg.raw_json = reg_raw
+    reg.field_meta = field_meta
     db.add(reg)
 
     if write_change_log and (created or changed):
