@@ -284,6 +284,12 @@ def build_parser() -> argparse.ArgumentParser:
     nmpa_legacy_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
     nmpa_legacy_import.set_defaults(only_new=True)
 
+    offline_dataset_diff = sub.add_parser('offline:dataset-diff', help='Compare two offline datasets by files/rows/reason codes')
+    offline_dataset_diff.add_argument('--source-key', required=True, help='source key, e.g. nmpa_legacy_dump')
+    offline_dataset_diff.add_argument('--from', dest='from_ref', required=True, help='dataset_version or dataset_id')
+    offline_dataset_diff.add_argument('--to', dest='to_ref', required=True, help='dataset_version or dataset_id')
+    offline_dataset_diff.add_argument('--format', default='text', choices=['text', 'json'], help='output format')
+
     udi_variants = sub.add_parser('udi:variants', help='Promote udi_device_index into registration-anchored product_variants')
     udi_variants_mode = udi_variants.add_mutually_exclusive_group()
     udi_variants_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1421,8 +1427,37 @@ def _run_source_import_files(args: argparse.Namespace, *, force_source_key: str 
             "top_parse_reasons": rep.top_parse_reasons,
             "action_suffix_counts": rep.action_suffix_counts,
             "issuer_alias_counts": rep.issuer_alias_counts,
+            "country_region_counts": rep.country_region_counts,
+            "origin_bucket_counts": rep.origin_bucket_counts,
+            "product_params_written": rep.product_params_written,
         }
         print(json.dumps(out, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_offline_dataset_diff(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.offline_dataset_diff import build_offline_dataset_diff, format_offline_dataset_diff_text
+
+        rep = build_offline_dataset_diff(
+            db,
+            source_key=str(getattr(args, "source_key", "")).strip(),
+            from_ref=str(getattr(args, "from_ref", "")).strip(),
+            to_ref=str(getattr(args, "to_ref", "")).strip(),
+            persist=True,
+        )
+        db.commit()
+        fmt = str(getattr(args, "format", "text") or "text").strip().lower()
+        if fmt == "json":
+            print(json.dumps(rep, ensure_ascii=False, default=str))
+        else:
+            print(format_offline_dataset_diff_text(rep))
         return 0
     except Exception:
         db.rollback()
@@ -1863,6 +1898,8 @@ def main() -> None:
         raise SystemExit(_run_source_import_files(args))
     if args.cmd == 'nmpa-legacy:import':
         raise SystemExit(_run_source_import_files(args, force_source_key='nmpa_legacy_dump'))
+    if args.cmd == 'offline:dataset-diff':
+        raise SystemExit(_run_offline_dataset_diff(args))
     if args.cmd == 'udi:variants':
         raise SystemExit(_run_udi_variants(args))
     if args.cmd == 'udi:products-enrich':
