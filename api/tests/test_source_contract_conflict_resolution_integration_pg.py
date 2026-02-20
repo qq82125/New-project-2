@@ -86,7 +86,7 @@ def test_registration_conflict_resolution_by_grade_priority_time() -> None:
         row = db.execute(
             text(
                 """
-                SELECT status, raw_json
+                SELECT status, raw_json, field_meta
                 FROM registrations
                 WHERE registration_no = :no
                 """
@@ -100,6 +100,13 @@ def test_registration_conflict_resolution_by_grade_priority_time() -> None:
         assert isinstance(prov.get("status"), dict)
         assert prov["status"].get("evidence_grade") == "B"
         assert int(prov["status"].get("source_priority")) == 20
+        field_meta = row["field_meta"] if isinstance(row["field_meta"], dict) else {}
+        status_meta = field_meta.get("status") if isinstance(field_meta, dict) else None
+        assert isinstance(status_meta, dict)
+        assert str(status_meta.get("source_key")) == "SRC_D"
+        assert str(status_meta.get("evidence_grade")) == "B"
+        assert str(status_meta.get("decision") or "") != ""
+        assert str(status_meta.get("updated_at") or "") != ""
 
         # only "new" + one winning update expected
         cnt = db.execute(
@@ -166,10 +173,15 @@ def test_registration_conflict_tie_goes_to_conflicts_queue() -> None:
         db.commit()
 
         row = db.execute(
-            text("SELECT status FROM registrations WHERE registration_no = :no"),
+            text("SELECT status, field_meta FROM registrations WHERE registration_no = :no"),
             {"no": reg_no},
         ).mappings().one()
         assert row["status"] == "ACTIVE"
+        field_meta = row["field_meta"] if isinstance(row["field_meta"], dict) else {}
+        status_meta = field_meta.get("status") if isinstance(field_meta, dict) else None
+        assert isinstance(status_meta, dict)
+        assert str(status_meta.get("decision") or "") == "same_grade_priority_time_requires_manual"
+        assert str(status_meta.get("source_key") or "") == "SRC_B"
 
         q = db.execute(
             text(

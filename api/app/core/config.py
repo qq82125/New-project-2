@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Any string is accepted; we derive a proper key from it.
     data_sources_crypto_key: str = 'change-me-data-sources-key'
     use_registration_anchor: bool = False
+    registration_anchor_gate_enabled: bool = True
+    registration_anchor_gate_max_ratio: float = 0.05
+    registration_anchor_gate_max_unanchored_count: int = 500
 
     # Pending queues behavior when canonical key (registration_no) is missing.
     # - both: write pending_records (row-level) + pending_documents (document-level)

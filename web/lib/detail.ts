@@ -4,6 +4,8 @@ export type DetailEvidence = {
   source: string;
   observed_at: string;
   excerpt: string;
+  raw_document_id: string;
+  raw_document_url: string;
 };
 
 export type DetailChange = {
@@ -33,6 +35,8 @@ export function toEvidenceRows(events: TimelineEvent[]): DetailEvidence[] {
         source: text(ref.source),
         observed_at: text(ref.observed_at || event.observed_at),
         excerpt: text(ref.excerpt || ''),
+        raw_document_id: String(ref.raw_document_id || ''),
+        raw_document_url: String(ref.source_url || ''),
       });
     }
   }

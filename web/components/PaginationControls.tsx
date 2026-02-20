@@ -12,19 +12,23 @@ export default function PaginationControls({
   page,
   pageSize,
   total,
+  buildHref,
 }: {
   basePath: string;
   params: Record<string, QueryValue>;
   page: number;
   pageSize: number;
   total: number;
+  buildHref?: (page: number, pageSize: number) => string;
 }) {
   const safePage = Math.max(1, Number(page || 1));
   const safePageSize = Math.max(1, Number(pageSize || 20));
   const totalPages = Math.max(1, Math.ceil(Math.max(0, Number(total || 0)) / safePageSize));
 
   const hrefFor = (targetPage: number) =>
-    `${basePath}${qs({ ...params, page: targetPage, page_size: safePageSize })}`;
+    buildHref
+      ? buildHref(targetPage, safePageSize)
+      : `${basePath}${qs({ ...params, page: targetPage, page_size: safePageSize })}`;
 
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>

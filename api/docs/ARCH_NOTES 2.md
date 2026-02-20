@@ -1,4 +1,4 @@
-# IVD产品雷达 架构现状（PR0）
+# DeepIVD 架构现状（PR0）
 
 ## 1) products 主表与核心字段
 - 模型位置：`/Users/GY/Documents/New project 2/api/app/models/entities.py`

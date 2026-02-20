@@ -8,6 +8,10 @@ type PendingItem = {
   status: string;
   reason: string;
   reason_code?: string | null;
+  match_reason?: string | null;
+  confidence?: number;
+  reversible?: boolean;
+  linked_by?: string | null;
   candidate_company_name?: string | null;
   candidate_product_name?: string | null;
   created_at?: string | null;

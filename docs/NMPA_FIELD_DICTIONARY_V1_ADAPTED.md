@@ -1,4 +1,4 @@
-# IVD产品雷达 — NMPA 字段字典（V1.0 适配版，SSOT）
+# DeepIVD — NMPA 字段字典（V1.0 适配版，SSOT）
 
 目的：在不破坏现有 schema 的前提下，为 NMPA/UDI 数据打通“可审计快照 + 字段级 diff + 订阅投递”的资产化能力。
 硬约束：

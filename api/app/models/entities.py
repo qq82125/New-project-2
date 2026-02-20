@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -48,6 +48,7 @@ class Registration(Base):
     approval_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    field_meta: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     raw_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -141,6 +142,9 @@ class RawDocument(Base):
     parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     parse_log: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archive_status: Mapped[str] = mapped_column(String(20), nullable=False, default='active', index=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    archive_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class RawSourceRecord(Base):
@@ -158,6 +162,9 @@ class RawSourceRecord(Base):
     payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     parse_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
     parse_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archive_status: Mapped[str] = mapped_column(String(20), nullable=False, default='active', index=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    archive_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -172,7 +179,10 @@ class ProductUdiMap(Base):
     di: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     match_type: Mapped[str] = mapped_column(String(20), nullable=False, default='direct', index=True)
-    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0.80)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.80)
+    match_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reversible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    linked_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
     )
@@ -207,6 +217,10 @@ class PendingUdiLink(Base):
     di: Mapped[str] = mapped_column(String(128), ForeignKey('udi_di_master.di'), nullable=False, index=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     reason_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    match_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.80, index=True)
+    reversible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    linked_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default='PENDING', index=True)
@@ -502,6 +516,25 @@ class FieldDiff(Base):
         BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ShadowDiffError(Base):
+    __tablename__ = 'shadow_diff_errors'
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_document_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_documents.id'), nullable=True, index=True
+    )
+    raw_source_record_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('raw_source_records.id'), nullable=True, index=True
+    )
+    source_run_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('source_runs.id'), nullable=True, index=True
+    )
+    registration_no: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
+    reason_code: Mapped[str] = mapped_column(Text, nullable=False, default='UNKNOWN', index=True)
+    error: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class MethodologyNode(Base):
@@ -836,6 +869,17 @@ class DailyUdiMetric(Base):
     unmapped_di_count: Mapped[int] = mapped_column(Integer, default=0)
     coverage_ratio: Mapped[float] = mapped_column(Numeric(8, 6), default=0)
     source_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey('source_runs.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DailyQualityMetric(Base):
+    __tablename__ = 'daily_quality_metrics'
+
+    metric_date: Mapped[date] = mapped_column('date', Date, primary_key=True)
+    metric_key: Mapped[str] = mapped_column('key', Text, primary_key=True)
+    value: Mapped[float] = mapped_column(Numeric(14, 6), nullable=False, default=0)
+    meta: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
