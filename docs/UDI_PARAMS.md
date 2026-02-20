@@ -40,7 +40,7 @@ python -m app.workers.cli udi:params --execute --with-candidates --source-run-id
 - `udi_params_allowlist_change_reason`
 
 校验规则：
-- allowlist 的每个 key 必须存在于 `docs/PARAMETER_DICTIONARY_CORE_V1.yaml`
+- allowlist 的每个 key 必须存在于 `docs/PARAMETER_DICTIONARY_CORE_V1.yaml` 或 `docs/PARAMETER_DICTIONARY_APPROVED_V1.yaml`
 - `--dry-run --only-allowlisted`：提示非法 key 并计入 rejected
 - `--execute --only-allowlisted`：若有非法 key 默认失败退出（可用 `--allow-unknown-keys` 临时放行）
 

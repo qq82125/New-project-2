@@ -76,19 +76,27 @@ def _as_int(value: Any, default: int) -> int:
         return int(default)
 
 
-def _load_core_param_keys() -> set[str]:
-    dictionary_path = Path(__file__).resolve().parents[3] / "docs" / "PARAMETER_DICTIONARY_CORE_V1.yaml"
-    if not dictionary_path.exists():
-        return set()
-    keys: set[str] = set()
-    for line in dictionary_path.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if not s.startswith("- key:"):
+def _load_allowlist_key_registry() -> dict[str, str]:
+    root = Path(__file__).resolve().parents[3] / "docs"
+    files = [
+        (root / "PARAMETER_DICTIONARY_CORE_V1.yaml", "core"),
+        (root / "PARAMETER_DICTIONARY_APPROVED_V1.yaml", "approved"),
+    ]
+    registry: dict[str, str] = {}
+    for path, source in files:
+        if not path.exists():
             continue
-        key = s.split(":", 1)[1].strip().strip('"').strip("'")
-        if key:
-            keys.add(key)
-    return keys
+        for line in path.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if not s.startswith("- key:"):
+                continue
+            key = s.split(":", 1)[1].strip().strip('"').strip("'")
+            if not key:
+                continue
+            k = key.lower()
+            if k not in registry:
+                registry[k] = source
+    return registry
 
 
 @dataclass
@@ -144,18 +152,27 @@ def _get_allowlist_config(db: Session) -> UdiAllowlistConfig:
     )
 
 
-def _validate_allowlist_keys(allowlist: list[str], core_keys: set[str]) -> tuple[list[str], list[str]]:
-    if not core_keys:
-        return list(allowlist), []
-    core_keys_lower = {k.lower() for k in core_keys}
+def _validate_allowlist_keys(
+    allowlist: list[str],
+    key_registry: dict[str, str],
+) -> tuple[list[str], list[str], int, int]:
+    if not key_registry:
+        return list(allowlist), [], 0, 0
     valid: list[str] = []
     invalid: list[str] = []
+    core_count = 0
+    approved_count = 0
     for key in allowlist:
-        if key in core_keys or key.lower() in core_keys_lower:
+        src = key_registry.get(key.lower())
+        if src is not None:
             valid.append(key)
+            if src == "core":
+                core_count += 1
+            elif src == "approved":
+                approved_count += 1
         else:
             invalid.append(key)
-    return valid, invalid
+    return valid, invalid, core_count, approved_count
 
 
 def _is_non_empty(value: Any, data_type: str) -> bool:
@@ -332,6 +349,8 @@ class UdiParamsReport:
     invalid_key_count: int = 0
     invalid_keys: list[str] | None = None
     rejected_invalid_keys: int = 0
+    allowlist_valid_core_count: int = 0
+    allowlist_valid_approved_count: int = 0
     allowlisted_keys_preview: list[str] | None = None
     total_batches: int = 0
     final_cursor: str | None = None
@@ -356,6 +375,11 @@ class UdiParamsReport:
             "invalid_key_count": int(self.invalid_key_count or 0),
             "invalid_keys": list(self.invalid_keys or []),
             "rejected_invalid_keys": int(self.rejected_invalid_keys or 0),
+            "allowlist_valid_sources": {
+                "core_count": int(self.allowlist_valid_core_count or 0),
+                "approved_count": int(self.allowlist_valid_approved_count or 0),
+                "invalid_count": int(self.invalid_key_count or 0),
+            },
             "allowlisted_keys_preview": list(self.allowlisted_keys_preview or []),
             "total_batches": self.total_batches,
             "final_cursor": self.final_cursor,
@@ -672,14 +696,21 @@ def write_allowlisted_params(
     rep.allowlisted_key_count = len(allow)
     rep.allowlisted_keys_preview = sorted(list(allow))[:20]
     rep.invalid_keys = []
+    rep.allowlist_valid_core_count = 0
+    rep.allowlist_valid_approved_count = 0
     if only_allowlisted:
-        valid, invalid = _validate_allowlist_keys(allow_cfg.allowlist, _load_core_param_keys())
+        valid, invalid, core_count, approved_count = _validate_allowlist_keys(
+            allow_cfg.allowlist,
+            _load_allowlist_key_registry(),
+        )
         rep.invalid_keys = list(invalid)
         rep.invalid_key_count = len(invalid)
         rep.rejected_invalid_keys = len(invalid)
+        rep.allowlist_valid_core_count = int(core_count)
+        rep.allowlist_valid_approved_count = int(approved_count)
         if invalid and not dry_run and not allow_unknown_keys:
             raise ValueError(
-                "invalid allowlist keys not in core dictionary: "
+                "invalid allowlist keys not in core/approved dictionary: "
                 + ", ".join(invalid)
                 + ". Fix allowlist or run with --allow-unknown-keys."
             )

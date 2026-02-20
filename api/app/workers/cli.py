@@ -1724,6 +1724,11 @@ def _run_udi_params(args: argparse.Namespace) -> int:
             out: dict[str, object] = {
                 "write": rep.to_dict,
                 "allowlist_version": int(rep.allowlist_version or 1),
+                "allowlist_valid_sources": {
+                    "core_count": int(rep.allowlist_valid_core_count or 0),
+                    "approved_count": int(rep.allowlist_valid_approved_count or 0),
+                    "invalid_count": int(rep.invalid_key_count or 0),
+                },
                 "per_version_written_count": {str(int(rep.allowlist_version or 1)): int(rep.params_written or 0)},
             }
             if with_candidates:
@@ -1771,6 +1776,11 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                 "allowlisted_key_count": int(rep.allowlisted_key_count or 0),
                 "invalid_key_count": int(rep.invalid_key_count or 0),
                 "invalid_keys": list(rep.invalid_keys or []),
+                "allowlist_valid_sources": {
+                    "core_count": int(rep.allowlist_valid_core_count or 0),
+                    "approved_count": int(rep.allowlist_valid_approved_count or 0),
+                    "invalid_count": int(rep.invalid_key_count or 0),
+                },
             }
             print(json.dumps(out, ensure_ascii=False, default=str))
             return 0
