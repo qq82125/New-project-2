@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 from typing import Any
@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models import ChangeLog, Product, ProductUdiMap, ProductVariant, Registration, RawDocument, PendingRecord
-from app.services.normalize_keys import normalize_registration_no
+from app.services.normalize_keys import extract_registration_no_candidates, normalize_registration_no
 from app.services.source_contract import upsert_registration_with_contract
 
 
@@ -236,7 +236,9 @@ def _log_registration_stub_change(
     )
 
 
-def _ensure_registration_stub_meta(db: Session, *, registration_id: UUID, source_run_id: int | None, source: str, raw_document_id: UUID | None) -> None:
+def _ensure_registration_stub_meta(
+    db: Session, *, registration_id: UUID, source_run_id: int | None, source: str, raw_document_id: UUID | None
+) -> bool:
     reg = db.get(Registration, registration_id)
     if reg is None:
         return
@@ -253,6 +255,8 @@ def _ensure_registration_stub_meta(db: Session, *, registration_id: UUID, source
             source=source,
             raw_document_id=raw_document_id,
         )
+        return True
+    return False
 
 
 def _ensure_product_stub(
@@ -262,7 +266,7 @@ def _ensure_product_stub(
     reg_no: str,
     di: str,
     row: dict[str, Any],
-) -> tuple[Product, bool]:
+) -> tuple[Product, bool, bool]:
     product = db.scalar(
         select(Product)
         .where(Product.registration_id == registration_id)
@@ -273,6 +277,7 @@ def _ensure_product_stub(
         product = db.scalar(select(Product).where(Product.udi_di == di).limit(1))
 
     created = False
+    upgraded = False
     if product is None:
         product = Product(
             udi_di=di,
@@ -322,6 +327,7 @@ def _ensure_product_stub(
             changed = True
         if changed:
             db.add(product)
+            upgraded = True
 
     if not isinstance(product.raw_json, dict):
         product.raw_json = {}
@@ -329,7 +335,9 @@ def _ensure_product_stub(
     product.raw_json = _merge_stub(product.raw_json)
     if before_merge != product.raw_json:
         db.add(product)
-    return product, created
+        if not created:
+            upgraded = True
+    return product, created, upgraded
 
 
 def _upsert_product_variant(
@@ -432,6 +440,12 @@ class UdiPromoteReport:
     variant_upserted: int = 0
     map_upserted: int = 0
     pending_written: int = 0
+    multi_regno_records_count: int = 0
+    stub_upgraded_count: int = 0
+    forbidden_overwrite_attempts_count: int = 0
+    guarded_multi_reg: int = 0
+    guarded_di_conflict: int = 0
+    guarded_product_conflict: int = 0
     skipped_no_di: int = 0
     failed: int = 0
     errors: list[dict[str, Any]] | None = None
@@ -450,6 +464,12 @@ class UdiPromoteReport:
             "variant_upserted": self.variant_upserted,
             "map_upserted": self.map_upserted,
             "pending_written": self.pending_written,
+            "multi_regno_records_count": self.multi_regno_records_count,
+            "stub_upgraded_count": self.stub_upgraded_count,
+            "forbidden_overwrite_attempts_count": self.forbidden_overwrite_attempts_count,
+            "guarded_multi_reg": self.guarded_multi_reg,
+            "guarded_di_conflict": self.guarded_di_conflict,
+            "guarded_product_conflict": self.guarded_product_conflict,
             "skipped_no_di": self.skipped_no_di,
             "failed": self.failed,
             "errors": self.errors or [],
@@ -465,6 +485,7 @@ def promote_udi_from_device_index(
     dry_run: bool,
     limit: int | None = None,
     offset: int | None = None,
+    allow_fill_empty_regulatory_dates: bool = False,
 ) -> UdiPromoteReport:
     report = UdiPromoteReport(errors=[])
     commit_every = 5000
@@ -501,9 +522,13 @@ def promote_udi_from_device_index(
             continue
 
         reg_raw = _pick_text(row, "registration_no_norm", "registration_no", "reg_no", "zczbhhzbapzbh")
-        reg_no = normalize_registration_no(reg_raw) if reg_raw else None
+        reg_candidates = extract_registration_no_candidates(reg_raw)
+        reg_no = reg_candidates[0] if reg_candidates else None
         run_id = _extract_source_run_id(row, source_run_id)
         rid = _extract_raw_document_id(row, raw_document_id)
+
+        if len(reg_candidates) > 1:
+            report.multi_regno_records_count += 1
 
         if not reg_no:
             report.missing_registration_no += 1
@@ -554,7 +579,7 @@ def promote_udi_from_device_index(
 
         report.with_registration_no += 1
         if dry_run:
-            report.promoted += 1
+            report.promoted += len(reg_candidates)
             continue
 
         try:
@@ -562,73 +587,162 @@ def promote_udi_from_device_index(
             if src_record_id is None:
                 src_record_id = None
 
-            reg_result = upsert_registration_with_contract(
-                db,
-                registration_no=reg_no,
-                incoming_fields={"status": "UNKNOWN"},
-                source=source,
-                source_run_id=run_id,
-                evidence_grade="C",
-                source_priority=1000,
-                observed_at=_utcnow(),
-                raw_source_record_id=src_record_id,
-                raw_payload={
-                    "source": source,
-                    "di": di,
-                    "registration_no_raw": reg_raw,
-                    "product_name": _pick_text(row, "product_name", "cpmctymc", "brand", "spmc"),
-                    "registration_no_norm": reg_no,
-                },
-                write_change_log=True,
-            )
+            # Guard-2A: default single-reg records must not rebind one DI to another registration silently.
+            existing_map_regs = [
+                str(x or "").strip()
+                for x in db.execute(
+                    text("SELECT DISTINCT registration_no FROM product_udi_map WHERE di = :di"),
+                    {"di": di},
+                ).scalars()
+                if str(x or "").strip()
+            ]
+            if len(reg_candidates) == 1 and existing_map_regs and reg_no not in existing_map_regs:
+                report.guarded_di_conflict += 1
+                if run_id is not None:
+                    if rid is None:
+                        rid = _ensure_raw_document(db=db, row=row, source=source, source_run_id=run_id)
+                    _upsert_pending_record(
+                        db,
+                        source_key=source,
+                        source_run_id=run_id,
+                        raw_document_id=rid,
+                        reason_code="DI_REG_BIND_CONFLICT",
+                        row=row,
+                        registration_no_raw=reg_raw,
+                    )
+                    report.pending_written += 1
+                continue
 
-            reg = db.get(Registration, reg_result.registration_id)
-            if reg is None:
-                raise RuntimeError("registration not found after upsert")
+            # Guard-2B: default single-reg records must not overwrite product(di) with another canonical reg_no.
+            existing_di_product = db.scalar(select(Product).where(Product.udi_di == di).limit(1))
+            existing_di_product_reg = normalize_registration_no(getattr(existing_di_product, "reg_no", None)) if existing_di_product else None
+            if len(reg_candidates) == 1 and existing_di_product_reg and existing_di_product_reg != reg_no:
+                report.guarded_product_conflict += 1
+                if run_id is not None:
+                    if rid is None:
+                        rid = _ensure_raw_document(db=db, row=row, source=source, source_run_id=run_id)
+                    _upsert_pending_record(
+                        db,
+                        source_key=source,
+                        source_run_id=run_id,
+                        raw_document_id=rid,
+                        reason_code="PRODUCT_DI_REG_CONFLICT",
+                        row=row,
+                        registration_no_raw=reg_raw,
+                    )
+                    report.pending_written += 1
+                continue
 
-            _ensure_registration_stub_meta(
-                db,
-                registration_id=reg.id,
-                source_run_id=run_id,
-                source=source,
-                raw_document_id=rid,
-            )
-            if reg_result.created:
-                report.registration_created += 1
-            if reg_result.changed_fields:
-                report.registration_updated += 1
+            status_attempt = _pick_text(row, "status", "registration_status")
+            if status_attempt:
+                report.forbidden_overwrite_attempts_count += 1
 
-            product, product_created = _ensure_product_stub(
-                db=db,
-                registration_id=reg.id,
-                reg_no=reg_no,
-                di=di,
-                row=row,
-            )
-            if product_created:
-                report.product_created += 1
-            else:
-                report.product_updated += 1
+            reg_for_variant: Registration | None = None
+            product_for_variant: Product | None = None
+            for idx, candidate_reg_no in enumerate(reg_candidates):
+                approval_attempt = _pick_text(row, "approval_date", "approved_date")
+                expiry_attempt = _pick_text(row, "expiry_date")
+                incoming_fields: dict[str, Any] = {}
+                if allow_fill_empty_regulatory_dates and (approval_attempt or expiry_attempt):
+                    existing_reg = db.scalar(select(Registration).where(Registration.registration_no == candidate_reg_no).limit(1))
+                    if approval_attempt:
+                        if existing_reg is None or getattr(existing_reg, "approval_date", None) is None:
+                            d = _try_parse_date(approval_attempt)
+                            if d is not None:
+                                incoming_fields["approval_date"] = d
+                        else:
+                            report.forbidden_overwrite_attempts_count += 1
+                    if expiry_attempt:
+                        if existing_reg is None or getattr(existing_reg, "expiry_date", None) is None:
+                            d = _try_parse_date(expiry_attempt)
+                            if d is not None:
+                                incoming_fields["expiry_date"] = d
+                        else:
+                            report.forbidden_overwrite_attempts_count += 1
+                else:
+                    if approval_attempt:
+                        report.forbidden_overwrite_attempts_count += 1
+                    if expiry_attempt:
+                        report.forbidden_overwrite_attempts_count += 1
 
-            db.flush()
-            _upsert_product_variant(
-                db,
-                di=di,
-                reg_no=reg_no,
-                product=product,
-                row=row,
-            )
-            _upsert_mapping(
-                db,
-                registration_no=reg.registration_no,
-                di=di,
-                raw_source_record_id=src_record_id,
-                source=source,
-                confidence=0.95,
-            )
-            report.variant_upserted += 1
-            report.map_upserted += 1
-            report.promoted += 1
+                reg_result = upsert_registration_with_contract(
+                    db,
+                    registration_no=candidate_reg_no,
+                    incoming_fields=incoming_fields,
+                    source=source,
+                    source_run_id=run_id,
+                    evidence_grade="C",
+                    source_priority=1000,
+                    observed_at=_utcnow(),
+                    raw_source_record_id=src_record_id,
+                    raw_payload={
+                        "source": source,
+                        "di": di,
+                        "registration_no_raw": reg_raw,
+                        "product_name": _pick_text(row, "product_name", "cpmctymc", "brand", "spmc"),
+                        "registration_no_norm": candidate_reg_no,
+                        "registration_no_norm_list": reg_candidates,
+                    },
+                    write_change_log=True,
+                )
+
+                reg = db.get(Registration, reg_result.registration_id)
+                if reg is None:
+                    raise RuntimeError("registration not found after upsert")
+
+                reg_stub_upgraded = _ensure_registration_stub_meta(
+                    db,
+                    registration_id=reg.id,
+                    source_run_id=run_id,
+                    source=source,
+                    raw_document_id=rid,
+                )
+                if reg_stub_upgraded:
+                    report.stub_upgraded_count += 1
+                if reg_result.created:
+                    report.registration_created += 1
+                if reg_result.changed_fields:
+                    report.registration_updated += 1
+
+                # For multi-reg records, create/upgrade one product stub (primary reg), and map all candidates via product_udi_map.
+                if idx == 0:
+                    product, product_created, product_upgraded = _ensure_product_stub(
+                        db=db,
+                        registration_id=reg.id,
+                        reg_no=candidate_reg_no,
+                        di=di,
+                        row=row,
+                    )
+                    if product_created:
+                        report.product_created += 1
+                    else:
+                        report.product_updated += 1
+                        if product_upgraded:
+                            report.stub_upgraded_count += 1
+                    product_for_variant = product
+                    reg_for_variant = reg
+
+                _upsert_mapping(
+                    db,
+                    registration_no=reg.registration_no,
+                    di=di,
+                    raw_source_record_id=src_record_id,
+                    source=source,
+                    confidence=0.95,
+                )
+                report.map_upserted += 1
+                report.promoted += 1
+
+            if reg_for_variant is not None:
+                db.flush()
+                _upsert_product_variant(
+                    db,
+                    di=di,
+                    reg_no=reg_for_variant.registration_no,
+                    product=product_for_variant,
+                    row=row,
+                )
+                report.variant_upserted += 1
         except Exception as exc:
             report.failed += 1
             report.errors.append({"di": di, "error": str(exc)})
@@ -641,3 +755,18 @@ def promote_udi_from_device_index(
     if not dry_run:
         db.commit()
     return report
+
+
+def _try_parse_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    s = s[:10]
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None

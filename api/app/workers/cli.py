@@ -228,6 +228,11 @@ def build_parser() -> argparse.ArgumentParser:
     udi_promote.add_argument('--raw-document-id', default=None, help='Filter by udi_device_index.raw_document_id')
     udi_promote.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
     udi_promote.add_argument('--offset', type=int, default=None, help='Optional offset for batched promote pagination')
+    udi_promote.add_argument(
+        '--allow-fill-empty-regulatory-dates',
+        action='store_true',
+        help='Allow fill-empty-only write for approval_date/expiry_date (default off). status is never written.',
+    )
     # Backward-compatible runbook flag: current implementation does not branch on confidence yet.
     udi_promote.add_argument('--min-confidence', type=float, default=None, help='Reserved (accepted for compatibility)')
 
@@ -1348,6 +1353,7 @@ def _run_udi_promote(args: argparse.Namespace) -> int:
             dry_run=(not bool(getattr(args, "execute", False))),
             limit=(int(args.limit) if getattr(args, "limit", None) else None),
             offset=(int(args.offset) if getattr(args, "offset", None) else None),
+            allow_fill_empty_regulatory_dates=bool(getattr(args, "allow_fill_empty_regulatory_dates", False)),
         )
 
         print(json.dumps(rep.to_dict, ensure_ascii=True, default=str))
@@ -1597,7 +1603,16 @@ def _run_udi_index(args: argparse.Namespace) -> int:
         elif source_run_id is not None:
             staging = Path(str(settings.staging_dir)) / f"run_{source_run_id}" / "extracted"
         else:
-            raise SystemExit("require --staging-dir or --source-run-id")
+            candidates = [
+                Path("/data/udi"),
+                Path("/data/import/udi/UDID_FULL_RELEASE_20260205"),
+                Path("/data/import/UDID_FULL_RELEASE_20260205"),
+                Path("/data/import/udi"),
+                Path("/data/import"),
+            ]
+            staging = next((p for p in candidates if p.exists() and p.is_dir()), None)
+            if staging is None:
+                raise SystemExit("require --staging-dir or --source-run-id (and no default UDI staging path found)")
 
         # Standardized import rule: all writes must have source_run_id.
         run = None

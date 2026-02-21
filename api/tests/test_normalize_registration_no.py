@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.normalize_keys import normalize_registration_no
+from app.services.normalize_keys import extract_registration_no_candidates, normalize_registration_no
 
 
 @pytest.mark.parametrize(
@@ -33,3 +33,15 @@ def test_normalize_registration_no_empty_returns_none() -> None:
     assert normalize_registration_no(None) is None
     assert normalize_registration_no("") is None
     assert normalize_registration_no("   ") is None
+
+
+def test_extract_registration_no_candidates_multi_tokens() -> None:
+    raw = "国械注准20201234567, 国械注准20211234568"
+    got = extract_registration_no_candidates(raw)
+    assert got == ["国械注准20201234567", "国械注准20211234568"]
+
+
+def test_extract_registration_no_candidates_concat_legacy_prefers_first() -> None:
+    raw = "苏械注准20162220838苏械注准20152021027苏械注准20172661896"
+    got = extract_registration_no_candidates(raw)
+    assert got == ["苏械注准20162220838"]

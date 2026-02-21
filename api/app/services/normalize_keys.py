@@ -24,23 +24,21 @@ def normalize_registration_no(text: str | None) -> str | None:
     """
     if text is None:
         return None
-    raw = str(text).strip()
-    if not raw:
-        return None
+    candidates = extract_registration_no_candidates(text)
+    return candidates[0] if candidates else None
 
-    # Prefer the first token when common separators exist (prevents accidental multi-value joins).
-    first_token = _REG_NO_SPLIT_RE.split(raw, maxsplit=1)[0]
-    s = first_token.strip()
+
+def _normalize_reg_token(raw_token: str | None) -> str | None:
+    if raw_token is None:
+        return None
+    s = str(raw_token).strip()
     if not s:
         return None
 
     # NFKC normalizes full-width chars (e.g. "Ａ" -> "A") and common punctuation variants.
     s = unicodedata.normalize("NFKC", s)
-
-    # Remove all whitespace and uppercase ASCII letters.
     s = "".join(ch for ch in s if not ch.isspace()).upper()
 
-    # Keep: digits, A-Z, and CJK ideographs. Drop everything else (separators/punctuation/brackets).
     out = []
     for ch in s:
         o = ord(ch)
@@ -50,14 +48,10 @@ def normalize_registration_no(text: str | None) -> str | None:
             out.append(ch)
         elif 0x4E00 <= o <= 0x9FFF:
             out.append(ch)
-        # else: drop
-
     normalized = "".join(out)
     if not normalized:
         return None
 
-    # If the string contains multiple "省/国...械" anchors, treat it as concatenated multi-values
-    # and extract the first plausible segment, even if it doesn't exceed 120 chars.
     starts = [m.start() for m in _REG_NO_MULTI_START_RE.finditer(normalized)]
     if len(starts) >= 2:
         st = starts[0]
@@ -66,18 +60,39 @@ def normalize_registration_no(text: str | None) -> str | None:
         if 0 < len(seg) <= 120 and sum(ch.isdigit() for ch in seg) >= 6:
             return seg
 
-    # Hard length guard: registration_no columns are VARCHAR(120) in this repo.
     if len(normalized) <= 120:
         return normalized
 
-    # Attempt to extract the first segment when multiple registration numbers were concatenated.
-    # Example from UDI: "苏械注准2016...苏械注准2015...苏械注准2017..."
     if starts:
         for i, st in enumerate(starts):
             ed = starts[i + 1] if i + 1 < len(starts) else len(normalized)
             seg = normalized[st:ed]
             if 0 < len(seg) <= 120 and sum(ch.isdigit() for ch in seg) >= 6:
                 return seg
-
-    # Give up: returning None is safer than truncating and creating a wrong anchor.
     return None
+
+
+def extract_registration_no_candidates(text: str | None) -> list[str]:
+    """Return ordered normalized candidates; used by ingest guards to detect multi-reg rows."""
+    if text is None:
+        return []
+    raw = str(text).strip()
+    if not raw:
+        return []
+
+    tokens = [t.strip() for t in _REG_NO_SPLIT_RE.split(raw) if t and t.strip()]
+    if not tokens:
+        tokens = [raw]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        n = _normalize_reg_token(token)
+        if n and n not in seen:
+            out.append(n)
+            seen.add(n)
+
+    if out:
+        return out
+    n = _normalize_reg_token(raw)
+    return [n] if n else []
