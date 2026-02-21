@@ -155,7 +155,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             style={{ minWidth: 320 }}
           />
           <Button
-            variant={lowConfidenceOnly ? 'default' : 'outline'}
+            variant={lowConfidenceOnly ? 'default' : 'secondary'}
             onClick={() => {
               const next = !lowConfidenceOnly;
               setLowConfidenceOnly(next);

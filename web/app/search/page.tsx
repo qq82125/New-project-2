@@ -34,6 +34,7 @@ type SearchData = {
       udi_di?: string | null;
       status: string;
       company?: { id: string; name: string } | null;
+      country_or_region?: string | null;
       expiry_date?: string | null;
       is_stub?: boolean | null;
       source_hint?: string | null;
@@ -80,6 +81,7 @@ function mapFiltersToApi(filters: SearchFilters): {
   q?: string;
   track?: string;
   company?: string;
+  country_or_region?: string;
   status?: string;
   change_type?: string;
   date_range?: string;
@@ -95,6 +97,7 @@ function mapFiltersToApi(filters: SearchFilters): {
     q: filters.q || undefined,
     track: filters.track || undefined,
     company: filters.company || undefined,
+    country_or_region: filters.country_or_region || undefined,
     status: filters.status || undefined,
     change_type: filters.change_type || undefined,
     date_range: filters.date_range || undefined,
@@ -167,6 +170,7 @@ async function SearchResultsSection({
     q: apiMapped.q,
     track: apiMapped.track,
     company: apiMapped.company,
+    country_or_region: apiMapped.country_or_region,
     status: apiMapped.status,
     change_type: apiMapped.change_type,
     date_range: apiMapped.date_range,
@@ -191,7 +195,7 @@ async function SearchResultsSection({
   }
 
   const visibleItems = (res.data.items || []).slice(0, isPro ? undefined : 10);
-  const hasFilter = Boolean(filters.q || filters.track || filters.company || filters.status || filters.change_type || filters.date_range || filters.risk);
+  const hasFilter = Boolean(filters.q || filters.track || filters.company || filters.country_or_region || filters.status || filters.change_type || filters.date_range || filters.risk);
   const registrationNos = hasFilter ? (visibleItems.map((x) => x.product.reg_no || '').filter(Boolean).slice(0, 8) as string[]) : [];
   let signalMap = new Map<string, SearchSignalItem>();
   let signalError: string | null = null;
@@ -222,6 +226,7 @@ async function SearchResultsSection({
       id: item.product.id,
       product_name: item.product.name || '-',
       company_name: item.product.company?.name || '-',
+      country_or_region: item.product.country_or_region || '-',
       registration_no: regNo || '-',
       status: labelFrom(STATUS_ZH, item.product.status) || item.product.status || '-',
       expiry_date: item.product.expiry_date || '-',
@@ -268,6 +273,7 @@ async function SearchResultsSection({
               columns={[
                 'product_name',
                 'company_name',
+                'country_or_region',
                 'registration_no',
                 'status',
                 'expiry_date',
@@ -334,7 +340,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       <Card>
         <CardHeader>
           <CardTitle>搜索</CardTitle>
-          <CardDescription>统一 filters 契约：q/track/company/status/change_type/date_range/risk/sort/view。</CardDescription>
+          <CardDescription>统一 filters 契约：q/track/company/country_or_region/status/change_type/date_range/risk/sort/view。</CardDescription>
         </CardHeader>
         <CardContent>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>

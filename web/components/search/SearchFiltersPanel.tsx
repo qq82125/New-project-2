@@ -34,6 +34,7 @@ function normalize(input: Partial<SearchFilters>): SearchFilters {
     q: String(next.q || ''),
     track: String(next.track || ''),
     company: String(next.company || ''),
+    country_or_region: String(next.country_or_region || ''),
     status: String(next.status || ''),
     change_type: String(next.change_type || '') as SearchChangeType | '',
     date_range: String(next.date_range || '') as SearchDateRange | '',
@@ -160,6 +161,7 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFilters
               <Input value={form.q} onChange={(e) => setForm((s) => ({ ...s, q: e.target.value }))} placeholder="关键词" />
               <Input value={form.track} onChange={(e) => setForm((s) => ({ ...s, track: e.target.value }))} placeholder="赛道" />
               <Input value={form.company} onChange={(e) => setForm((s) => ({ ...s, company: e.target.value }))} placeholder="企业" />
+              <Input value={form.country_or_region} onChange={(e) => setForm((s) => ({ ...s, country_or_region: e.target.value }))} placeholder="国家/地区" />
               <Input value={form.status} onChange={(e) => setForm((s) => ({ ...s, status: e.target.value }))} placeholder="状态" />
             </div>
           ) : null}
@@ -215,4 +217,3 @@ export default function SearchFiltersPanel({ initial }: { initial: SearchFilters
     </div>
   );
 }
-

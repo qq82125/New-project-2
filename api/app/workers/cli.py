@@ -284,6 +284,37 @@ def build_parser() -> argparse.ArgumentParser:
     nmpa_legacy_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
     nmpa_legacy_import.set_defaults(only_new=True)
 
+    legacy_promote = sub.add_parser('nmpa-legacy:promote', help='Promote nmpa_legacy raw_source_records into registrations stubs')
+    legacy_promote_mode = legacy_promote.add_mutually_exclusive_group()
+    legacy_promote_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_promote_mode.add_argument('--execute', action='store_true', help='Write registrations stubs')
+    legacy_promote.add_argument('--limit', type=int, default=None, help='Optional max rows to process')
+    legacy_promote.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+    legacy_promote.add_argument('--batch-size', type=int, default=1000, help='Rows per batch (default 1000)')
+    legacy_promote.add_argument('--only-missing', dest='only_missing', action='store_true', help='Only promote missing registrations (default)')
+    legacy_promote.add_argument('--no-only-missing', dest='only_missing', action='store_false', help='Include existing registrations for fill-empty updates')
+    legacy_promote.set_defaults(only_missing=True)
+    legacy_promote.add_argument('--source-run-id', type=int, default=None, help='Optional source_runs.id filter')
+
+    legacy_product_stubs = sub.add_parser('legacy:product-stubs', help='Create products stubs from legacy registrations')
+    legacy_product_stubs_mode = legacy_product_stubs.add_mutually_exclusive_group()
+    legacy_product_stubs_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_product_stubs_mode.add_argument('--execute', action='store_true', help='Write products stubs')
+    legacy_product_stubs.add_argument('--limit', type=int, default=None, help='Optional max registrations to process')
+    legacy_product_stubs.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+
+    legacy_params_backfill = sub.add_parser('legacy:params-backfill', help='Backfill legacy params into product_params (only-missing)')
+    legacy_params_backfill_mode = legacy_params_backfill.add_mutually_exclusive_group()
+    legacy_params_backfill_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_params_backfill_mode.add_argument('--execute', action='store_true', help='Write product_params')
+    legacy_params_backfill.add_argument('--limit', type=int, default=None, help='Optional max raw rows to process')
+    legacy_params_backfill.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+    legacy_params_backfill.add_argument('--batch-size', type=int, default=1000, help='Rows per batch (default 1000)')
+    legacy_params_backfill.add_argument('--source-key', default='nmpa_legacy_dump', help='Source key (default nmpa_legacy_dump)')
+    legacy_params_backfill.add_argument('--only-missing', dest='only_missing', action='store_true', help='Only fill missing/empty params (default)')
+    legacy_params_backfill.add_argument('--no-only-missing', dest='only_missing', action='store_false', help='Allow overwriting existing non-empty values')
+    legacy_params_backfill.set_defaults(only_missing=True)
+
     offline_dataset_diff = sub.add_parser('offline:dataset-diff', help='Compare two offline datasets by files/rows/reason codes')
     offline_dataset_diff.add_argument('--source-key', required=True, help='source key, e.g. nmpa_legacy_dump')
     offline_dataset_diff.add_argument('--from', dest='from_ref', required=True, help='dataset_version or dataset_id')
@@ -1471,6 +1502,84 @@ def _run_offline_dataset_diff(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_nmpa_legacy_promote(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import promote_nmpa_legacy_raw_to_registrations
+
+        rep = promote_nmpa_legacy_raw_to_registrations(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+            batch_size=max(100, int(getattr(args, "batch_size", 1000) or 1000)),
+            only_missing=bool(getattr(args, "only_missing", True)),
+            source_run_id=(int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_legacy_product_stubs(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import create_legacy_product_stubs
+
+        rep = create_legacy_product_stubs(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_legacy_params_backfill(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import backfill_legacy_params
+
+        rep = backfill_legacy_params(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+            source_key=str(getattr(args, "source_key", "nmpa_legacy_dump") or "nmpa_legacy_dump"),
+            batch_size=max(100, int(getattr(args, "batch_size", 1000) or 1000)),
+            only_missing=bool(getattr(args, "only_missing", True)),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _run_udi_index(args: argparse.Namespace) -> int:
     from app.core.config import Settings
 
@@ -1952,6 +2061,12 @@ def main() -> None:
         raise SystemExit(_run_source_import_files(args))
     if args.cmd == 'nmpa-legacy:import':
         raise SystemExit(_run_source_import_files(args, force_source_key='nmpa_legacy_dump'))
+    if args.cmd == 'nmpa-legacy:promote':
+        raise SystemExit(_run_nmpa_legacy_promote(args))
+    if args.cmd == 'legacy:product-stubs':
+        raise SystemExit(_run_legacy_product_stubs(args))
+    if args.cmd == 'legacy:params-backfill':
+        raise SystemExit(_run_legacy_params_backfill(args))
     if args.cmd == 'offline:dataset-diff':
         raise SystemExit(_run_offline_dataset_diff(args))
     if args.cmd == 'udi:variants':

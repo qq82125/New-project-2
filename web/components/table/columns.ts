@@ -3,6 +3,7 @@ import type { UnifiedBadgeToken } from '../common/UnifiedBadge';
 export type UnifiedColumnKey =
   | 'product_name'
   | 'company_name'
+  | 'country_or_region'
   | 'registration_no'
   | 'status'
   | 'expiry_date'
@@ -18,6 +19,7 @@ export type UnifiedTableRow = {
   id: string;
   product_name: string;
   company_name: string;
+  country_or_region?: string;
   registration_no: string;
   status: string;
   expiry_date: string;
@@ -41,6 +43,7 @@ export type UnifiedTableRow = {
 export const DEFAULT_UNIFIED_COLUMNS: UnifiedColumnKey[] = [
   'product_name',
   'company_name',
+  'country_or_region',
   'registration_no',
   'status',
   'expiry_date',
@@ -64,6 +67,7 @@ export const BENCHMARK_COLUMNS: UnifiedColumnKey[] = [
 export const UNIFIED_COLUMN_LABELS: Record<UnifiedColumnKey, string> = {
   product_name: '产品名',
   company_name: '企业名',
+  country_or_region: '国家/地区',
   registration_no: '注册证号',
   status: '状态',
   expiry_date: '失效日期',

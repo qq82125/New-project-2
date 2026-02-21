@@ -143,6 +143,7 @@ services:
       - ./staging:/app/staging
       - ./migrations:/app/migrations:ro
       - "/Users/GY/Documents/IIVD/000001 小桔灯网/4 数据库/注册产品库/udi/UDID_FULL_RELEASE_20260205:/data/udi:ro"
+      - "/Users/GY/Documents/IIVD/000001 小桔灯网/4 数据库/产品数据库/nmpa_legacy:/data/import/nmpa_legacy:ro"
     restart: unless-stopped
 
   web:

@@ -50,6 +50,7 @@ export default function UnifiedTable({
               {columns.map((col) => {
                 if (col === 'product_name') return <td key={col}>{row.product_name || '-'}</td>;
                 if (col === 'company_name') return <td key={col}>{row.company_name || '-'}</td>;
+                if (col === 'country_or_region') return <td key={col}>{row.country_or_region || '-'}</td>;
                 if (col === 'registration_no') {
                   return (
                     <td key={col}>

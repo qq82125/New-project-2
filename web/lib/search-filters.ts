@@ -8,6 +8,7 @@ export type SearchFilters = {
   q: string;
   track: string;
   company: string;
+  country_or_region: string;
   status: string;
   change_type: SearchChangeType | '';
   date_range: SearchDateRange | '';
@@ -28,6 +29,7 @@ export const SEARCH_FILTER_DEFAULTS: SearchFilters = {
   q: '',
   track: '',
   company: '',
+  country_or_region: '',
   status: '',
   change_type: '',
   date_range: '',
@@ -44,6 +46,7 @@ export function parseSearchUrl(params: URLSearchParams): SearchFilters {
   const q = cleanText(params.get('q'));
   const track = cleanText(params.get('track'));
   const company = cleanText(params.get('company'));
+  const country_or_region = cleanText(params.get('country_or_region'));
   const status = cleanText(params.get('status'));
 
   const changeTypeRaw = cleanText(params.get('change_type'));
@@ -56,6 +59,7 @@ export function parseSearchUrl(params: URLSearchParams): SearchFilters {
     q,
     track,
     company,
+    country_or_region,
     status,
     change_type: CHANGE_TYPE_SET.has(changeTypeRaw as SearchChangeType) ? (changeTypeRaw as SearchChangeType) : '',
     date_range: DATE_RANGE_SET.has(dateRangeRaw as SearchDateRange) ? (dateRangeRaw as SearchDateRange) : '',
@@ -72,6 +76,7 @@ export function buildSearchUrl(filters: Partial<SearchFilters>): string {
     q: cleanText(filters.q),
     track: cleanText(filters.track),
     company: cleanText(filters.company),
+    country_or_region: cleanText(filters.country_or_region),
     status: cleanText(filters.status),
     change_type: CHANGE_TYPE_SET.has(String(filters.change_type || '') as SearchChangeType)
       ? (filters.change_type as SearchChangeType)
@@ -94,6 +99,7 @@ export function buildSearchUrl(filters: Partial<SearchFilters>): string {
   if (merged.q) sp.set('q', merged.q);
   if (merged.track) sp.set('track', merged.track);
   if (merged.company) sp.set('company', merged.company);
+  if (merged.country_or_region) sp.set('country_or_region', merged.country_or_region);
   if (merged.status) sp.set('status', merged.status);
   if (merged.change_type) sp.set('change_type', merged.change_type);
   if (merged.date_range) sp.set('date_range', merged.date_range);
@@ -110,6 +116,7 @@ export function serializeFiltersToChips(filters: SearchFilters): Chip[] {
   if (filters.q) chips.push({ key: 'q', label: '关键词', value: filters.q });
   if (filters.track) chips.push({ key: 'track', label: '赛道', value: filters.track });
   if (filters.company) chips.push({ key: 'company', label: '企业', value: filters.company });
+  if (filters.country_or_region) chips.push({ key: 'country_or_region', label: '国家/地区', value: filters.country_or_region });
   if (filters.status) chips.push({ key: 'status', label: '状态', value: filters.status });
   if (filters.change_type) chips.push({ key: 'change_type', label: '变更类型', value: filters.change_type });
   if (filters.date_range) chips.push({ key: 'date_range', label: '时间窗', value: filters.date_range });
@@ -118,4 +125,3 @@ export function serializeFiltersToChips(filters: SearchFilters): Chip[] {
   if (filters.view !== SEARCH_FILTER_DEFAULTS.view) chips.push({ key: 'view', label: '视图', value: filters.view });
   return chips;
 }
-

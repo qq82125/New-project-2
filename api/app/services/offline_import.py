@@ -4,6 +4,7 @@ import csv
 import fnmatch
 import hashlib
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +32,37 @@ REGNO_HINT_KEYS = (
     "许可证号",
     "批准文号",
 )
+PRODUCTION_ADDR_KEYS = ("生产地址", "生产场所", "生产企业住所", "生产企业地址")
+REGISTRANT_ADDR_KEYS = ("注册人住所", "注册人地址", "注册地址")
+COUNTRY_PARAM_EXTRACT_VERSION = "country_region_v1_20260220"
+ORIGIN_PARAM_EXTRACT_VERSION = "origin_bucket_v1_20260220"
+
+_REGION_PATTERNS: list[tuple[str, str]] = [
+    (r"(香港|香港特别行政区|Hong\s*Kong)", "中国香港"),
+    (r"(澳门|澳門|澳门特别行政区|Macao|Macau)", "中国澳门"),
+    (r"(台湾|台灣|Taiwan)", "中国台湾"),
+]
+
+_COUNTRY_PATTERNS: list[tuple[str, str]] = [
+    (r"(中国|China\b)", "中国"),
+    (r"(美国|U\.?S\.?A\.?\b|United\s+States\b)", "美国"),
+    (r"(德国|Germany\b)", "德国"),
+    (r"(日本|Japan\b)", "日本"),
+    (r"(法国|France\b)", "法国"),
+    (r"(英国|U\.?K\.?\b|United\s+Kingdom\b|Britain\b)", "英国"),
+    (r"(比利时|Belgium\b)", "比利时"),
+    (r"(意大利|Italy\b)", "意大利"),
+    (r"(瑞士|Switzerland\b)", "瑞士"),
+    (r"(韩国|South\s*Korea\b|Korea\b)", "韩国"),
+    (r"(新加坡|Singapore\b)", "新加坡"),
+    (r"(爱尔兰|Ireland\b)", "爱尔兰"),
+    (r"(加拿大|Canada\b)", "加拿大"),
+    (r"(荷兰|Netherlands\b|Holland\b)", "荷兰"),
+    (r"(西班牙|Spain\b)", "西班牙"),
+    (r"(葡萄牙|Portugal\b)", "葡萄牙"),
+    (r"(印度|India\b)", "印度"),
+    (r"(波多黎各|Puerto\s*Rico\b|\bPR\b)", "波多黎各"),
+]
 
 
 @dataclass
@@ -70,6 +102,18 @@ class OfflineImportResult:
     top_parse_reasons: list[dict[str, int | str]]
     action_suffix_counts: dict[str, int]
     issuer_alias_counts: dict[str, int]
+    country_region_counts: dict[str, int]
+    origin_bucket_counts: dict[str, int]
+    product_params_written: int
+
+
+@dataclass(frozen=True)
+class CountryExtractionResult:
+    country_or_region: str
+    geo_type: str  # country | region
+    source_field: str
+    raw_value: str
+    confidence: float
 
 
 def _now() -> datetime:
@@ -147,6 +191,7 @@ def _normalize_row_payload(row: dict[str, Any], *, source_key: str, dataset_vers
         parse_reason = "REGNO_MISSING"
         parse_ok = False
         regno_type = "unknown"
+        regno_origin_type = "unknown"
         issuer_alias = None
         action_suffix = None
         legacy_seq = None
@@ -157,6 +202,7 @@ def _normalize_row_payload(row: dict[str, Any], *, source_key: str, dataset_vers
         parse_reason = "REGNO_NORMALIZE_FAILED"
         parse_ok = False
         regno_type = "unknown"
+        regno_origin_type = "unknown"
         issuer_alias = None
         action_suffix = None
         legacy_seq = None
@@ -168,6 +214,7 @@ def _normalize_row_payload(row: dict[str, Any], *, source_key: str, dataset_vers
         parse_reason = parsed.parse_reason
         parse_ok = bool(parsed.parse_ok)
         regno_type = parsed.regno_type
+        regno_origin_type = parsed.origin_type
         issuer_alias = parsed.issuer_alias
         action_suffix = parsed.action_suffix
         legacy_seq = parsed.legacy_seq
@@ -182,6 +229,7 @@ def _normalize_row_payload(row: dict[str, Any], *, source_key: str, dataset_vers
         "registration_no_norm": regno_norm,
         "regno_parse_ok": parse_ok,
         "regno_type": regno_type,
+        "regno_origin_type": regno_origin_type,
         "regno_parse_level": parse_level,
         "regno_parse_confidence": parse_confidence,
         "regno_parse_reason": parse_reason,
@@ -210,6 +258,96 @@ def _counter_dict(counter: Counter[str], *, top_n: int | None = None) -> dict[st
     else:
         items = counter.most_common(top_n)
     return {str(k): int(v) for k, v in items}
+
+
+def _first_non_empty_text(row: dict[str, Any], keys: tuple[str, ...]) -> tuple[str | None, str | None]:
+    for key in keys:
+        if key not in row:
+            continue
+        txt = str(row.get(key) or "").strip()
+        if txt:
+            return key, txt
+    return None, None
+
+
+def _extract_country_or_region(row: dict[str, Any]) -> CountryExtractionResult | None:
+    source_field, raw_value = _first_non_empty_text(row, PRODUCTION_ADDR_KEYS)
+    if not raw_value:
+        source_field, raw_value = _first_non_empty_text(row, REGISTRANT_ADDR_KEYS)
+    if not raw_value or not source_field:
+        return None
+
+    for pattern, norm in _REGION_PATTERNS:
+        if re.search(pattern, raw_value, flags=re.IGNORECASE):
+            return CountryExtractionResult(
+                country_or_region=norm,
+                geo_type="region",
+                source_field=source_field,
+                raw_value=raw_value,
+                confidence=0.95,
+            )
+    for pattern, norm in _COUNTRY_PATTERNS:
+        if re.search(pattern, raw_value, flags=re.IGNORECASE):
+            return CountryExtractionResult(
+                country_or_region=norm,
+                geo_type="country",
+                source_field=source_field,
+                raw_value=raw_value,
+                confidence=0.92,
+            )
+    return None
+
+
+def _origin_bucket_from_payload(payload: dict[str, Any]) -> str:
+    origin = str(payload.get("regno_origin_type") or "").strip().lower()
+    if origin in {"domestic", "import", "permit", "filing"}:
+        return origin
+    if not payload.get("registration_no_norm"):
+        return "unknown"
+    p = parse_registration_no(str(payload.get("registration_no_norm") or ""))
+    if p.origin_type in {"domestic", "import", "permit", "filing"}:
+        return p.origin_type
+    return "unknown"
+
+
+def _insert_product_param(
+    db: Session,
+    *,
+    registry_no: str,
+    param_code: str,
+    value_text: str,
+    evidence_text: str,
+    raw_document_id: str,
+    confidence: float,
+    extract_version: str,
+    evidence_json: dict[str, Any],
+) -> bool:
+    res = db.execute(
+        text(
+            """
+            INSERT INTO product_params (
+                di, registry_no, product_id, param_code, value_num, value_text, unit,
+                range_low, range_high, conditions, evidence_json, evidence_text, evidence_page,
+                raw_document_id, confidence, extract_version, observed_at
+            ) VALUES (
+                NULL, :registry_no, NULL, :param_code, NULL, :value_text, NULL,
+                NULL, NULL, NULL, CAST(:evidence_json AS jsonb), :evidence_text, NULL,
+                CAST(:raw_document_id AS uuid), :confidence, :extract_version, NOW()
+            )
+            """
+        ),
+        {
+            "registry_no": registry_no,
+            "param_code": param_code,
+            "value_text": value_text,
+            "evidence_text": evidence_text,
+            "raw_document_id": raw_document_id,
+            "confidence": confidence,
+            "extract_version": extract_version,
+            "evidence_json": json.dumps(evidence_json, ensure_ascii=False),
+        },
+    )
+    return bool(res.rowcount and int(res.rowcount) > 0)
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:
@@ -410,8 +548,8 @@ def _file_already_imported(db: Session, *, source_key: str, file_sha256: str) ->
     return bool(val)
 
 
-def _insert_raw_document(db: Session, *, source_key: str, dataset_version: str, file: FileImportResult) -> None:
-    db.execute(
+def _insert_raw_document(db: Session, *, source_key: str, dataset_version: str, file: FileImportResult) -> str:
+    row = db.execute(
         text(
             """
             INSERT INTO raw_documents (
@@ -419,7 +557,9 @@ def _insert_raw_document(db: Session, *, source_key: str, dataset_version: str, 
             ) VALUES (
                 :source, NULL, :doc_type, :storage_uri, :sha256, NOW(), :run_id, 'parsed', CAST(:parse_log AS jsonb), NULL
             )
-            ON CONFLICT (source, run_id, sha256) DO NOTHING
+            ON CONFLICT (source, run_id, sha256) DO UPDATE
+            SET parse_log = raw_documents.parse_log
+            RETURNING id::text
             """
         ),
         {
@@ -438,7 +578,9 @@ def _insert_raw_document(db: Session, *, source_key: str, dataset_version: str, 
                 ensure_ascii=False,
             ),
         },
-    )
+    ).first()
+    assert row and row[0]
+    return str(row[0])
 
 
 def _insert_raw_source_row(
@@ -514,6 +656,9 @@ def run_source_import_files(
     parse_reason_counter: Counter[str] = Counter()
     action_suffix_counter: Counter[str] = Counter()
     issuer_alias_counter: Counter[str] = Counter()
+    country_region_counter: Counter[str] = Counter()
+    origin_bucket_counter: Counter[str] = Counter()
+    product_params_written = 0
 
     for fp in files:
         st = fp.stat()
@@ -595,10 +740,12 @@ def run_source_import_files(
         new_files_count += 1
         file_rows_scanned, file_rows_failed, rows = _iter_file_rows(fp)
         file_rows_written = 0
+        file_params_written = 0
         imported = not dry_run
         skipped_reason = None if imported else "DRY_RUN"
+        raw_document_id: str | None = None
         if imported:
-            _insert_raw_document(
+            raw_document_id = _insert_raw_document(
                 db,
                 source_key=source_key,
                 dataset_version=dataset_version,
@@ -615,6 +762,7 @@ def run_source_import_files(
                     rows_failed=file_rows_failed,
                 ),
             )
+        file_param_seen: set[tuple[str, str, str]] = set()
         for idx, row in enumerate(rows, start=1):
             payload = _normalize_row_payload(
                 row,
@@ -629,12 +777,62 @@ def run_source_import_files(
                 action_suffix_counter[str(payload["action_suffix"])] += 1
             if payload.get("issuer_alias"):
                 issuer_alias_counter[str(payload["issuer_alias"])] += 1
+            country_info = _extract_country_or_region(payload.get("data") if isinstance(payload.get("data"), dict) else {})
+            if country_info is not None:
+                country_region_counter[country_info.country_or_region] += 1
+            origin_bucket = _origin_bucket_from_payload(payload)
+            origin_bucket_counter[origin_bucket] += 1
             if imported:
                 reason_code = _reason_code_from_payload(payload)
                 if _insert_raw_source_row(db, source_key=source_key, payload=payload, reason_code=reason_code):
                     file_rows_written += 1
+                regno_norm = str(payload.get("registration_no_norm") or "").strip()
+                if regno_norm and raw_document_id:
+                    # Keep params de-duplicated inside one file/doc to avoid exploding repeated address rows.
+                    pkey = (regno_norm, "origin_bucket", origin_bucket)
+                    if pkey not in file_param_seen:
+                        if _insert_product_param(
+                            db,
+                            registry_no=regno_norm,
+                            param_code="origin_bucket",
+                            value_text=origin_bucket,
+                            evidence_text=f"derived from registration_no ({payload.get('regno_parse_level')})",
+                            raw_document_id=raw_document_id,
+                            confidence=(0.9 if origin_bucket != "unknown" else 0.5),
+                            extract_version=ORIGIN_PARAM_EXTRACT_VERSION,
+                            evidence_json={
+                                "dataset_version": dataset_version,
+                                "parse_level": payload.get("regno_parse_level"),
+                                "parse_reason": payload.get("regno_parse_reason"),
+                            },
+                        ):
+                            file_params_written += 1
+                        file_param_seen.add(pkey)
+                    if country_info is not None:
+                        pkey = (regno_norm, "country_or_region", country_info.country_or_region)
+                        if pkey not in file_param_seen:
+                            if _insert_product_param(
+                                db,
+                                registry_no=regno_norm,
+                                param_code="country_or_region",
+                                value_text=country_info.country_or_region,
+                                evidence_text=f"derived from {country_info.source_field}",
+                                raw_document_id=raw_document_id,
+                                confidence=country_info.confidence,
+                                extract_version=COUNTRY_PARAM_EXTRACT_VERSION,
+                                evidence_json={
+                                    "dataset_version": dataset_version,
+                                    "geo_type": country_info.geo_type,
+                                    "source_field": country_info.source_field,
+                                    "raw_value": country_info.raw_value,
+                                    "display_label": "国家/地区",
+                                },
+                            ):
+                                file_params_written += 1
+                            file_param_seen.add(pkey)
 
         rows_written += file_rows_written
+        product_params_written += file_params_written
         rows_failed += file_rows_failed
         if imported:
             files_imported += 1
@@ -663,6 +861,9 @@ def run_source_import_files(
         "top_parse_reasons": [{"reason": k, "count": v} for k, v in _counter_dict(parse_reason_counter, top_n=5).items()],
         "action_suffix_counts": _counter_dict(action_suffix_counter),
         "issuer_alias_counts": _counter_dict(issuer_alias_counter, top_n=5),
+        "country_region_counts": _counter_dict(country_region_counter, top_n=20),
+        "origin_bucket_counts": _counter_dict(origin_bucket_counter),
+        "product_params_written": int(product_params_written),
     }
     _update_dataset_finish(
         db,
@@ -697,4 +898,7 @@ def run_source_import_files(
         top_parse_reasons=[{"reason": k, "count": v} for k, v in _counter_dict(parse_reason_counter, top_n=5).items()],
         action_suffix_counts=_counter_dict(action_suffix_counter),
         issuer_alias_counts=_counter_dict(issuer_alias_counter, top_n=5),
+        country_region_counts=_counter_dict(country_region_counter, top_n=20),
+        origin_bucket_counts=_counter_dict(origin_bucket_counter),
+        product_params_written=product_params_written,
     )

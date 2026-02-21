@@ -947,6 +947,7 @@ def serialize_product(product, overrides: dict | None = None) -> ProductOut:
         is_stub=ov.get('is_stub', is_stub),
         source_hint=ov.get('source_hint', source_hint),
         verified_by_nmpa=ov.get('verified_by_nmpa', verified_by_nmpa),
+        country_or_region=ov.get('country_or_region', _product_attr(product, 'country_or_region', None)),
         company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
 
@@ -974,6 +975,7 @@ def serialize_product_limited(product, overrides: dict | None = None) -> Product
         is_stub=ov.get('is_stub', is_stub),
         source_hint=ov.get('source_hint', source_hint),
         verified_by_nmpa=ov.get('verified_by_nmpa', verified_by_nmpa),
+        country_or_region=ov.get('country_or_region', _product_attr(product, 'country_or_region', None)),
         company=serialize_company(_product_attr(product, 'company')) if _product_attr(product, 'company') else None,
     )
 
@@ -1663,6 +1665,7 @@ def search(
     reg_no: str | None = Query(default=None),
     status: str | None = Query(default=None),
     track: str | None = Query(default=None),
+    country_or_region: str | None = Query(default=None),
     change_type: str | None = Query(default=None, description='new|update|cancel'),
     date_range: str | None = Query(default=None, description='7d|30d|90d|12m'),
     sort: str | None = Query(default=None, description='recency|risk|lri|competition'),
@@ -1706,6 +1709,7 @@ def search(
         reg_no=reg_no,
         status=status,
         track=track,
+        country_or_region=country_or_region,
         change_type=change_type,
         date_range=date_range,
         sort=sort,
@@ -1716,13 +1720,54 @@ def search(
         sort_order=sort_order,
     )
     serializer = serialize_product if effective_mode == 'full' else serialize_product_limited
+    reg_nos = sorted({str(getattr(item, 'reg_no', '') or '').strip() for item in products if str(getattr(item, 'reg_no', '') or '').strip()})
+    country_by_reg_no: dict[str, str] = {}
+    if reg_nos:
+        try:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT t.registry_no, t.value_text
+                    FROM (
+                        SELECT
+                            registry_no,
+                            value_text,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY registry_no
+                                ORDER BY observed_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                            ) AS rn
+                        FROM product_params
+                        WHERE param_code = 'country_or_region'
+                          AND registry_no = ANY(:reg_nos)
+                          AND COALESCE(value_text, '') <> ''
+                    ) t
+                    WHERE t.rn = 1
+                    """
+                ),
+                {'reg_nos': reg_nos},
+            ).fetchall()
+            for registry_no, value_text in rows:
+                if registry_no and value_text:
+                    country_by_reg_no[str(registry_no)] = str(value_text)
+        except Exception:
+            country_by_reg_no = {}
     data = SearchData(
         total=total,
         page=page,
         page_size=page_size,
         sort_by=sort_by,
         sort_order=sort_order,
-        items=[SearchItem(product=serializer(item)) for item in products],
+        items=[
+            SearchItem(
+                product=serializer(
+                    item,
+                    overrides={
+                        'country_or_region': country_by_reg_no.get(str(getattr(item, 'reg_no', '') or '').strip()),
+                    },
+                )
+            )
+            for item in products
+        ],
     )
     return _ok(data)
 

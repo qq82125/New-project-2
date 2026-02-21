@@ -924,7 +924,23 @@ button {
   display: grid;
   grid-template-columns: 1.4fr 1fr;
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+}
+
+.admin-home__panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-home__panel .ui-card__content {
+  flex: 1;
+}
+
+.admin-ops {
+  display: grid;
+  gap: 8px;
+  align-content: start;
 }
 
 .admin-flow {

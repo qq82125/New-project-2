@@ -7,7 +7,7 @@ from typing import Literal
 from sqlalchemy import Select, String, and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import ChangeLog, Company, Product
+from app.models import ChangeLog, Company, Product, ProductParam
 
 SortBy = Literal['updated_at', 'approved_date', 'expiry_date', 'name']
 SortOrder = Literal['asc', 'desc']
@@ -76,6 +76,7 @@ def build_search_query(
     reg_no: str | None,
     status: str | None,
     track: str | None = None,
+    country_or_region: str | None = None,
     change_type: str | None = None,
     date_range: str | None = None,
     ivd_filter: bool | None = True,
@@ -116,6 +117,16 @@ def build_search_query(
                 Product.name.ilike(track_like),
             )
         )
+    if country_or_region:
+        country_like = f'%{country_or_region.strip()}%'
+        country_exists = select(ProductParam.id).where(
+            and_(
+                ProductParam.registry_no == Product.reg_no,
+                ProductParam.param_code == 'country_or_region',
+                ProductParam.value_text.ilike(country_like),
+            )
+        ).exists()
+        stmt = stmt.where(country_exists)
 
     normalized_change_type = _normalize_change_type(change_type)
     window_start = _window_start(date_range)
@@ -169,15 +180,16 @@ def search_products(
     company: str | None,
     reg_no: str | None,
     status: str | None,
-    track: str | None,
-    change_type: str | None,
-    date_range: str | None,
-    sort: str | None,
-    include_unverified: bool,
-    page: int,
-    page_size: int,
-    sort_by: SortBy,
-    sort_order: SortOrder,
+    track: str | None = None,
+    country_or_region: str | None = None,
+    change_type: str | None = None,
+    date_range: str | None = None,
+    sort: str | None = None,
+    include_unverified: bool = False,
+    page: int = 1,
+    page_size: int = 20,
+    sort_by: SortBy = 'updated_at',
+    sort_order: SortOrder = 'desc',
 ) -> tuple[list[Product], int]:
     base_stmt = build_search_query(
         query,
@@ -185,6 +197,7 @@ def search_products(
         reg_no,
         status,
         track=track,
+        country_or_region=country_or_region,
         change_type=change_type,
         date_range=date_range,
         include_unverified=include_unverified,
