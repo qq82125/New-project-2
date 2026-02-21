@@ -44,16 +44,16 @@ export default function ProNavGroup() {
 
   const items: NavItem[] = useMemo(
     () => [
-      { key: 'products', label: '完整产品库' },
-      { key: 'companies', label: '企业维度追踪' },
-      { key: 'exports', label: '历史变化导出' },
+      { key: 'advanced_search', label: '高级搜索视图' },
+      { key: 'benchmarks', label: '对标集合' },
+      { key: 'upgrade', label: '专业版权益' },
     ],
     []
   );
   const hrefMap: Record<string, string> = {
-    products: '/library',
-    companies: '/companies/tracking',
-    exports: '/changes/export',
+    advanced_search: '/search?view=compact&sort=competition',
+    benchmarks: '/benchmarks',
+    upgrade: '/pro',
   };
 
   const onHoverFree = () => {

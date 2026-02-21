@@ -1,4 +1,4 @@
-# IVD产品雷达
+# DeepIVD
 
 面向 IVD（试剂/仪器/医疗软件）的“监管事实驱动”产品雷达：从 NMPA/UDI 等来源同步数据，沉淀证据链与变更资产，提供检索/Dashboard/订阅投递，并逐步演进到“快照 + 字段级 diff + 风险与行动”的决策链路。
 
@@ -19,6 +19,14 @@
 - 字段名表（DB Schema Dictionary）：`docs/FIELD_DICTIONARY.md`
 - NMPA 快照+diff SSOT（人读）：`docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
 - NMPA 快照+diff SSOT（机器读）：`docs/nmpa_field_dictionary_v1_adapted.yaml`
+
+## 前端信息架构（IA）
+- `Dashboard`：入口页，只保留可钻取入口（KPI / Signals / Track / Trend），所有动作收敛到 `/search`。
+- `Search`：工作台，统一 filters URL 契约与结果操作入口（含对标加入）。
+- `Detail`：证据资产页（Overview / Changes / Evidence / Variants），返回链路保持筛选上下文。
+- `Benchmarks`：对标集合与对比表（MVP 本地存储）。
+- `Admin`：控制台能力集中在 `/admin/*`。
+- `Pro`：转化入口，承接专业版权益说明与升级。
 
 Signal Engine V1 API：
 - 后端验收与运维：`docs/SIGNAL_ENGINE_V1_BACKEND.md`
@@ -56,7 +64,7 @@ NMPA UDI / Primary Source
 
 ## 快速启动（Docker）
 ```bash
-docker compose up -d --build
+./scripts/safe_up.sh
 ```
 
 访问：
@@ -68,6 +76,81 @@ docker compose up -d --build
 ```bash
 docker compose down
 ```
+
+## 数据保护与质量闸门
+1. 固定 DB 数据目录（避免命名卷误新建）  
+   `db` 已改为绑定仓库内目录：`/Users/GY/Documents/New project 2/.local/pgdata`
+2. 固定调度备份（`db-backup` 服务）  
+   每天 `03:30` 执行“日增量（WAL）”，每周（默认周一）`03:30` 追加“周全量（full dump）”  
+   备份输出目录：`/Users/GY/Documents/New project 2/backups/postgres`
+3. 注册证锚点闸门（防止再次出现大规模无产品映射）
+   - 已接入 `sync_nmpa_ivd` 主流程：闸门失败会使本轮 sync 失败，并阻断后续 loop 作业。
+4. 启动前守卫（`preflight`）+ 安全启动（`safe-up`）
+   - `preflight` 检查：DB 挂载路径、关键表计数、base/WAL 备份可用性
+   - `safe-up` 流程：先快照再 `docker compose up -d --build`，失败给出回滚提示
+
+手工执行锚点闸门：
+```bash
+MAX_RATIO=0.05 MAX_UNANCHORED_COUNT=500 ./scripts/check_registration_anchor_gate.sh
+```
+
+手工执行 preflight（推荐每次启动前）：
+```bash
+./scripts/db_preflight.sh
+```
+
+安全启动（默认先快照）：
+```bash
+./scripts/safe_up.sh
+```
+
+快速启动（跳过快照，速度优先）：
+```bash
+SAFE_UP_SKIP_SNAPSHOT=1 SAFE_UP_FORCE=1 ./scripts/safe_up.sh
+```
+
+数据库 5 项健康检查（建议每日一次）：
+```bash
+./scripts/db_health_check.sh
+```
+
+恢复演练（建议每周一次，默认自动清理演练库）：
+```bash
+./scripts/db_restore_drill.sh
+```
+
+严格演练模式（要求演练库与主库核心表行数一致）：
+```bash
+STRICT=1 ./scripts/db_restore_drill.sh
+```
+
+手工触发一次“日增量（WAL）”：
+```bash
+docker compose exec -T db-backup /scripts/backup_pg_wal_daily.sh
+```
+
+手工触发一次“周全量（full dump）”：
+```bash
+docker compose exec -T db-backup /scripts/backup_pg_weekly_full.sh
+```
+
+从备份恢复（示例）：
+```bash
+docker compose exec -T db psql -U nmpa -d nmpa -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+# 周全量 + WAL 归档恢复建议按时间点恢复策略执行。
+# full dump 目录默认在 backups/postgres/base/base_*.dump
+# WAL 归档目录默认在 backups/postgres/wal
+```
+
+可调环境变量：
+- `BACKUP_RUN_AT`（默认 `03:30`）
+- `FULL_BACKUP_WEEKDAY`（默认 `1`，周一）
+- `FULL_BACKUP_RETENTION_WEEKS`（默认 `4`）
+- `WAL_RETENTION_DAYS`（默认 `14`）
+- 锚点闸门：`MAX_RATIO`（默认 `0.05`）、`MAX_UNANCHORED_COUNT`（默认 `0`，表示不启用绝对值闸门）
+- Sync 内建闸门：`REGISTRATION_ANCHOR_GATE_ENABLED`（默认 `true`）、`REGISTRATION_ANCHOR_GATE_MAX_RATIO`（默认 `0.05`）、`REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT`（默认 `500`）
+- preflight：`PRECHECK_REQUIRE_BASE_BACKUP`（默认 `1`）、`PRECHECK_REQUIRE_WAL`（默认 `1`）、`PRECHECK_MAX_BASE_AGE_DAYS`（默认 `8`）
+- safe-up：`SAFE_UP_SKIP_SNAPSHOT`（默认 `0`）、`SAFE_UP_REQUIRE_SNAPSHOT`（默认 `1`）、`SAFE_UP_FORCE`（默认 `0`）
 
 ## 管理员初始化
 系统启动时会尝试用环境变量初始化管理员账号：

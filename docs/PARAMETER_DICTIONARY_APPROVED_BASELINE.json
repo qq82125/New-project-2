@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "dictionary_version": 1,
+  "updated_at": "2026-02-21",
+  "owner": "data-platform",
+  "generated_at": "2026-02-21T00:00:00+00:00",
+  "keys": [
+    {"key": "clinical_application", "deprecated": false},
+    {"key": "detection_principle", "deprecated": false},
+    {"key": "instrument_compatibility", "deprecated": false},
+    {"key": "packaging_material", "deprecated": false},
+    {"key": "reagent_type", "deprecated": false},
+    {"key": "shelf_life_days", "deprecated": false},
+    {"key": "transport_temp_max_c", "deprecated": false},
+    {"key": "transport_temp_min_c", "deprecated": false}
+  ]
+}

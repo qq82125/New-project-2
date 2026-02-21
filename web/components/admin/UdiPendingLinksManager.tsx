@@ -19,6 +19,10 @@ type PendingItem = {
   status: string;
   reason: string;
   reason_code?: string | null;
+  match_reason?: string | null;
+  confidence?: number;
+  reversible?: boolean;
+  linked_by?: string | null;
   candidate_company_name?: string | null;
   candidate_product_name?: string | null;
   created_at?: string | null;
@@ -53,6 +57,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [bindInputById, setBindInputById] = useState<Record<string, string>>({});
   const [query, setQuery] = useState('');
+  const [lowConfidenceOnly, setLowConfidenceOnly] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -67,11 +72,13 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
     });
   }, [items, query]);
 
-  async function refresh(nextStatus?: string) {
+  async function refresh(nextStatus?: string, onlyLowConfidence?: boolean) {
     const st = (nextStatus || status || 'PENDING').toUpperCase();
+    const lowConfidence = Boolean(onlyLowConfidence ?? lowConfidenceOnly);
+    const confidenceQuery = lowConfidence ? '&confidence_lt=0.6' : '';
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/udi/pending-links?status=${encodeURIComponent(st)}&limit=${DEFAULT_LIMIT}`, {
+      const res = await fetch(`/api/admin/udi/pending-links?status=${encodeURIComponent(st)}&limit=${DEFAULT_LIMIT}${confidenceQuery}`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -132,7 +139,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             onChange={(e) => {
               const next = String(e.target.value || 'PENDING').toUpperCase();
               setStatus(next);
-              void refresh(next);
+              void refresh(next, lowConfidenceOnly);
             }}
             style={{ minWidth: 180 }}
           >
@@ -147,6 +154,16 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
             onChange={(e) => setQuery(e.target.value)}
             style={{ minWidth: 320 }}
           />
+          <Button
+            variant={lowConfidenceOnly ? 'default' : 'secondary'}
+            onClick={() => {
+              const next = !lowConfidenceOnly;
+              setLowConfidenceOnly(next);
+              void refresh(status, next);
+            }}
+          >
+            低置信(&lt;0.6)
+          </Button>
           <Button onClick={() => void refresh()} disabled={loading}>
             {loading ? '刷新中...' : '刷新'}
           </Button>
@@ -171,6 +188,7 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                     <th>UDI-DI</th>
                     <th>状态</th>
                     <th>原因</th>
+                    <th>置信度</th>
                     <th>候选信息</th>
                     <th>手动绑定注册证号</th>
                   </tr>
@@ -187,6 +205,10 @@ export default function UdiPendingLinksManager({ initialItems }: { initialItems:
                       <td>
                         <div>{it.reason_code || it.reason}</div>
                         <div className="muted" style={{ fontSize: 12 }}>{it.reason}</div>
+                      </td>
+                      <td>
+                        <div>{typeof it.confidence === 'number' ? it.confidence.toFixed(2) : '-'}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>{it.match_reason || '-'}</div>
                       </td>
                       <td>
                         <div>{it.candidate_product_name || '-'}</div>

@@ -43,7 +43,14 @@ def export_search_to_csv(
     registration_no: str | None,
 ) -> str:
     enforce_export_quota(db, plan)
-    rows, _ = search_products(db, q, company, registration_no, page=1, page_size=5000)
+    rows, _ = search_products(
+        db,
+        query=q,
+        company=company,
+        reg_no=registration_no,
+        page=1,
+        page_size=5000,
+    )
 
     output = io.StringIO()
     writer = csv.writer(output)

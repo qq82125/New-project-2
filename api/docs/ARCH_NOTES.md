@@ -1,4 +1,4 @@
-# IVD产品雷达 架构现状（PR0 Baseline Notes）
+# DeepIVD 架构现状（PR0 Baseline Notes）
 
 说明：仓库当前后端目录为 `api/`（FastAPI+SQLAlchemy+Postgres），前端目录为 `web/`（Next.js）。下文给出关键入口与实际路径。
 

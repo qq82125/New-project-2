@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "dictionary_version": 1,
+  "updated_at": "2026-02-20",
+  "owner": "data-platform",
+  "generated_at": "2026-02-20T18:08:29.871119+00:00",
+  "keys": [
+    {
+      "key": "action_suffix",
+      "deprecated": false
+    },
+    {
+      "key": "approval_date",
+      "deprecated": false
+    },
+    {
+      "key": "change_type",
+      "deprecated": false
+    },
+    {
+      "key": "company_name",
+      "deprecated": false
+    },
+    {
+      "key": "country_or_region",
+      "deprecated": false
+    },
+    {
+      "key": "date_range",
+      "deprecated": false
+    },
+    {
+      "key": "expiry_date",
+      "deprecated": false
+    },
+    {
+      "key": "filing_no",
+      "deprecated": false
+    },
+    {
+      "key": "issuer_alias",
+      "deprecated": false
+    },
+    {
+      "key": "ivd_category",
+      "deprecated": false
+    },
+    {
+      "key": "legacy_seq",
+      "deprecated": false
+    },
+    {
+      "key": "management_class",
+      "deprecated": false
+    },
+    {
+      "key": "origin_bucket",
+      "deprecated": false
+    },
+    {
+      "key": "product_name",
+      "deprecated": false
+    },
+    {
+      "key": "registration_no",
+      "deprecated": false
+    },
+    {
+      "key": "regno_parse_confidence",
+      "deprecated": false
+    },
+    {
+      "key": "regno_parse_level",
+      "deprecated": false
+    },
+    {
+      "key": "regno_parse_reason",
+      "deprecated": false
+    },
+    {
+      "key": "risk_level",
+      "deprecated": false
+    },
+    {
+      "key": "sort",
+      "deprecated": false
+    },
+    {
+      "key": "status",
+      "deprecated": false
+    },
+    {
+      "key": "track",
+      "deprecated": false
+    },
+    {
+      "key": "udi_di",
+      "deprecated": false
+    },
+    {
+      "key": "view",
+      "deprecated": false
+    }
+  ]
+}

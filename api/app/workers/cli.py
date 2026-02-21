@@ -90,6 +90,17 @@ def build_parser() -> argparse.ArgumentParser:
     metrics_recompute_parser = sub.add_parser('metrics:recompute', help='Recompute metrics alias')
     metrics_recompute_parser.add_argument('--scope', default='ivd', choices=['ivd'])
     metrics_recompute_parser.add_argument('--since', default=None, help='YYYY-MM-DD')
+    quality_metrics_parser = sub.add_parser('metrics:quality-compute', help='Compute and optionally persist daily quality metrics')
+    quality_mode = quality_metrics_parser.add_mutually_exclusive_group()
+    quality_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    quality_mode.add_argument('--execute', action='store_true', help='Write daily_quality_metrics')
+    quality_metrics_parser.add_argument('--as-of', dest='as_of', default=None, help='YYYY-MM-DD (default: today UTC)')
+    quality_metrics_parser.add_argument('--window-days', dest='window_days', type=int, default=365, help='Rolling window days (default: 365)')
+    raw_archive_parser = sub.add_parser('ops:archive-raw', help='Apply raw_documents/raw_source_records retention archive policy')
+    raw_archive_mode = raw_archive_parser.add_mutually_exclusive_group()
+    raw_archive_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    raw_archive_mode.add_argument('--execute', action='store_true', help='Execute archive updates')
+    raw_archive_parser.add_argument('--older-than', required=True, help='Retention threshold, e.g. 180d')
 
     local_supp_parser = sub.add_parser('local_registry_supplement', help='Supplement local products from local registry xlsx/zip files')
     local_supp_parser.add_argument('--folder', required=True, help='Folder containing xlsx/zip files')
@@ -154,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     nmpa_diff_parser = sub.add_parser('nmpa:diffs', help='Summarize NMPA field diffs for a date (ops/debug)')
     nmpa_diff_parser.add_argument('--date', required=True, help='YYYY-MM-DD')
+    nmpa_replay_parser = sub.add_parser('nmpa:diff-replay', help='Replay NMPA snapshot/diff for one source_run_id')
+    nmpa_replay_mode = nmpa_replay_parser.add_mutually_exclusive_group()
+    nmpa_replay_mode.add_argument('--dry-run', action='store_true', help='Preview only, no writes')
+    nmpa_replay_mode.add_argument('--execute', action='store_true', help='Recompute snapshots/diffs only')
+    nmpa_replay_parser.add_argument('--source-run-id', type=int, required=True, help='source_runs.id to replay')
 
     meth_seed = sub.add_parser('methodology:seed', help='Seed methodology tree (V1) into methodology_nodes')
     meth_seed_mode = meth_seed.add_mutually_exclusive_group()
@@ -199,6 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
 
+    udi_links_audit = sub.add_parser('udi:links-audit', help='Audit UDI link quality metrics')
+    udi_links_audit_mode = udi_links_audit.add_mutually_exclusive_group()
+    udi_links_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_links_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
+
     udi_promote = sub.add_parser('udi:promote', help='Promote UDI device index entries into registration/product structures')
     udi_promote_mode = udi_promote.add_mutually_exclusive_group()
     udi_promote_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -232,6 +253,74 @@ def build_parser() -> argparse.ArgumentParser:
     udi_index.add_argument('--part-from', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
     udi_index.add_argument('--part-to', type=int, default=None, help='Only scan PART N..M files (inclusive), based on file name')
 
+    source_import = sub.add_parser('source:import-files', help='Recursive versioned offline file import')
+    source_import_mode = source_import.add_mutually_exclusive_group()
+    source_import_mode.add_argument('--dry-run', action='store_true', help='Scan and record dataset/files only')
+    source_import_mode.add_argument('--execute', action='store_true', help='Execute import')
+    source_import.add_argument('--source-key', default='nmpa_legacy_dump', help='Logical source key')
+    source_import.add_argument('--root-path', default='/data/import/nmpa_legacy', help='Root path under /data/import')
+    source_import.add_argument('--dataset-version', default=None, help='Optional version; default YYYYMMDD_HHMMSS')
+    source_import.add_argument('--recursive', dest='recursive', action='store_true', help='Recursive scan (default true)')
+    source_import.add_argument('--no-recursive', dest='recursive', action='store_false', help='Disable recursive scan')
+    source_import.set_defaults(recursive=True)
+    source_import.add_argument('--max-depth', type=int, default=0, help='0 means unlimited depth')
+    source_import.add_argument('--pattern', default='*.csv,*.xlsx,*.xls,*.json,*.ndjson', help='Glob list, comma-separated')
+    source_import.add_argument('--only-new', dest='only_new', action='store_true', help='Import only unseen sha256 files (default)')
+    source_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
+    source_import.set_defaults(only_new=True)
+
+    nmpa_legacy_import = sub.add_parser('nmpa-legacy:import', help='Alias of source:import-files for nmpa legacy dump')
+    nmpa_legacy_mode = nmpa_legacy_import.add_mutually_exclusive_group()
+    nmpa_legacy_mode.add_argument('--dry-run', action='store_true', help='Scan and record dataset/files only')
+    nmpa_legacy_mode.add_argument('--execute', action='store_true', help='Execute import')
+    nmpa_legacy_import.add_argument('--root-path', default='/data/import/nmpa_legacy', help='Root path under /data/import')
+    nmpa_legacy_import.add_argument('--dataset-version', default=None, help='Optional version; default YYYYMMDD_HHMMSS')
+    nmpa_legacy_import.add_argument('--recursive', dest='recursive', action='store_true', help='Recursive scan (default true)')
+    nmpa_legacy_import.add_argument('--no-recursive', dest='recursive', action='store_false', help='Disable recursive scan')
+    nmpa_legacy_import.set_defaults(recursive=True)
+    nmpa_legacy_import.add_argument('--max-depth', type=int, default=0, help='0 means unlimited depth')
+    nmpa_legacy_import.add_argument('--pattern', default='*.csv,*.xlsx,*.xls,*.json,*.ndjson', help='Glob list, comma-separated')
+    nmpa_legacy_import.add_argument('--only-new', dest='only_new', action='store_true', help='Import only unseen sha256 files (default)')
+    nmpa_legacy_import.add_argument('--no-only-new', dest='only_new', action='store_false', help='Force re-import even if duplicate sha256')
+    nmpa_legacy_import.set_defaults(only_new=True)
+
+    legacy_promote = sub.add_parser('nmpa-legacy:promote', help='Promote nmpa_legacy raw_source_records into registrations stubs')
+    legacy_promote_mode = legacy_promote.add_mutually_exclusive_group()
+    legacy_promote_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_promote_mode.add_argument('--execute', action='store_true', help='Write registrations stubs')
+    legacy_promote.add_argument('--limit', type=int, default=None, help='Optional max rows to process')
+    legacy_promote.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+    legacy_promote.add_argument('--batch-size', type=int, default=1000, help='Rows per batch (default 1000)')
+    legacy_promote.add_argument('--only-missing', dest='only_missing', action='store_true', help='Only promote missing registrations (default)')
+    legacy_promote.add_argument('--no-only-missing', dest='only_missing', action='store_false', help='Include existing registrations for fill-empty updates')
+    legacy_promote.set_defaults(only_missing=True)
+    legacy_promote.add_argument('--source-run-id', type=int, default=None, help='Optional source_runs.id filter')
+
+    legacy_product_stubs = sub.add_parser('legacy:product-stubs', help='Create products stubs from legacy registrations')
+    legacy_product_stubs_mode = legacy_product_stubs.add_mutually_exclusive_group()
+    legacy_product_stubs_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_product_stubs_mode.add_argument('--execute', action='store_true', help='Write products stubs')
+    legacy_product_stubs.add_argument('--limit', type=int, default=None, help='Optional max registrations to process')
+    legacy_product_stubs.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+
+    legacy_params_backfill = sub.add_parser('legacy:params-backfill', help='Backfill legacy params into product_params (only-missing)')
+    legacy_params_backfill_mode = legacy_params_backfill.add_mutually_exclusive_group()
+    legacy_params_backfill_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    legacy_params_backfill_mode.add_argument('--execute', action='store_true', help='Write product_params')
+    legacy_params_backfill.add_argument('--limit', type=int, default=None, help='Optional max raw rows to process')
+    legacy_params_backfill.add_argument('--offset', type=int, default=0, help='Optional offset for pagination')
+    legacy_params_backfill.add_argument('--batch-size', type=int, default=1000, help='Rows per batch (default 1000)')
+    legacy_params_backfill.add_argument('--source-key', default='nmpa_legacy_dump', help='Source key (default nmpa_legacy_dump)')
+    legacy_params_backfill.add_argument('--only-missing', dest='only_missing', action='store_true', help='Only fill missing/empty params (default)')
+    legacy_params_backfill.add_argument('--no-only-missing', dest='only_missing', action='store_false', help='Allow overwriting existing non-empty values')
+    legacy_params_backfill.set_defaults(only_missing=True)
+
+    offline_dataset_diff = sub.add_parser('offline:dataset-diff', help='Compare two offline datasets by files/rows/reason codes')
+    offline_dataset_diff.add_argument('--source-key', required=True, help='source key, e.g. nmpa_legacy_dump')
+    offline_dataset_diff.add_argument('--from', dest='from_ref', required=True, help='dataset_version or dataset_id')
+    offline_dataset_diff.add_argument('--to', dest='to_ref', required=True, help='dataset_version or dataset_id')
+    offline_dataset_diff.add_argument('--format', default='text', choices=['text', 'json'], help='output format')
+
     udi_variants = sub.add_parser('udi:variants', help='Promote udi_device_index into registration-anchored product_variants')
     udi_variants_mode = udi_variants.add_mutually_exclusive_group()
     udi_variants_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -259,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     udi_params.add_argument('--full-scan', action='store_true', help='Dry-run/execute candidates: use full scan instead of sampling')
     udi_params.add_argument('--with-candidates', action='store_true', help='Execute: also compute+upsert candidates snapshot (can be expensive)')
     udi_params.add_argument('--only-allowlisted', action='store_true', help='Execute: only write params from admin_configs[udi_params_allowlist]')
+    udi_params.add_argument(
+        '--allow-unknown-keys',
+        action='store_true',
+        help='Allow unknown allowlist keys (default false; execute fails when unknown keys exist)',
+    )
     udi_params.add_argument('--batch-size', type=int, default=50000, help='Execute: rows per batch for allowlist write (default 50000)')
     udi_params.add_argument('--resume', dest='resume', action='store_true', help='Execute: continue from checkpoint (default)')
     udi_params.add_argument('--no-resume', dest='resume', action='store_false', help='Execute: ignore checkpoint and start fresh')
@@ -511,6 +605,40 @@ def _run_metrics_recompute(*, scope: str, since: str | None) -> int:
         db.close()
 
 
+def _run_quality_metrics_compute(args: argparse.Namespace) -> int:
+    from app.services.quality_metrics import compute_daily_quality_metrics, upsert_daily_quality_metrics
+
+    as_of = date.fromisoformat(str(args.as_of)) if getattr(args, "as_of", None) else date.today()
+    window_days = max(1, int(getattr(args, "window_days", 365) or 365))
+    dry_run = not bool(getattr(args, "execute", False))
+
+    db = SessionLocal()
+    try:
+        report = compute_daily_quality_metrics(db, as_of=as_of, window_days=window_days)
+        if not dry_run:
+            upsert_daily_quality_metrics(db, report)
+            db.commit()
+        print(json.dumps({"ok": True, "dry_run": dry_run, "window_days": window_days, **report.as_json()}, ensure_ascii=False, default=str))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_ops_archive_raw(args: argparse.Namespace) -> int:
+    from app.services.raw_archive import archive_raw_data, parse_older_than_days
+
+    days = parse_older_than_days(str(getattr(args, "older_than")))
+    dry_run = not bool(getattr(args, "execute", False))
+
+    db = SessionLocal()
+    try:
+        report = archive_raw_data(db, older_than_days=days, dry_run=dry_run)
+        print(json.dumps({"ok": True, **report.as_json()}, ensure_ascii=False, default=str))
+        return 0
+    finally:
+        db.close()
+
+
 def _run_nmpa_snapshots(*, since: str) -> int:
     target = date.fromisoformat(since)
     db = SessionLocal()
@@ -575,6 +703,32 @@ def _run_nmpa_diffs(*, target_date: str) -> int:
                 }
                 for r in rows
             ],
+        }
+        print(json.dumps(out, ensure_ascii=True))
+        return 0
+    finally:
+        db.close()
+
+
+def _run_nmpa_diff_replay(args: argparse.Namespace) -> int:
+    from app.services.nmpa_assets import replay_nmpa_snapshot_diffs_for_source_run
+
+    dry_run = not bool(getattr(args, "execute", False))
+    source_run_id = int(getattr(args, "source_run_id"))
+
+    db = SessionLocal()
+    try:
+        report = replay_nmpa_snapshot_diffs_for_source_run(db, source_run_id=source_run_id, dry_run=dry_run)
+        out = {
+            "ok": True,
+            "source_run_id": source_run_id,
+            "dry_run": dry_run,
+            "total_records": int(report.total_records),
+            "diff_success": int(report.diff_success),
+            "diff_failed": int(report.diff_failed),
+            "diffs_written": int(report.diffs_written),
+            "diff_success_rate": report.diff_success_rate,
+            "top_reason_codes": report.top_reason_codes,
         }
         print(json.dumps(out, ensure_ascii=True))
         return 0
@@ -1107,6 +1261,78 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_udi_links_audit(_args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        total_links = int(db.execute(text("SELECT COUNT(1) FROM product_udi_map")).scalar() or 0)
+        auto_links = int(
+            db.execute(
+                text("SELECT COUNT(1) FROM product_udi_map WHERE match_type = 'direct'")
+            ).scalar()
+            or 0
+        )
+        rollback_done = int(
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM change_log
+                    WHERE entity_type = 'pending_udi_link'
+                      AND change_type IN ('ignore', 'rollback')
+                    """
+                )
+            ).scalar()
+            or 0
+        )
+        rollback_base = int(
+            db.execute(
+                text("SELECT COUNT(1) FROM product_udi_map WHERE reversible = TRUE")
+            ).scalar()
+            or 0
+        )
+        p95_seconds = float(
+            db.execute(
+                text(
+                    """
+                    SELECT COALESCE(
+                        percentile_cont(0.95) WITHIN GROUP (
+                            ORDER BY EXTRACT(EPOCH FROM (NOW() - created_at))
+                        ),
+                        0
+                    )
+                    FROM pending_udi_links
+                    WHERE status IN ('PENDING', 'RETRYING')
+                    """
+                )
+            ).scalar()
+            or 0.0
+        )
+
+        def _rate(n: int, d: int) -> float:
+            return round((float(n) / float(d)), 4) if d > 0 else 0.0
+
+        print(
+            json.dumps(
+                {
+                    "auto_link_rate": _rate(auto_links, total_links),
+                    "rollback_rate": _rate(rollback_done, rollback_base),
+                    "pending_age_p95": int(round(p95_seconds)),
+                    "units": {"pending_age_p95": "seconds"},
+                    "counts": {
+                        "total_links": total_links,
+                        "auto_links": auto_links,
+                        "rollback_done": rollback_done,
+                        "rollback_base": rollback_base,
+                    },
+                },
+                ensure_ascii=True,
+            )
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def _run_udi_promote(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
@@ -1183,6 +1409,173 @@ def _run_udi_promote_snapshot(args: argparse.Namespace) -> int:
         out["snapshot"] = snapshot
         print(json.dumps(out, ensure_ascii=True, default=str))
         return 0
+    finally:
+        db.close()
+
+
+def _run_source_import_files(args: argparse.Namespace, *, force_source_key: str | None = None) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.offline_import import DEFAULT_PATTERN, DEFAULT_SOURCE_KEY, run_source_import_files
+
+        execute = bool(getattr(args, "execute", False))
+        dry_run = not execute
+        source_key = str(force_source_key or getattr(args, "source_key", DEFAULT_SOURCE_KEY)).strip() or DEFAULT_SOURCE_KEY
+        recursive = bool(getattr(args, "recursive", True))
+        root_path = Path(str(getattr(args, "root_path", "/data/import/nmpa_legacy")))
+        max_depth = int(getattr(args, "max_depth", 0) or 0)
+        pattern = str(getattr(args, "pattern", DEFAULT_PATTERN) or DEFAULT_PATTERN)
+        only_new = bool(getattr(args, "only_new", True))
+        dataset_version = str(getattr(args, "dataset_version", "") or "").strip() or None
+
+        rep = run_source_import_files(
+            db,
+            source_key=source_key,
+            root_path=root_path,
+            recursive=recursive,
+            max_depth=max_depth,
+            pattern=pattern,
+            only_new=only_new,
+            dry_run=dry_run,
+            dataset_version=dataset_version,
+        )
+
+        db.commit()
+        out = {
+            "source_key": rep.source_key,
+            "dataset_id": rep.dataset_id,
+            "dataset_version": rep.dataset_version,
+            "root_path": rep.root_path,
+            "recursive": rep.recursive,
+            "max_depth": rep.max_depth,
+            "pattern": rep.pattern,
+            "only_new": rep.only_new,
+            "dry_run": rep.dry_run,
+            "files_scanned": rep.files_scanned,
+            "files_imported": rep.files_imported,
+            "files_skipped": rep.files_skipped,
+            "rows_written": rep.rows_written,
+            "rows_failed": rep.rows_failed,
+            "new_files_count": rep.new_files_count,
+            "dup_files_count": rep.dup_files_count,
+            "ext_filtered_count": rep.ext_filtered_count,
+            "parse_level_distribution": rep.parse_level_distribution,
+            "top_parse_reasons": rep.top_parse_reasons,
+            "action_suffix_counts": rep.action_suffix_counts,
+            "issuer_alias_counts": rep.issuer_alias_counts,
+            "country_region_counts": rep.country_region_counts,
+            "origin_bucket_counts": rep.origin_bucket_counts,
+            "product_params_written": rep.product_params_written,
+        }
+        print(json.dumps(out, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_offline_dataset_diff(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.offline_dataset_diff import build_offline_dataset_diff, format_offline_dataset_diff_text
+
+        rep = build_offline_dataset_diff(
+            db,
+            source_key=str(getattr(args, "source_key", "")).strip(),
+            from_ref=str(getattr(args, "from_ref", "")).strip(),
+            to_ref=str(getattr(args, "to_ref", "")).strip(),
+            persist=True,
+        )
+        db.commit()
+        fmt = str(getattr(args, "format", "text") or "text").strip().lower()
+        if fmt == "json":
+            print(json.dumps(rep, ensure_ascii=False, default=str))
+        else:
+            print(format_offline_dataset_diff_text(rep))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_nmpa_legacy_promote(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import promote_nmpa_legacy_raw_to_registrations
+
+        rep = promote_nmpa_legacy_raw_to_registrations(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+            batch_size=max(100, int(getattr(args, "batch_size", 1000) or 1000)),
+            only_missing=bool(getattr(args, "only_missing", True)),
+            source_run_id=(int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_legacy_product_stubs(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import create_legacy_product_stubs
+
+        rep = create_legacy_product_stubs(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _run_legacy_params_backfill(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.nmpa_legacy_promote import backfill_legacy_params
+
+        rep = backfill_legacy_params(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit=(int(args.limit) if getattr(args, "limit", None) is not None else None),
+            offset=int(getattr(args, "offset", 0) or 0),
+            source_key=str(getattr(args, "source_key", "nmpa_legacy_dump") or "nmpa_legacy_dump"),
+            batch_size=max(100, int(getattr(args, "batch_size", 1000) or 1000)),
+            only_missing=bool(getattr(args, "only_missing", True)),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -1413,18 +1806,40 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                     )
                 )
 
-            rep = write_allowlisted_params(
-                db,
-                source_run_id=source_run_id,
-                limit=(int(args.limit) if getattr(args, "limit", None) else None),
-                only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
-                dry_run=False,
-                batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
-                resume=bool(getattr(args, "resume", True)),
-                start_cursor=start_cursor,
-                progress_cb=_progress,
-            )
-            out: dict[str, object] = {"write": rep.to_dict}
+            try:
+                rep = write_allowlisted_params(
+                    db,
+                    source_run_id=source_run_id,
+                    limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                    only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
+                    dry_run=False,
+                    batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
+                    resume=bool(getattr(args, "resume", True)),
+                    start_cursor=start_cursor,
+                    allow_unknown_keys=bool(getattr(args, "allow_unknown_keys", False)),
+                    progress_cb=_progress,
+                )
+            except ValueError as exc:
+                print(
+                    json.dumps(
+                        {
+                            "code": "ALLOWLIST_VALIDATION_FAILED",
+                            "message": str(exc),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return 1
+            out: dict[str, object] = {
+                "write": rep.to_dict,
+                "allowlist_version": int(rep.allowlist_version or 1),
+                "allowlist_valid_sources": {
+                    "core_count": int(rep.allowlist_valid_core_count or 0),
+                    "approved_count": int(rep.allowlist_valid_approved_count or 0),
+                    "invalid_count": int(rep.invalid_key_count or 0),
+                },
+                "per_version_written_count": {str(int(rep.allowlist_version or 1)): int(rep.params_written or 0)},
+            }
             if with_candidates:
                 if full_scan:
                     candidates_rows, candidate_meta = compute_udi_candidates_full(
@@ -1451,6 +1866,33 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                 db.commit()
             print(json.dumps(out, ensure_ascii=False, default=str))
             return 0 if int(rep.failed or 0) == 0 else 1
+
+        if bool(getattr(args, "only_allowlisted", False)):
+            rep = write_allowlisted_params(
+                db,
+                source_run_id=source_run_id,
+                limit=(int(args.limit) if getattr(args, "limit", None) else None),
+                only_allowlisted=True,
+                dry_run=True,
+                batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
+                resume=bool(getattr(args, "resume", True)),
+                start_cursor=start_cursor,
+                allow_unknown_keys=bool(getattr(args, "allow_unknown_keys", False)),
+            )
+            out = {
+                "write_preview": rep.to_dict,
+                "allowlist_version": int(rep.allowlist_version or 1),
+                "allowlisted_key_count": int(rep.allowlisted_key_count or 0),
+                "invalid_key_count": int(rep.invalid_key_count or 0),
+                "invalid_keys": list(rep.invalid_keys or []),
+                "allowlist_valid_sources": {
+                    "core_count": int(rep.allowlist_valid_core_count or 0),
+                    "approved_count": int(rep.allowlist_valid_approved_count or 0),
+                    "invalid_count": int(rep.invalid_key_count or 0),
+                },
+            }
+            print(json.dumps(out, ensure_ascii=False, default=str))
+            return 0
 
         if full_scan:
             top_rows, candidate_meta = compute_udi_candidates_full(
@@ -1531,6 +1973,10 @@ def main() -> None:
         )
     if args.cmd == 'metrics:recompute':
         raise SystemExit(_run_metrics_recompute(scope=str(args.scope), since=args.since))
+    if args.cmd == 'metrics:quality-compute':
+        raise SystemExit(_run_quality_metrics_compute(args))
+    if args.cmd == 'ops:archive-raw':
+        raise SystemExit(_run_ops_archive_raw(args))
     if args.cmd == 'source:udi':
         raise SystemExit(_run_source_udi(execute=bool(args.execute), date_label=args.date))
     if args.cmd == 'local_registry_supplement':
@@ -1570,6 +2016,8 @@ def main() -> None:
         raise SystemExit(_run_nmpa_snapshots(since=str(args.since)))
     if args.cmd == 'nmpa:diffs':
         raise SystemExit(_run_nmpa_diffs(target_date=str(args.date)))
+    if args.cmd == 'nmpa:diff-replay':
+        raise SystemExit(_run_nmpa_diff_replay(args))
     if args.cmd == 'methodology:seed':
         raise SystemExit(_run_methodology_seed(dry_run=(not bool(args.execute)), file_path=str(args.file)))
     if args.cmd == 'methodology:map':
@@ -1601,12 +2049,26 @@ def main() -> None:
         raise SystemExit(_run_source_runner_all(args))
     if args.cmd == 'udi:audit':
         raise SystemExit(_run_udi_audit(args))
+    if args.cmd == 'udi:links-audit':
+        raise SystemExit(_run_udi_links_audit(args))
     if args.cmd == 'udi:promote':
         raise SystemExit(_run_udi_promote(args))
     if args.cmd == 'udi:promote-snapshot':
         raise SystemExit(_run_udi_promote_snapshot(args))
     if args.cmd == 'udi:index':
         raise SystemExit(_run_udi_index(args))
+    if args.cmd == 'source:import-files':
+        raise SystemExit(_run_source_import_files(args))
+    if args.cmd == 'nmpa-legacy:import':
+        raise SystemExit(_run_source_import_files(args, force_source_key='nmpa_legacy_dump'))
+    if args.cmd == 'nmpa-legacy:promote':
+        raise SystemExit(_run_nmpa_legacy_promote(args))
+    if args.cmd == 'legacy:product-stubs':
+        raise SystemExit(_run_legacy_product_stubs(args))
+    if args.cmd == 'legacy:params-backfill':
+        raise SystemExit(_run_legacy_params_backfill(args))
+    if args.cmd == 'offline:dataset-diff':
+        raise SystemExit(_run_offline_dataset_diff(args))
     if args.cmd == 'udi:variants':
         raise SystemExit(_run_udi_variants(args))
     if args.cmd == 'udi:products-enrich':

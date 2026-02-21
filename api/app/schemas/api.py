@@ -34,6 +34,7 @@ class ProductOut(BaseModel):
     is_stub: bool | None = None
     source_hint: str | None = None
     verified_by_nmpa: bool | None = None
+    country_or_region: str | None = None
     company: CompanyOut | None = None
 
 

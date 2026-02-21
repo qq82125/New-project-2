@@ -398,6 +398,9 @@ def _upsert_mapping(
         source=source,
         match_type="direct",
         confidence=float(confidence),
+        match_reason="udi_promote_direct",
+        reversible=(float(confidence) < 0.60),
+        linked_by=source,
         raw_source_record_id=raw_source_record_id,
     )
     map_stmt = map_stmt.on_conflict_do_update(
@@ -406,6 +409,9 @@ def _upsert_mapping(
             "source": map_stmt.excluded.source,
             "match_type": map_stmt.excluded.match_type,
             "confidence": map_stmt.excluded.confidence,
+            "match_reason": map_stmt.excluded.match_reason,
+            "reversible": map_stmt.excluded.reversible,
+            "linked_by": map_stmt.excluded.linked_by,
             "raw_source_record_id": map_stmt.excluded.raw_source_record_id,
             "updated_at": text("NOW()"),
         },

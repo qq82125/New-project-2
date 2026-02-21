@@ -33,6 +33,16 @@ python -m app.workers.cli udi:params --execute --with-candidates --source-run-id
 ### B) 白名单写入 product_params（只写高价值）
 
 配置：`admin_configs['udi_params_allowlist']`
+审计键（同样在 `admin_configs`）：
+- `udi_params_allowlist_version`（默认 `1`）
+- `udi_params_allowlist_changed_by`
+- `udi_params_allowlist_changed_at`
+- `udi_params_allowlist_change_reason`
+
+校验规则：
+- allowlist 的每个 key 必须存在于 `docs/PARAMETER_DICTIONARY_CORE_V1.yaml` 或 `docs/PARAMETER_DICTIONARY_APPROVED_V1.yaml`
+- `--dry-run --only-allowlisted`：提示非法 key 并计入 rejected
+- `--execute --only-allowlisted`：若有非法 key 默认失败退出（可用 `--allow-unknown-keys` 临时放行）
 
 默认 allowlist（幂等 seed 于迁移 `0044`）：
 - `STORAGE`（来自 `udi_device_index.storage_json`，存 `storages[]` 数组）
@@ -48,6 +58,9 @@ python -m app.workers.cli udi:params --execute --with-candidates --source-run-id
 ```bash
 python -m app.workers.cli udi:params --execute --only-allowlisted --source-run-id <source_run_id> --limit 50000
 ```
+
+版本写入：
+- `product_params.param_key_version` 会写入当前 `udi_params_allowlist_version`
 
 写入约束：
 - 仅对 `udi_device_index.registration_no_norm` 非空的记录尝试写入。

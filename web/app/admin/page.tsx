@@ -268,7 +268,7 @@ export default function AdminHomePage() {
       </Suspense>
 
       <section className="admin-home__grid">
-        <Card>
+        <Card className="admin-home__panel">
           <CardHeader>
             <CardTitle>今日工作流</CardTitle>
             <CardDescription>把 backlog 变成可消化的日常动作</CardDescription>
@@ -301,12 +301,12 @@ export default function AdminHomePage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="admin-home__panel">
           <CardHeader>
             <CardTitle>运维入口</CardTitle>
             <CardDescription>低风险配置优先</CardDescription>
           </CardHeader>
-          <CardContent className="grid" style={{ gap: 8 }}>
+          <CardContent className="admin-ops">
             <Link href="/admin/sources" className="ui-btn ui-btn--secondary">数据源配置</Link>
             <Link href="/admin/users" className="ui-btn ui-btn--secondary">用户与会员</Link>
             <Link href="/admin/contact" className="ui-btn ui-btn--secondary">联系信息</Link>

@@ -122,6 +122,8 @@ def main() -> None:
         result = sync_nmpa_ivd()
         if result.status == 'skipped':
             logger.info(result.message or 'Sync skipped')
+            time.sleep(settings.sync_interval_seconds)
+            continue
         elif result.status != 'success':
             message = result.message or 'unknown error'
             if message == last_failure:
@@ -132,6 +134,8 @@ def main() -> None:
 
             if repeated_failures == 1 or repeated_failures % 10 == 0:
                 logger.error('Sync failed (%s): %s', repeated_failures, message)
+            time.sleep(settings.sync_interval_seconds)
+            continue
         elif last_failure is not None:
             logger.info('Sync recovered after %s failures', repeated_failures)
             last_failure = None

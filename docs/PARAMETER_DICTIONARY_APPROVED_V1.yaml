@@ -1,0 +1,84 @@
+version: 1
+updated_at: "2026-02-21"
+owner: "data-platform"
+keys:
+  - key: "packaging_material"
+    display_name: "包装材料"
+    description: "产品包装材质或容器材质"
+    unit: ""
+    source_scopes: ["udi", "offline"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "table_column"]
+  - key: "transport_temp_min_c"
+    display_name: "运输最低温度"
+    description: "运输过程最低温度（摄氏）"
+    unit: "℃"
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "quality"]
+  - key: "transport_temp_max_c"
+    display_name: "运输最高温度"
+    description: "运输过程最高温度（摄氏）"
+    unit: "℃"
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "quality"]
+  - key: "shelf_life_days"
+    display_name: "货架期天数"
+    description: "可推导的货架期（天）"
+    unit: "day"
+    source_scopes: ["udi", "nmpa"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "kpi"]
+  - key: "clinical_application"
+    display_name: "临床应用场景"
+    description: "结构化临床应用描述"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "search_filter"]
+  - key: "reagent_type"
+    display_name: "试剂类型"
+    description: "体外诊断试剂细分类型"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "classification"]
+  - key: "detection_principle"
+    display_name: "检测原理"
+    description: "结构化检测原理"
+    unit: ""
+    source_scopes: ["nmpa", "offline"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "classification"]
+  - key: "instrument_compatibility"
+    display_name: "适配仪器"
+    description: "可兼容仪器型号或平台"
+    unit: ""
+    source_scopes: ["udi", "nmpa"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "search_filter"]

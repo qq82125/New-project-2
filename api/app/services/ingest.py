@@ -22,6 +22,7 @@ from app.services.mapping import ProductRecord, diff_fields, map_raw_record
 from app.services.nmpa_assets import record_shadow_diff_failure, shadow_write_nmpa_snapshot_and_diffs
 from app.services.normalize_keys import normalize_registration_no
 from app.services.pending_mode import should_enqueue_pending_documents, should_enqueue_pending_records
+from app.services.registration_no_parser import parse_registration_no
 from app.services.source_contract import apply_field_policy, upsert_registration_with_contract
 from app.services.udi_parse import parse_packing_list, parse_storage_list
 
@@ -546,9 +547,22 @@ def ingest_staging_records(
                 continue
 
             reg_no_norm = normalize_registration_no(record.reg_no)
-            if not reg_no_norm:
+            parsed_reg = parse_registration_no(reg_no_norm) if reg_no_norm else None
+            if (not reg_no_norm) or (parsed_reg is not None and not parsed_reg.parse_ok):
                 # Canonical key gate: missing registration_no must not write registrations/products.
                 # Keep evidence chain via raw_document_id, and enqueue a pending row for ops/manual resolution.
+                reason_code = "REGNO_MISSING" if not reg_no_norm else "REGNO_PARSE_FAILED"
+                reason_message = (
+                    "registration_no is missing after normalize"
+                    if not reg_no_norm
+                    else "registration_no semantic parse failed"
+                )
+                gate_error_code = (
+                    IngestErrorCode.E_CANONICAL_KEY_MISSING.value
+                    if not reg_no_norm
+                    else IngestErrorCode.E_PARSE_FAILED.value
+                )
+                candidate_registry_no = reg_no_norm or (str(record.reg_no or "").strip() or None)
                 if raw_document_id and source_run_id is not None:
                     try:
                         payload = json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
@@ -563,14 +577,14 @@ def ingest_staging_records(
                                 raw_document_id=raw_document_id,
                                 payload_hash=payload_hash,
                                 registration_no_raw=(str(record.reg_no or "").strip() or None),
-                                reason_code="NO_REG_NO",
-                                candidate_registry_no=(str(record.reg_no or "").strip() or None),
+                                reason_code=reason_code,
+                                candidate_registry_no=candidate_registry_no,
                                 candidate_company=str(record.company_name or "").strip() or None,
                                 candidate_product_name=str(record.name or "").strip() or None,
                                 reason=json.dumps(
                                     {
-                                        "error_code": IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
-                                        "message": "registration_no is required before structured upsert",
+                                        "error_code": gate_error_code,
+                                        "message": reason_message,
                                     },
                                     ensure_ascii=False,
                                 ),
@@ -597,7 +611,7 @@ def ingest_staging_records(
                             doc_stmt = insert(PendingDocument).values(
                                 raw_document_id=raw_document_id,
                                 source_run_id=int(source_run_id),
-                                reason_code="NO_REG_NO",
+                                reason_code=reason_code,
                                 status="pending",
                             )
                             doc_stmt = doc_stmt.on_conflict_do_update(
@@ -620,8 +634,8 @@ def ingest_staging_records(
                         src_key=src_key,
                         raw_doc_id=raw_document_id,
                         reason={
-                            'error_code': IngestErrorCode.E_CANONICAL_KEY_MISSING.value,
-                            'message': 'registration_no is required before structured upsert',
+                            'error_code': gate_error_code,
+                            'message': reason_message,
                         },
                         ivd_version=str(decision.get('version') or IVD_CLASSIFIER_VERSION),
                     )
