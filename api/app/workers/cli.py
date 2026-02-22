@@ -214,6 +214,8 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
+    udi_audit.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id for udi_device_index')
+    udi_audit.add_argument('--write-outliers', action='store_true', help='Execute only: materialize outliers into udi_outliers')
 
     udi_links_audit = sub.add_parser('udi:links-audit', help='Audit UDI link quality metrics')
     udi_links_audit_mode = udi_links_audit.add_mutually_exclusive_group()
@@ -359,6 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='Allow unknown allowlist keys (default false; execute fails when unknown keys exist)',
     )
     udi_params.add_argument('--batch-size', type=int, default=50000, help='Execute: rows per batch for allowlist write (default 50000)')
+    udi_params.add_argument('--include-outliers', action='store_true', help='Include outlier reg_no rows in params backfill (default false)')
     udi_params.add_argument('--resume', dest='resume', action='store_true', help='Execute: continue from checkpoint (default)')
     udi_params.add_argument('--no-resume', dest='resume', action='store_false', help='Execute: ignore checkpoint and start fresh')
     udi_params.add_argument('--start-cursor', default=None, help='Execute: start from this di_norm cursor (overrides checkpoint)')
@@ -1194,73 +1197,38 @@ def _run_source_runner_all(args: argparse.Namespace) -> int:
 def _run_udi_audit(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
-        threshold = int(getattr(args, 'outlier_threshold', 100) or 100)
-        dist = db.execute(
-            text(
-                """
-                WITH per_reg AS (
-                  SELECT registry_no, COUNT(1)::bigint AS di_count
-                  FROM product_variants
-                  WHERE registry_no IS NOT NULL AND btrim(registry_no) <> ''
-                  GROUP BY registry_no
-                )
-                SELECT
-                  COALESCE(COUNT(1), 0)::bigint AS registration_count,
-                  COALESCE(SUM(di_count), 0)::bigint AS total_di_bound,
-                  COALESCE(MIN(di_count), 0)::bigint AS min_di,
-                  COALESCE(MAX(di_count), 0)::bigint AS max_di,
-                  COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p50,
-                  COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p90,
-                  COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY di_count), 0)::numeric AS p99
-                FROM per_reg
-                """
-            )
-        ).mappings().one()
-        unbound_di = int(
-            db.execute(
-                text(
-                    """
-                    SELECT COUNT(1)
-                    FROM product_variants
-                    WHERE registry_no IS NULL OR btrim(registry_no) = ''
-                    """
-                )
-            ).scalar()
-            or 0
+        from app.services.udi_outliers import (
+            compute_udi_outlier_distribution,
+            find_udi_outliers,
+            materialize_udi_outliers,
         )
-        outliers = db.execute(
-            text(
-                """
-                SELECT registry_no, COUNT(1)::bigint AS di_count
-                FROM product_variants
-                WHERE registry_no IS NOT NULL AND btrim(registry_no) <> ''
-                GROUP BY registry_no
-                HAVING COUNT(1) > :threshold
-                ORDER BY di_count DESC, registry_no ASC
-                LIMIT 100
-                """
-            ),
-            {"threshold": threshold},
-        ).mappings().all()
+
+        threshold = int(getattr(args, 'outlier_threshold', 100) or 100)
+        source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
+        dist = compute_udi_outlier_distribution(db, source_run_id=source_run_id)
+        outliers = find_udi_outliers(db, threshold=threshold, source_run_id=source_run_id, limit=100)
+        write_outliers = bool(getattr(args, "write_outliers", False))
+        execute = bool(getattr(args, "execute", False))
+        outliers_written = 0
+        if write_outliers and execute:
+            outliers_written = materialize_udi_outliers(db, source_run_id=source_run_id, items=outliers)
+            db.commit()
+        else:
+            db.rollback()
 
         print(
             json.dumps(
                 {
                     "ok": True,
-                    "mode": "dry_run",
+                    "mode": ("execute" if execute else "dry_run"),
                     "outlier_threshold": threshold,
-                    "distribution": {
-                        "registration_count": int(dist.get("registration_count") or 0),
-                        "total_di_bound": int(dist.get("total_di_bound") or 0),
-                        "min": int(dist.get("min_di") or 0),
-                        "max": int(dist.get("max_di") or 0),
-                        "p50": float(dist.get("p50") or 0),
-                        "p90": float(dist.get("p90") or 0),
-                        "p99": float(dist.get("p99") or 0),
-                    },
-                    "di_unbound_registration_count": unbound_di,
+                    "source_run_id": source_run_id,
+                    "distribution": dist,
+                    "di_unbound_registration_count": int(dist.get("di_unbound_registration_count") or 0),
+                    "write_outliers": write_outliers,
+                    "outliers_written": int(outliers_written),
                     "outlier_registrations": [
-                        {"registration_no": str(r.get("registry_no") or ""), "di_count": int(r.get("di_count") or 0)}
+                        r.to_dict
                         for r in outliers
                     ],
                 },
@@ -1833,6 +1801,7 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                     source_run_id=source_run_id,
                     limit=(int(args.limit) if getattr(args, "limit", None) else None),
                     only_allowlisted=bool(getattr(args, "only_allowlisted", False)),
+                    include_outliers=bool(getattr(args, "include_outliers", False)),
                     dry_run=False,
                     batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
                     resume=bool(getattr(args, "resume", True)),
@@ -1894,6 +1863,7 @@ def _run_udi_params(args: argparse.Namespace) -> int:
                 source_run_id=source_run_id,
                 limit=(int(args.limit) if getattr(args, "limit", None) else None),
                 only_allowlisted=True,
+                include_outliers=bool(getattr(args, "include_outliers", False)),
                 dry_run=True,
                 batch_size=max(1000, int(getattr(args, "batch_size", 50000) or 50000)),
                 resume=bool(getattr(args, "resume", True)),

@@ -110,7 +110,14 @@ def test_udi_params_execute_writes_storage_summary() -> None:
             rep = run_udi_device_index(db, staging_dir=Path(td), raw_document_id=raw_id, source_run_id=source_run_id, dry_run=False)
             assert rep.total_devices == 1
 
-            out = write_allowlisted_params(db, source_run_id=source_run_id, limit=10, only_allowlisted=True, dry_run=False)
+            out = write_allowlisted_params(
+                db,
+                source_run_id=source_run_id,
+                limit=10,
+                only_allowlisted=True,
+                include_outliers=False,
+                dry_run=False,
+            )
             assert out.params_written >= 1
 
             rows = db.execute(

@@ -357,6 +357,8 @@ class UdiParamsReport:
     distinct_products_updated: int = 0
     storage_present_count: int = 0
     storage_non_empty_count: int = 0
+    outliers_skipped_count: int = 0
+    include_outliers: bool = False
 
     @property
     def to_dict(self) -> dict[str, Any]:
@@ -387,6 +389,8 @@ class UdiParamsReport:
             "distinct_products_updated": self.distinct_products_updated,
             "storage_present_count": self.storage_present_count,
             "storage_non_empty_count": self.storage_non_empty_count,
+            "outliers_skipped_count": int(self.outliers_skipped_count or 0),
+            "include_outliers": bool(self.include_outliers),
         }
 
 
@@ -681,6 +685,7 @@ def write_allowlisted_params(
     source_run_id: int | None,
     limit: int | None,
     only_allowlisted: bool,
+    include_outliers: bool,
     dry_run: bool,
     batch_size: int = 50000,
     resume: bool = True,
@@ -690,6 +695,7 @@ def write_allowlisted_params(
     progress_cb: Callable[[UdiParamsBatchProgress], None] | None = None,
 ) -> UdiParamsReport:
     rep = UdiParamsReport(errors=[])
+    rep.include_outliers = bool(include_outliers)
     allow_cfg = _get_allowlist_config(db)
     rep.allowlist_version = int(allow_cfg.allowlist_version or 1)
     allow = set(allow_cfg.allowlist) if only_allowlisted else set()
@@ -760,6 +766,40 @@ def write_allowlisted_params(
       AND btrim(u.di_norm) <> ''
     """
 
+    outlier_where = ""
+    if source_run_id is not None and not include_outliers:
+        outlier_where = """
+          AND NOT EXISTS (
+            SELECT 1
+            FROM udi_outliers o
+            WHERE o.source_run_id = :srid
+              AND o.reg_no = u.registration_no_norm
+              AND o.status = 'open'
+          )
+        """
+        rep.outliers_skipped_count = int(
+            db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM udi_device_index u
+                    WHERE u.di_norm IS NOT NULL
+                      AND btrim(u.di_norm) <> ''
+                      AND u.source_run_id = :srid
+                      AND EXISTS (
+                        SELECT 1
+                        FROM udi_outliers o
+                        WHERE o.source_run_id = :srid
+                          AND o.reg_no = u.registration_no_norm
+                          AND o.status = 'open'
+                      )
+                    """
+                ),
+                {"srid": int(source_run_id)},
+            ).scalar()
+            or 0
+        )
+
     def _to_uuid(v: Any) -> UUID | None:
         try:
             return UUID(str(v)) if v else None
@@ -797,6 +837,8 @@ def write_allowlisted_params(
             where_extra.append("u.source_run_id = :srid")
             params["srid"] = int(source_run_id)
         sql = select_sql_base
+        if outlier_where:
+            sql += outlier_where
         if where_extra:
             sql = sql + " AND " + " AND ".join(where_extra)
         sql = sql + " ORDER BY u.di_norm LIMIT :lim"
