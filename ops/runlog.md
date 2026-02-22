@@ -69,3 +69,19 @@ notes:
 - products reg_no duplicates (is_hidden=false): 0
 - next: outlier triage report reports/outlier_triage_run41.*
 ---
+
+---
+## Type A Outlier Fix (run=41)
+
+fixed_regnos:
+  - 国械注准20243131618: 2582 -> 36
+  - 国械注准20233130399: 2234 -> 81
+
+outliers_status_update:
+  before: open=16
+  after: open=14, resolved=2
+
+replay_commit: 58ac4e3
+params_rebackfill: executed
+audit_after_fix: completed
+---
