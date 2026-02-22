@@ -11,6 +11,8 @@ _TEMP_RANGE_RE = re.compile(
 )
 _TEMP_LE_RE = re.compile(r"(?:≤|<=)\s*(?P<max>-?\d+(?:\.\d+)?)\s*(?:°?\s*[cC]|℃)?")
 _TEMP_GE_RE = re.compile(r"(?:≥|>=)\s*(?P<min>-?\d+(?:\.\d+)?)\s*(?:°?\s*[cC]|℃)?")
+_TRANSPORT_HINTS = ("运输", "运送", "transport", "shipping", "transit", "cold chain")
+_STORAGE_HINTS = ("储存", "贮存", "storage", "store")
 
 
 def _as_text(v: Any) -> str | None:
@@ -69,6 +71,27 @@ def _extract_storage_objects(raw: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _extract_root_temp_fields(raw: Any) -> tuple[float | None, float | None, float | None, float | None]:
+    src = _load_json_like(raw)
+    if not isinstance(src, dict):
+        return (None, None, None, None)
+
+    def pick(*keys: str) -> float | None:
+        for k in keys:
+            if k in src:
+                v = _to_float(src.get(k))
+                if v is not None:
+                    return v
+        return None
+
+    return (
+        pick("storageMin", "storage_min", "storage_temp_min", "minTemp", "min_temp"),
+        pick("storageMax", "storage_max", "storage_temp_max", "maxTemp", "max_temp"),
+        pick("transportMin", "transport_min", "transport_temp_min", "shippingMin", "logisticsMin"),
+        pick("transportMax", "transport_max", "transport_temp_max", "shippingMax", "logisticsMax"),
+    )
+
+
 def parse_storage_json(raw: Any) -> dict[str, Any]:
     storages = _extract_storage_objects(raw)
     notes: list[str] = []
@@ -77,12 +100,23 @@ def parse_storage_json(raw: Any) -> dict[str, Any]:
     transport_mins: list[float] = []
     transport_maxs: list[float] = []
 
-    def _push_temp(stype: str, mn: float | None, mx: float | None) -> None:
-        is_transport = any(token in stype for token in ("运输", "transport", "shipping"))
+    def _push_temp(stype: str, mn: float | None, mx: float | None, extra_text: str = "") -> None:
+        scope_text = f"{stype} {extra_text}".lower()
+        is_transport = any(token in scope_text for token in _TRANSPORT_HINTS)
+        is_storage = any(token in scope_text for token in _STORAGE_HINTS)
+        write_both = is_transport and is_storage
         if mn is not None:
-            (transport_mins if is_transport else storage_mins).append(mn)
+            if write_both:
+                transport_mins.append(mn)
+                storage_mins.append(mn)
+            else:
+                (transport_mins if is_transport else storage_mins).append(mn)
         if mx is not None:
-            (transport_maxs if is_transport else storage_maxs).append(mx)
+            if write_both:
+                transport_maxs.append(mx)
+                storage_maxs.append(mx)
+            else:
+                (transport_maxs if is_transport else storage_maxs).append(mx)
 
     for item in storages:
         stype = (_as_text(item.get("type")) or "").lower()
@@ -113,7 +147,17 @@ def parse_storage_json(raw: Any) -> dict[str, Any]:
                 if m_ge:
                     mn = _to_float(m_ge.group("min"))
 
-        _push_temp(stype, mn, mx)
+        _push_temp(stype, mn, mx, f"{rng} {note or ''}")
+
+    rs_min, rs_max, rt_min, rt_max = _extract_root_temp_fields(raw)
+    if rs_min is not None:
+        storage_mins.append(rs_min)
+    if rs_max is not None:
+        storage_maxs.append(rs_max)
+    if rt_min is not None:
+        transport_mins.append(rt_min)
+    if rt_max is not None:
+        transport_maxs.append(rt_max)
 
     if not storages:
         raw_text = _as_text(raw)
@@ -130,6 +174,19 @@ def parse_storage_json(raw: Any) -> dict[str, Any]:
                 if m_ge:
                     storage_mins.append(float(m_ge.group("min")))
             notes.append(raw_text)
+    else:
+        raw_text = _as_text(raw)
+
+    # Heuristic fallback: if transport context appears but explicit transport temps are absent,
+    # reuse parsed storage bounds as transport bounds to avoid dropping actionable cold-chain info.
+    text_blob = " ".join([str(x) for x in notes])
+    if raw_text:
+        text_blob = f"{text_blob} {raw_text}"
+    if (not transport_mins and not transport_maxs) and (storage_mins or storage_maxs):
+        lower_blob = text_blob.lower()
+        if any(h in lower_blob for h in _TRANSPORT_HINTS):
+            transport_mins = list(storage_mins)
+            transport_maxs = list(storage_maxs)
 
     storage_note = None
     if notes:

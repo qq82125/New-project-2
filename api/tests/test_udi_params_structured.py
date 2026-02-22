@@ -21,6 +21,30 @@ def test_parse_storage_json_extracts_temperatures_and_note() -> None:
     assert "2~8℃" in str(out["STORAGE_NOTE"])
 
 
+def test_parse_storage_json_extracts_root_transport_fields() -> None:
+    raw = {
+        "storageMin": 2,
+        "storageMax": 8,
+        "transportMin": -20,
+        "transportMax": 25,
+        "note": "冷链运输",
+    }
+    out = parse_storage_json(raw)
+    assert out["STORAGE_TEMP_MIN_C"] == 2.0
+    assert out["STORAGE_TEMP_MAX_C"] == 8.0
+    assert out["TRANSPORT_TEMP_MIN_C"] == -20.0
+    assert out["TRANSPORT_TEMP_MAX_C"] == 25.0
+
+
+def test_parse_storage_json_transport_hint_fallback() -> None:
+    raw = [{"type": "贮存/运输条件", "range": "2-8℃"}]
+    out = parse_storage_json(raw)
+    assert out["STORAGE_TEMP_MIN_C"] == 2.0
+    assert out["STORAGE_TEMP_MAX_C"] == 8.0
+    assert out["TRANSPORT_TEMP_MIN_C"] == 2.0
+    assert out["TRANSPORT_TEMP_MAX_C"] == 8.0
+
+
 def test_parse_packing_json_prefers_primary_and_qty() -> None:
     raw = [
         {"package_level": "箱", "contains_qty": 96, "package_unit": "盒"},
