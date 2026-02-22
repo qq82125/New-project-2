@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
+import re
+import unicodedata
 
 from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
@@ -601,4 +603,267 @@ def upsert_udi_variants_from_device_index(
 
     if not dry_run:
         db.commit()
+    return rep
+
+
+@dataclass
+class UdiReplayRegnoReport:
+    source_run_id: int
+    registration_nos: list[str]
+    scanned: int = 0
+    selected_for_write: int = 0
+    deleted_variants: int = 0
+    deleted_links: int = 0
+    upserted: int = 0
+    multi_bind_di_skipped: int = 0
+    failed: int = 0
+    regno_stats: list[dict[str, Any]] | None = None
+    errors: list[dict[str, Any]] | None = None
+
+    @property
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_run_id": int(self.source_run_id),
+            "registration_nos": list(self.registration_nos),
+            "scanned": int(self.scanned),
+            "selected_for_write": int(self.selected_for_write),
+            "deleted_variants": int(self.deleted_variants),
+            "deleted_links": int(self.deleted_links),
+            "upserted": int(self.upserted),
+            "multi_bind_di_skipped": int(self.multi_bind_di_skipped),
+            "failed": int(self.failed),
+            "regno_stats": list(self.regno_stats or []),
+            "errors": list(self.errors or []),
+        }
+
+
+def _model_family_key(model_spec: str | None, sku_code: str | None) -> str:
+    """
+    Type-A replay split rule:
+    - Normalize model text (NFKC).
+    - Prefer segment before "/" (plate-like patterns).
+    - Then trim dimension tail after ×/x/X/* (wire-like patterns).
+    - Remove trailing孔位/纯数字规格尾缀.
+    """
+    base = (model_spec or sku_code or "").strip()
+    if not base:
+        return "__EMPTY_MODEL__"
+    s = unicodedata.normalize("NFKC", base).strip()
+    s = re.sub(r"\s+", "", s)
+    if "/" in s:
+        s = s.split("/", 1)[0].strip()
+    if "／" in s:
+        s = s.split("／", 1)[0].strip()
+    for sep in ("×", "x", "X", "*", "＊"):
+        if sep in s:
+            s = s.split(sep, 1)[0].strip()
+            break
+    s = re.sub(r"(\\d+(\\.\\d+)?孔)$", "", s)
+    s = re.sub(r"(\\d+(\\.\\d+)?)$", "", s)
+    s = s.strip()
+    return s or "__EMPTY_MODEL__"
+
+
+def replay_udi_variants_for_regnos(
+    db: Session,
+    *,
+    source_run_id: int,
+    registration_nos: list[str],
+    outlier_threshold: int = 100,
+    dry_run: bool,
+) -> UdiReplayRegnoReport:
+    reg_nos = sorted({str(x or "").strip() for x in registration_nos if str(x or "").strip()})
+    rep = UdiReplayRegnoReport(
+        source_run_id=int(source_run_id),
+        registration_nos=reg_nos,
+        regno_stats=[],
+        errors=[],
+    )
+    if not reg_nos:
+        return rep
+
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              udi.di_norm,
+              udi.registration_no_norm,
+              udi.model_spec,
+              udi.sku_code,
+              udi.manufacturer_cn,
+              udi.packing_json,
+              udi.raw_document_id
+            FROM udi_device_index udi
+            WHERE udi.source_run_id = :srid
+              AND udi.registration_no_norm = ANY(:arr)
+              AND udi.di_norm IS NOT NULL
+              AND btrim(udi.di_norm) <> ''
+            ORDER BY udi.registration_no_norm ASC, udi.di_norm ASC
+            """
+        ),
+        {"srid": int(source_run_id), "arr": reg_nos},
+    ).mappings().all()
+
+    rep.scanned = len(rows)
+    rows_by_reg: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        reg = str(r.get("registration_no_norm") or "").strip()
+        if not reg:
+            continue
+        rows_by_reg.setdefault(reg, []).append(dict(r))
+
+    # Cache registrations for anchor checks.
+    reg_by_no: dict[str, UUID] = {}
+    if reg_nos:
+        for rid, rno in db.execute(
+            text("SELECT id, registration_no FROM registrations WHERE registration_no = ANY(:arr)"),
+            {"arr": reg_nos},
+        ).fetchall():
+            try:
+                reg_by_no[str(rno)] = UUID(str(rid))
+            except Exception:
+                continue
+
+    selected_rows: list[dict[str, Any]] = []
+    all_di_by_reg: dict[str, list[str]] = {}
+    for reg_no in reg_nos:
+        src_rows = rows_by_reg.get(reg_no, [])
+        all_di = [str(x.get("di_norm") or "").strip() for x in src_rows if str(x.get("di_norm") or "").strip()]
+        all_di_by_reg[reg_no] = all_di
+        before_cnt = len(all_di)
+
+        family_map: dict[str, dict[str, Any]] = {}
+        for x in src_rows:
+            fam = _model_family_key(
+                str(x.get("model_spec") or "").strip() or None,
+                str(x.get("sku_code") or "").strip() or None,
+            )
+            # deterministic representative: lexicographically smallest DI in family
+            if fam not in family_map:
+                family_map[fam] = x
+                continue
+            old_di = str(family_map[fam].get("di_norm") or "").strip()
+            new_di = str(x.get("di_norm") or "").strip()
+            if new_di and (not old_di or new_di < old_di):
+                family_map[fam] = x
+
+        # Apply split rule only when it's an extreme outlier.
+        if before_cnt > int(outlier_threshold):
+            chosen = sorted(
+                family_map.values(),
+                key=lambda v: str(v.get("di_norm") or ""),
+            )
+            strategy = "family_split_dedupe"
+        else:
+            chosen = src_rows
+            strategy = "keep_all"
+
+        after_cnt = len(chosen)
+        rep.regno_stats.append(
+            {
+                "registration_no": reg_no,
+                "before_di_count": int(before_cnt),
+                "after_di_count": int(after_cnt),
+                "family_count": int(len(family_map)),
+                "strategy": strategy,
+            }
+        )
+        selected_rows.extend(chosen)
+
+    rep.selected_for_write = len(selected_rows)
+
+    if dry_run:
+        return rep
+
+    # Rebuild only targeted regno rows: delete old rows from this run's DI set, then upsert selected.
+    for reg_no in reg_nos:
+        di_arr = all_di_by_reg.get(reg_no, [])
+        if not di_arr:
+            continue
+        deleted_v = db.execute(
+            text(
+                """
+                DELETE FROM product_variants
+                WHERE registry_no = :reg_no
+                  AND di = ANY(:di_arr)
+                """
+            ),
+            {"reg_no": reg_no, "di_arr": di_arr},
+        ).rowcount
+        rep.deleted_variants += int(deleted_v or 0)
+
+        deleted_m = db.execute(
+            text(
+                """
+                DELETE FROM product_udi_map
+                WHERE registration_no = :reg_no
+                  AND di = ANY(:di_arr)
+                """
+            ),
+            {"reg_no": reg_no, "di_arr": di_arr},
+        ).rowcount
+        rep.deleted_links += int(deleted_m or 0)
+
+    # Reinsert selected rows with anchor checks and multi-bind guard.
+    for r in selected_rows:
+        di = str(r.get("di_norm") or "").strip()
+        reg_no = str(r.get("registration_no_norm") or "").strip()
+        reg_id = reg_by_no.get(reg_no)
+        if not di or not reg_no or reg_id is None:
+            continue
+        try:
+            existing = db.scalar(select(ProductVariant).where(ProductVariant.di == di).limit(1))
+            if existing is not None:
+                existing_reg = str(getattr(existing, "registry_no", "") or "").strip()
+                if existing_reg and existing_reg != reg_no:
+                    rep.multi_bind_di_skipped += 1
+                    continue
+
+            model_spec = _compose_model_spec(r.get("model_spec"), r.get("sku_code"))
+            manufacturer = (str(r.get("manufacturer_cn") or "").strip() or None)
+            packing_json = r.get("packing_json")
+            raw_document_id = r.get("raw_document_id")
+            ev_raw_id = str(raw_document_id) if raw_document_id else None
+
+            stmt = insert(ProductVariant).values(
+                di=di,
+                registry_no=reg_no,
+                registration_id=reg_id,
+                model_spec=model_spec,
+                manufacturer=manufacturer,
+                packaging_json=packing_json,
+                evidence_raw_document_id=(UUID(ev_raw_id) if ev_raw_id else None),
+                updated_at=func.now(),
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[ProductVariant.di],
+                set_={
+                    "registry_no": func.coalesce(stmt.excluded.registry_no, ProductVariant.registry_no),
+                    "registration_id": func.coalesce(stmt.excluded.registration_id, ProductVariant.registration_id),
+                    "model_spec": func.coalesce(stmt.excluded.model_spec, ProductVariant.model_spec),
+                    "manufacturer": func.coalesce(stmt.excluded.manufacturer, ProductVariant.manufacturer),
+                    "packaging_json": func.coalesce(stmt.excluded.packaging_json, ProductVariant.packaging_json),
+                    "evidence_raw_document_id": func.coalesce(stmt.excluded.evidence_raw_document_id, ProductVariant.evidence_raw_document_id),
+                    "updated_at": text("NOW()"),
+                },
+            )
+            db.execute(stmt)
+            db.execute(
+                text(
+                    """
+                    INSERT INTO product_udi_map(registration_no, di, match_type, confidence, source, created_at, updated_at)
+                    VALUES (:reg_no, :di, 'direct', 1.0, 'UDI_REPLAY_REGNO', NOW(), NOW())
+                    ON CONFLICT (registration_no, di) DO UPDATE SET
+                      updated_at = NOW(),
+                      source = EXCLUDED.source
+                    """
+                ),
+                {"reg_no": reg_no, "di": di},
+            )
+            rep.upserted += 1
+        except Exception as exc:
+            rep.failed += 1
+            rep.errors.append({"reg_no": reg_no, "di": di, "error": str(exc)})
+
+    db.commit()
     return rep

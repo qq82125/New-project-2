@@ -336,6 +336,14 @@ def build_parser() -> argparse.ArgumentParser:
     udi_variants.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
     udi_variants.add_argument('--outlier-threshold', type=int, default=100, help='regno -> di_count safety threshold (default 100)')
 
+    udi_replay_regno = sub.add_parser('udi:replay-regno', help='Replay UDI variant bindings for specific registration_no list')
+    udi_replay_regno_mode = udi_replay_regno.add_mutually_exclusive_group()
+    udi_replay_regno_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    udi_replay_regno_mode.add_argument('--execute', action='store_true', help='Delete+rebuild targeted variant bindings')
+    udi_replay_regno.add_argument('--source-run-id', type=int, required=True, help='Required source_runs.id')
+    udi_replay_regno.add_argument('--registration-no', action='append', required=True, help='Target registration_no (repeatable)')
+    udi_replay_regno.add_argument('--outlier-threshold', type=int, default=100, help='Apply family split only when di_count > threshold')
+
     udi_products_enrich = sub.add_parser('udi:products-enrich', help='Enrich products (fill-empty only) from udi_device_index')
     udi_products_enrich_mode = udi_products_enrich.add_mutually_exclusive_group()
     udi_products_enrich_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1758,6 +1766,34 @@ def _run_udi_variants(args: argparse.Namespace) -> int:
     finally:
         db.close()
 
+
+def _run_udi_replay_regno(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.normalize_keys import normalize_registration_no
+        from app.services.udi_variants import replay_udi_variants_for_regnos
+
+        source_run_id = int(args.source_run_id)
+        reg_raw = list(getattr(args, "registration_no", []) or [])
+        reg_nos: list[str] = []
+        for item in reg_raw:
+            norm = normalize_registration_no(str(item or ""))
+            if norm:
+                reg_nos.append(norm)
+
+        rep = replay_udi_variants_for_regnos(
+            db,
+            source_run_id=source_run_id,
+            registration_nos=reg_nos,
+            outlier_threshold=int(getattr(args, "outlier_threshold", 100) or 100),
+            dry_run=(not bool(getattr(args, "execute", False))),
+        )
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0 if int(rep.failed or 0) == 0 else 1
+    finally:
+        db.close()
+
+
 def _run_udi_products_enrich(args: argparse.Namespace) -> int:
     db = SessionLocal()
     try:
@@ -2104,6 +2140,8 @@ def main() -> None:
         raise SystemExit(_run_offline_dataset_diff(args))
     if args.cmd == 'udi:variants':
         raise SystemExit(_run_udi_variants(args))
+    if args.cmd == 'udi:replay-regno':
+        raise SystemExit(_run_udi_replay_regno(args))
     if args.cmd == 'udi:products-enrich':
         raise SystemExit(_run_udi_products_enrich(args))
     if args.cmd == 'udi:params':
