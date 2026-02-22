@@ -441,8 +441,8 @@ def upsert_udi_variants_from_device_index(
                             raw_source_record_id=None,
                             source_run_id=(int(source_run_id) if source_run_id is not None else None),
                             registration_no=reg_no,
-                            reason_code="UDI_VARIANT_OUTLIER_REGNO",
-                            error=f"reg_no {reg_no} exceeds di_count threshold {int(outlier_threshold)}; variant write quarantined",
+                            reason_code="UNKNOWN",
+                            error=f"[UDI_VARIANT_OUTLIER_REGNO] reg_no {reg_no} exceeds di_count threshold {int(outlier_threshold)}; variant write quarantined",
                         )
                     )
                     rep.conflicts_recorded += 1
@@ -462,8 +462,8 @@ def upsert_udi_variants_from_device_index(
                             raw_source_record_id=None,
                             source_run_id=(int(source_run_id) if source_run_id is not None else None),
                             registration_no=reg_no or None,
-                            reason_code="UDI_VARIANT_MULTI_BIND_DI",
-                            error=f"di {di} binds multiple registration_no values; variant write quarantined",
+                            reason_code="UNKNOWN",
+                            error=f"[UDI_VARIANT_MULTI_BIND_DI] di {di} binds multiple registration_no values; variant write quarantined",
                         )
                     )
                     rep.conflicts_recorded += 1
@@ -519,8 +519,8 @@ def upsert_udi_variants_from_device_index(
                             raw_source_record_id=None,
                             source_run_id=(int(source_run_id) if source_run_id is not None else None),
                             registration_no=reg_no,
-                            reason_code="UDI_VARIANT_MULTI_BIND_DI",
-                            error=f"existing variant di={di} already linked to reg_no={existing_reg}, new reg_no={reg_no}; quarantined",
+                            reason_code="UNKNOWN",
+                            error=f"[UDI_VARIANT_MULTI_BIND_DI] existing variant di={di} already linked to reg_no={existing_reg}, new reg_no={reg_no}; quarantined",
                         )
                     )
                     rep.conflicts_recorded += 1
