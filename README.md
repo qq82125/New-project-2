@@ -1,234 +1,241 @@
 # DeepIVD
 
-面向 IVD（试剂/仪器/医疗软件）的“监管事实驱动”产品雷达：从 NMPA/UDI 等来源同步数据，沉淀证据链与变更资产，提供检索/Dashboard/订阅投递，并逐步演进到“快照 + 字段级 diff + 风险与行动”的决策链路。
+DeepIVD 是一个面向 IVD 监管与产品情报的本地化平台，围绕“证据链 + 主锚点 + 可执行工作台”构建：
+- Dashboard：入口页（KPI / Signals / Track / Trend）
+- Search：检索工作台（统一 URL filters）
+- Detail：证据资产页（Overview / Changes / Evidence / Variants）
+- Benchmarks：对标集合与对比
+- Admin：数据治理与运维控制台
 
-## 核心原则（不动摇）
-- 严格 IVD 口径：前台默认只展示 `products.is_ivd = true`
-- 证据链优先：Raw 不覆盖，结构化数据必须可回指证据（`raw_documents` / `product_params`）
-- 资产化变更：基于 `change_log`（产品）+ `nmpa_snapshots/field_diffs`（注册证快照/diff）支撑订阅/日报/预警渐进接入
+---
 
-## 目录结构
-- 后端：`api/`（FastAPI + SQLAlchemy + Postgres）
-- 前端：`web/`（Next.js）
-- 迁移：`migrations/`（按文件名排序执行的 SQL runner）
-- 运维脚本：`scripts/`
-- 文档：`docs/`
+## 1. 核心设计原则
+
+1. 主锚点不变：`registration_no_norm -> registrations.registration_no -> products.reg_no`
+2. 证据可回指：结构化写入必须关联 `raw_document_id` 与 evidence 信息
+3. 不清库不重建：默认只做增量、补缺（fill-empty / only-missing）
+4. UDI 防污染：默认跳过 outliers，关键监管事实字段不被 UDI 覆盖
+5. 前端可执行：入口模块必须可钻取到 `/search` 或 `/detail`
+
+---
+
+## 2. 目录结构
+
+- 后端：`/Users/GY/Documents/New project 2/api`
+- 前端：`/Users/GY/Documents/New project 2/web`
+- 迁移：`/Users/GY/Documents/New project 2/migrations`
+- 脚本：`/Users/GY/Documents/New project 2/scripts`
+- 文档：`/Users/GY/Documents/New project 2/docs`
 
 关键文档：
-- 运行手册：`docs/RUNBOOK.md`
-- 字段名表（DB Schema Dictionary）：`docs/FIELD_DICTIONARY.md`
-- NMPA 快照+diff SSOT（人读）：`docs/NMPA_FIELD_DICTIONARY_V1_ADAPTED.md`
-- NMPA 快照+diff SSOT（机器读）：`docs/nmpa_field_dictionary_v1_adapted.yaml`
+- `/Users/GY/Documents/New project 2/docs/RUNBOOK.md`
+- `/Users/GY/Documents/New project 2/docs/UDI_PARAMS_RUNBOOK.md`
+- `/Users/GY/Documents/New project 2/docs/PARAMETER_DICTIONARY_GOVERNANCE.md`
+- `/Users/GY/Documents/New project 2/docs/PARAMETER_DICTIONARY_CORE_V1.yaml`
+- `/Users/GY/Documents/New project 2/docs/PARAMETER_DICTIONARY_APPROVED_V1.yaml`
 
-## 前端信息架构（IA）
-- `Dashboard`：入口页，只保留可钻取入口（KPI / Signals / Track / Trend），所有动作收敛到 `/search`。
-- `Search`：工作台，统一 filters URL 契约与结果操作入口（含对标加入）。
-- `Detail`：证据资产页（Overview / Changes / Evidence / Variants），返回链路保持筛选上下文。
-- `Benchmarks`：对标集合与对比表（MVP 本地存储）。
-- `Admin`：控制台能力集中在 `/admin/*`。
-- `Pro`：转化入口，承接专业版权益说明与升级。
+---
 
-Signal Engine V1 API：
-- 后端验收与运维：`docs/SIGNAL_ENGINE_V1_BACKEND.md`
-- 覆盖迁移验证、signals-compute、Top/Batch API 验证与故障排查
+## 3. 技术栈
 
-## 主要数据资产（表级）
-证据链：
-- `raw_documents`：原始文档元数据（`storage_uri/sha256/source_url/run_id/parse_log`）
-- `product_params`：参数抽取（必须包含 `raw_document_id + evidence_text (+evidence_page)`）
+- API：FastAPI + SQLAlchemy + PostgreSQL
+- Worker：Python CLI（同步、审计、回填、治理任务）
+- Web：Next.js + Tailwind + shadcn/ui
+- 部署：Docker Compose（`db/api/worker/web/db-backup`）
 
-主业务：
-- `products`：产品快照（前台 IVD-only 口径）
-- `registrations`：注册证 canonical（`registration_no` UNIQUE）
-- `product_variants`：UDI DI 粒度（`di` UNIQUE，包含 `registry_no` 映射）
+---
 
-变更与指标：
-- `change_log`：产品变更日志（`changed_fields/before_json/after_json`）
-- `daily_metrics`：日指标（IVD 口径）
+## 4. 快速启动
 
-NMPA 快照与字段级 diff（shadow-write，不改变前台口径）：
-- `nmpa_snapshots`：注册证快照索引（`registration_id + source_run_id` 唯一）
-- `field_diffs`：字段级 old/new（字段集合见 SSOT 的 `diff_fields`）
-- 失败不阻断：diff 写入失败会追加到 `raw_documents.parse_log.shadow_diff_errors`，并计入 `source_runs.records_failed`
+### 4.1 常规启动
 
-## 架构（简图）
-```text
-NMPA UDI / Primary Source
-          |
-          v
- worker(sync/metrics/digest) -> staging -> ingest/upsert -> PostgreSQL
-                                              |
-                                              v
-                                         FastAPI / Next.js
+```bash
+docker compose up -d --build
 ```
 
-## 快速启动（Docker）
+访问地址：
+- Web: [http://localhost:3000](http://localhost:3000)
+- API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### 4.2 安全启动（推荐）
+
 ```bash
+./scripts/db_preflight.sh
 ./scripts/safe_up.sh
 ```
 
-访问：
-- Web Dashboard: [http://localhost:3000](http://localhost:3000)
-- API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
-- Admin: [http://localhost:3000/admin](http://localhost:3000/admin)（仅 `admin`）
+说明：`safe_up.sh` 会先做快照，再启动服务，降低“误挂载/误覆盖”风险。
 
-停止：
+### 4.3 停止
+
 ```bash
 docker compose down
 ```
 
-## 数据保护与质量闸门
-1. 固定 DB 数据目录（避免命名卷误新建）  
-   `db` 已改为绑定仓库内目录：`/Users/GY/Documents/New project 2/.local/pgdata`
-2. 固定调度备份（`db-backup` 服务）  
-   每天 `03:30` 执行“日增量（WAL）”，每周（默认周一）`03:30` 追加“周全量（full dump）”  
-   备份输出目录：`/Users/GY/Documents/New project 2/backups/postgres`
-3. 注册证锚点闸门（防止再次出现大规模无产品映射）
-   - 已接入 `sync_nmpa_ivd` 主流程：闸门失败会使本轮 sync 失败，并阻断后续 loop 作业。
-4. 启动前守卫（`preflight`）+ 安全启动（`safe-up`）
-   - `preflight` 检查：DB 挂载路径、关键表计数、base/WAL 备份可用性
-   - `safe-up` 流程：先快照再 `docker compose up -d --build`，失败给出回滚提示
+---
 
-手工执行锚点闸门：
-```bash
-MAX_RATIO=0.05 MAX_UNANCHORED_COUNT=500 ./scripts/check_registration_anchor_gate.sh
+## 5. 挂载与数据目录
+
+当前 compose 将宿主目录挂载为容器内统一导入根：
+- 宿主：`/Users/GY/Documents/IIVD/000001 小桔灯网/4 数据库/产品数据库`
+- 容器：`/data/import`（只读）
+
+兼容链接：
+- `/data/udi` -> `/data/import/udi/UDID_FULL_RELEASE_20260205`
+
+约定：离线导入、旧证、UDI 都走 `/data/import` 体系。
+
+---
+
+## 6. 数据主链路（SSOT）
+
+```text
+raw_source_records.payload.registration_no_norm
+  -> registrations.registration_no (canonical)
+    -> products.reg_no
+      -> product_params / product_variants
 ```
 
-手工执行 preflight（推荐每次启动前）：
+约束：
+- `registrations.registration_no` 只允许 canonical（norm）
+- `products.reg_no` 必须等于 `registrations.registration_no`
+- 原始证号仅保留在 raw/meta，不写 canonical 字段
+
+---
+
+## 7. 常用命令（高频）
+
+### 7.1 同步与指标
+
 ```bash
-./scripts/db_preflight.sh
+docker compose exec worker python -m app.workers.cli sync --once
+docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-22
+docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-22
 ```
 
-安全启动（默认先快照）：
+### 7.2 UDI（run 级别）
+
 ```bash
-./scripts/safe_up.sh
+# 1) 生成 source run
+docker compose exec worker python -m app.workers.cli source:run --source_key UDI_DI --execute
+
+# 2) promote
+docker compose exec worker python -m app.workers.cli udi:promote --execute --source-run-id <RUN_ID> --limit 2000 --offset 0
+
+# 3) 审计
+docker compose exec worker python -m app.workers.cli udi:audit --dry-run --source-run-id <RUN_ID> --outlier-threshold 100
+
+# 4) 仅 allowlist 参数回填（默认跳过 outliers）
+docker compose exec worker python -m app.workers.cli udi:params --execute --only-allowlisted --source-run-id <RUN_ID> --batch-size 500
 ```
 
-快速启动（跳过快照，速度优先）：
+### 7.3 旧证离线导入
+
 ```bash
-SAFE_UP_SKIP_SNAPSHOT=1 SAFE_UP_FORCE=1 ./scripts/safe_up.sh
+# 按你项目内实际命令执行（支持 recursive / only-new / dataset_version）
+# 参考 docs 与当前 CLI help
 ```
 
-数据库 5 项健康检查（建议每日一次）：
+---
+
+## 8. 参数字典与 allowlist 治理
+
+- Core 字典：`PARAMETER_DICTIONARY_CORE_V1.yaml`
+- Approved 字典：`PARAMETER_DICTIONARY_APPROVED_V1.yaml`
+- allowlist 只能引用 `Core ∪ Approved`
+
+校验：
 ```bash
-./scripts/db_health_check.sh
+python scripts/validate_core_param_dictionary.py
 ```
 
-恢复演练（建议每周一次，默认自动清理演练库）：
+更新 baseline（仅在版本发布时）：
 ```bash
-./scripts/db_restore_drill.sh
+python scripts/validate_core_param_dictionary.py --update-baseline all
 ```
 
-严格演练模式（要求演练库与主库核心表行数一致）：
-```bash
-STRICT=1 ./scripts/db_restore_drill.sh
-```
+`udi:params --only-allowlisted` 写入时会落 `param_key_version = allowlist_version`，便于审计与回滚。
 
-手工触发一次“日增量（WAL）”：
+---
+
+## 9. 本轮已落地的 UDI 结构化扩维
+
+针对 run=41，已将高价值候选字段拆解写入 params（通过 allowlist 灰度）：
+
+- `storage_json` ->
+  - `STORAGE_TEMP_MIN_C`
+  - `STORAGE_TEMP_MAX_C`
+  - `TRANSPORT_TEMP_MIN_C`
+  - `TRANSPORT_TEMP_MAX_C`
+  - `STORAGE_NOTE`
+- `packing_json` -> `PACKAGE_LEVEL`, `PACKAGE_UNIT`, `PACKAGE_QTY`
+- `mjfs` -> `STERILIZATION_METHOD`
+- `brand` -> `BRAND_NAME`
+
+执行口径：
+- 仅 allowlisted
+- only-missing（已有非空不覆盖）
+- 默认 `include_outliers=false`
+- 每条记录写 evidence：`source_run_id/raw_document_id/di_norm/registration_no_norm`
+
+---
+
+## 10. 数据库安全与备份
+
+- `db-backup` 每日 03:30 WAL，按周全量
+- 备份目录：`/Users/GY/Documents/New project 2/backups/postgres`
+
+手工触发：
 ```bash
 docker compose exec -T db-backup /scripts/backup_pg_wal_daily.sh
-```
-
-手工触发一次“周全量（full dump）”：
-```bash
 docker compose exec -T db-backup /scripts/backup_pg_weekly_full.sh
 ```
 
-从备份恢复（示例）：
+健康检查：
 ```bash
-docker compose exec -T db psql -U nmpa -d nmpa -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-# 周全量 + WAL 归档恢复建议按时间点恢复策略执行。
-# full dump 目录默认在 backups/postgres/base/base_*.dump
-# WAL 归档目录默认在 backups/postgres/wal
+./scripts/db_health_check.sh
+./scripts/db_restore_drill.sh
 ```
 
-可调环境变量：
-- `BACKUP_RUN_AT`（默认 `03:30`）
-- `FULL_BACKUP_WEEKDAY`（默认 `1`，周一）
-- `FULL_BACKUP_RETENTION_WEEKS`（默认 `4`）
-- `WAL_RETENTION_DAYS`（默认 `14`）
-- 锚点闸门：`MAX_RATIO`（默认 `0.05`）、`MAX_UNANCHORED_COUNT`（默认 `0`，表示不启用绝对值闸门）
-- Sync 内建闸门：`REGISTRATION_ANCHOR_GATE_ENABLED`（默认 `true`）、`REGISTRATION_ANCHOR_GATE_MAX_RATIO`（默认 `0.05`）、`REGISTRATION_ANCHOR_GATE_MAX_UNANCHORED_COUNT`（默认 `500`）
-- preflight：`PRECHECK_REQUIRE_BASE_BACKUP`（默认 `1`）、`PRECHECK_REQUIRE_WAL`（默认 `1`）、`PRECHECK_MAX_BASE_AGE_DAYS`（默认 `8`）
-- safe-up：`SAFE_UP_SKIP_SNAPSHOT`（默认 `0`）、`SAFE_UP_REQUIRE_SNAPSHOT`（默认 `1`）、`SAFE_UP_FORCE`（默认 `0`）
+---
 
-## 管理员初始化
-系统启动时会尝试用环境变量初始化管理员账号：
-- `ADMIN_EMAIL` / `ADMIN_PASSWORD`（默认：`admin@example.com` / `admin12345`）
-- 兼容变量：`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`
+## 11. 测试
 
-## 迁移与回滚
-迁移 runner：`python -m app.db.migrate`（内部使用 `schema_migrations` 记录已应用文件，避免重复执行）。
-
-NMPA 快照/diff 迁移（幂等）：
-- `migrations/0019_add_nmpa_snapshots.sql`
-- `migrations/0020_add_field_diffs.sql`
-
-回滚（手工执行，对现有 batch rollback 逻辑无影响）：
-- `scripts/rollback/0019_add_nmpa_snapshots_down.sql`
-- `scripts/rollback/0020_add_field_diffs_down.sql`
-- `scripts/rollback/0034_add_daily_udi_metrics_down.sql`
-- `scripts/rollback/0039_add_lri_query_indexes_down.sql`
-- `scripts/rollback/0040_add_daily_lri_quality_metrics_down.sql`
-
-## 常用命令（容器内）
-一次同步：
 ```bash
-docker compose exec worker python -m app.workers.cli sync --once
-```
-
-日指标 / 日报投递：
-```bash
-docker compose exec worker python -m app.workers.cli daily-metrics --date 2026-02-08
-docker compose exec worker python -m app.workers.cli daily-digest --date 2026-02-08
-```
-
-查看 NMPA 快照/当天 diff（运维/调试）：
-```bash
-docker compose exec worker python -m app.workers.cli nmpa:snapshots --since 2026-02-01
-docker compose exec worker python -m app.workers.cli nmpa:diffs --date 2026-02-08
-```
-
-说明书/文本参数抽取（dry-run/execute/rollback）：
-```bash
-docker compose exec api python -m app.workers.cli params:extract --dry-run --file /path/to/manual.pdf --di DI123
-docker compose exec api python -m app.workers.cli params:extract --execute --file /path/to/manual.pdf --di DI123
-docker compose exec api python -m app.workers.cli params:rollback --execute --raw-document-id <uuid>
-```
-
-NHSA（月度快照）入库（证据链 raw_documents + 结构化 nhsa_codes；支持回滚）：
-```bash
-docker compose exec api python -m app.workers.cli nhsa:ingest --execute --month 2026-01 --file /path/to/nhsa.csv
-docker compose exec api python -m app.workers.cli nhsa:rollback --execute --source-run-id 123
-```
-
-非 IVD 清理/回滚（先归档再删除）：
-```bash
-docker compose exec api python -m app.workers.cli ivd:cleanup --dry-run
-docker compose exec api python -m app.workers.cli ivd:cleanup --execute --archive-batch-id manual_batch_001
-docker compose exec api python -m app.workers.cli ivd:rollback --execute --archive-batch-id manual_batch_001 --recompute-days 365
-```
-
-## 主要接口（摘录）
-用户侧：
-- `GET /api/dashboard/summary|trend|rankings|radar`：日指标（IVD 口径）
-- `GET /api/search`：检索（强制 IVD 口径）
-- `GET /api/products/{id}`：产品详情（非 IVD 返回 404）
-- `GET /api/products/{id}/params`：参数摘要（Pro，evidence_text/page/source_url）
-
-Admin：
-- `GET /api/admin/products`：产品列表（支持 `is_ivd=true|false|all` + `ivd_category` + `ivd_version`）
-- `GET /api/admin/rejected-products`：非 IVD 拒收审计
-- `GET /api/admin/stats`：后台统计
-- `POST /api/admin/params/extract|rollback`：参数抽取/回滚
-
-## 测试
-单测：
-```bash
+cd /Users/GY/Documents/New project 2/api
 pytest -q
 ```
 
-Postgres 集成测试（需要 `IT_DATABASE_URL`）：
+若需 PG 集成测试：
 ```bash
 ./scripts/run_it_pg_tests.sh
 ```
+
+---
+
+## 12. 常见问题
+
+### Q1: `docker compose up -d --build` 失败，提示 Docker Hub 超时 / connection reset
+A: 网络到 Docker Hub 不稳定，不是代码错误。重试或先手动 pull 基础镜像后再 build。
+
+### Q2: 为什么 params 没写入？
+A: 常见原因是：
+- allowlist 未包含目标 key
+- `--resume` 已到末尾
+- only-missing 下该 key 已有非空值
+- 被 outlier 默认跳过
+
+### Q3: 前端看不到数据
+A: 先检查：
+- `products` 是否有 anchor 映射（`reg_no`）
+- `is_hidden=false` 视图是否去重后为空
+- Search API 查询条件是否带了过严 filter
+
+---
+
+## 13. Git 工作建议
+
+- 大变更分 PR，单 PR 聚焦单目标
+- 每次仅提交本 PR 相关文件，避免夹带 `docker-compose.yml/.env` 等无关改动
+- 先本地验证（typecheck/test/关键命令），再 push
+
