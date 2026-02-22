@@ -809,6 +809,7 @@ class UdiOutlier(Base):
     source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
     reg_no: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     di_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    threshold: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     status: Mapped[str] = mapped_column(Text, nullable=False, default='open', index=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

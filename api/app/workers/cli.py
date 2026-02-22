@@ -1214,7 +1214,14 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         execute = bool(getattr(args, "execute", False))
         outliers_written = 0
         if write_outliers and execute:
-            outliers_written = materialize_udi_outliers(db, source_run_id=source_run_id, items=outliers)
+            if source_run_id is None:
+                raise ValueError("--write-outliers requires --source-run-id")
+            outliers_written = materialize_udi_outliers(
+                db,
+                source_run_id=source_run_id,
+                threshold=threshold,
+                items=outliers,
+            )
             db.commit()
         else:
             db.rollback()
@@ -1230,6 +1237,7 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
                     "di_unbound_registration_count": int(dist.get("di_unbound_registration_count") or 0),
                     "write_outliers": write_outliers,
                     "outliers_written": int(outliers_written),
+                    "outlier_written_count": int(outliers_written),
                     "outlier_regnos_topN": [
                         r.to_dict
                         for r in outliers

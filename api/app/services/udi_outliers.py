@@ -177,6 +177,7 @@ def materialize_udi_outliers(
     db: Session,
     *,
     source_run_id: int | None,
+    threshold: int,
     items: list[UdiOutlierItem],
 ) -> int:
     wrote = 0
@@ -186,13 +187,18 @@ def materialize_udi_outliers(
         inserted = db.execute(
             text(
                 """
-                INSERT INTO udi_outliers (source_run_id, reg_no, di_count, detected_at, status, notes)
-                VALUES (:srid, :reg_no, :di_count, NOW(), 'open', NULL)
+                INSERT INTO udi_outliers (source_run_id, reg_no, di_count, threshold, detected_at, status, notes)
+                VALUES (:srid, :reg_no, :di_count, :threshold, NOW(), 'open', NULL)
                 ON CONFLICT (source_run_id, reg_no) DO NOTHING
                 RETURNING id
                 """
             ),
-            {"srid": (int(source_run_id) if source_run_id is not None else None), "reg_no": item.reg_no, "di_count": int(item.di_count)},
+            {
+                "srid": (int(source_run_id) if source_run_id is not None else None),
+                "reg_no": item.reg_no,
+                "di_count": int(item.di_count),
+                "threshold": int(threshold),
+            },
         ).scalar()
         if inserted is not None:
             wrote += 1
