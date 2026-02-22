@@ -213,6 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     udi_audit_mode = udi_audit.add_mutually_exclusive_group()
     udi_audit_mode.add_argument('--dry-run', action='store_true', help='Preview only')
     udi_audit_mode.add_argument('--execute', action='store_true', help='Alias of dry-run (read-only)')
+    udi_audit.add_argument('--mode', default='both', choices=['both', 'index', 'effective'], help='Audit scope: index (raw index), effective (post-governance facts), or both (default)')
     udi_audit.add_argument('--outlier-threshold', type=int, default=100, help='Threshold for DI count per registration_no outlier')
     udi_audit.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id for udi_device_index')
     udi_audit.add_argument('--write-outliers', action='store_true', help='Execute only: materialize outliers into udi_outliers')
@@ -1208,16 +1209,71 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
     try:
         from app.services.udi_outliers import (
             compute_udi_outlier_distribution,
+            compute_udi_outlier_distribution_effective,
             find_udi_multi_bind_dis,
+            find_udi_multi_bind_dis_effective,
             find_udi_outliers,
+            find_udi_outliers_effective,
             materialize_udi_outliers,
         )
 
         threshold = int(getattr(args, 'outlier_threshold', 100) or 100)
+        mode = str(getattr(args, "mode", "both") or "both").strip().lower()
         source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
-        dist = compute_udi_outlier_distribution(db, source_run_id=source_run_id)
-        outliers = find_udi_outliers(db, threshold=threshold, source_run_id=source_run_id, limit=100)
-        multi_bind_dis = find_udi_multi_bind_dis(db, source_run_id=source_run_id, limit=100)
+        dist: dict[str, Any] | None = None
+        outliers: list[Any] = []
+        multi_bind_dis: list[Any] = []
+        effective_dist: dict[str, Any] | None = None
+        effective_outliers: list[Any] = []
+        effective_multi_bind_dis: list[Any] = []
+        effective_limited_by_run = False
+
+        if mode in {"both", "index"}:
+            dist = compute_udi_outlier_distribution(db, source_run_id=source_run_id)
+            outliers = find_udi_outliers(db, threshold=threshold, source_run_id=source_run_id, limit=100)
+            multi_bind_dis = find_udi_multi_bind_dis(db, source_run_id=source_run_id, limit=100)
+
+        if mode in {"both", "effective"}:
+            effective_dist, effective_limited_by_run = compute_udi_outlier_distribution_effective(
+                db,
+                source_run_id=source_run_id,
+            )
+            effective_outliers, _ = find_udi_outliers_effective(
+                db,
+                threshold=threshold,
+                source_run_id=source_run_id,
+                limit=100,
+            )
+            effective_multi_bind_dis, _ = find_udi_multi_bind_dis_effective(
+                db,
+                source_run_id=source_run_id,
+                limit=100,
+            )
+
+        resolved_set: set[str] = set()
+        if mode == "both" and source_run_id is not None:
+            rows = db.execute(
+                text(
+                    """
+                    SELECT reg_no
+                    FROM udi_outliers
+                    WHERE source_run_id = :srid
+                      AND status = 'resolved'
+                    """
+                ),
+                {"srid": int(source_run_id)},
+            ).fetchall()
+            resolved_set = {str(r[0] or "").strip() for r in rows if str(r[0] or "").strip()}
+
+        def _outlier_item_payload(item: Any) -> dict[str, Any]:
+            body = item.to_dict
+            reg_no = str(body.get("registration_no") or "").strip()
+            if mode == "both":
+                body["resolved"] = bool(reg_no and reg_no in resolved_set)
+                if body["resolved"]:
+                    body["registration_no_display"] = f"[resolved] {reg_no}"
+            return body
+
         write_outliers = bool(getattr(args, "write_outliers", False))
         execute = bool(getattr(args, "execute", False))
         outliers_written = 0
@@ -1234,30 +1290,49 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         else:
             db.rollback()
 
-        print(
-            json.dumps(
+        payload: dict[str, Any] = {
+            "ok": True,
+            "mode": ("execute" if execute else "dry_run"),
+            "audit_mode": mode,
+            "outlier_threshold": threshold,
+            "source_run_id": source_run_id,
+            "write_outliers": write_outliers,
+            "outliers_written": int(outliers_written),
+            "outlier_written_count": int(outliers_written),
+            "suggested_actions": [
+                "outlier_regno: review by queue, set udi_outliers.status to ignored/resolved after manual check",
+                "multi_bind_di: block auto variant promote for the DI and add pending conflict for manual resolution",
+                "after resolution: rerun udi:variants with the same source_run_id",
+            ],
+        }
+        if mode in {"both", "index"} and dist is not None:
+            payload.update(
                 {
-                    "ok": True,
-                    "mode": ("execute" if execute else "dry_run"),
-                    "outlier_threshold": threshold,
-                    "source_run_id": source_run_id,
                     "distribution": dist,
                     "di_unbound_registration_count": int(dist.get("di_unbound_registration_count") or 0),
-                    "write_outliers": write_outliers,
-                    "outliers_written": int(outliers_written),
-                    "outlier_written_count": int(outliers_written),
-                    "outlier_regnos_topN": [
-                        r.to_dict
-                        for r in outliers
-                    ],
-                    "outlier_registrations": [r.to_dict for r in outliers],
+                    "outlier_regnos_topN": [_outlier_item_payload(r) for r in outliers],
+                    "outlier_registrations": [_outlier_item_payload(r) for r in outliers],
                     "multi_bind_dis_topN": [x.to_dict for x in multi_bind_dis],
-                    "suggested_actions": [
-                        "outlier_regno: review by queue, set udi_outliers.status to ignored/resolved after manual check",
-                        "multi_bind_di: block auto variant promote for the DI and add pending conflict for manual resolution",
-                        "after resolution: rerun udi:variants with the same source_run_id",
-                    ],
-                },
+                }
+            )
+        if mode in {"both", "effective"} and effective_dist is not None:
+            payload.update(
+                {
+                    "effective_distribution": effective_dist,
+                    "effective_limited_by_run": bool(effective_limited_by_run),
+                    "effective_registration_count": int(effective_dist.get("registration_count") or 0),
+                    "effective_total_di_bound": int(effective_dist.get("total_di_bound") or 0),
+                    "effective_p99": float(effective_dist.get("p99") or 0),
+                    "effective_max": int(effective_dist.get("max") or 0),
+                    "effective_outlier_registrations": [r.to_dict for r in effective_outliers],
+                    "effective_outlier_regnos_topN": [r.to_dict for r in effective_outliers],
+                    "effective_multi_bind_dis_topN": [x.to_dict for x in effective_multi_bind_dis],
+                }
+            )
+
+        print(
+            json.dumps(
+                payload,
                 ensure_ascii=True,
             )
         )
