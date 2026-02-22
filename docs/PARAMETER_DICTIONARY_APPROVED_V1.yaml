@@ -82,3 +82,73 @@ keys:
     replaced_by: ""
     created_in_version: 1
     tags: ["enrichment", "search_filter"]
+  - key: "storage_temp_min_c"
+    display_name: "储存最低温度"
+    description: "储存过程最低温度（摄氏）"
+    unit: "℃"
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "quality"]
+  - key: "storage_temp_max_c"
+    display_name: "储存最高温度"
+    description: "储存过程最高温度（摄氏）"
+    unit: "℃"
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "quality"]
+  - key: "storage_note"
+    display_name: "储存备注"
+    description: "来自 storage_json 的储运条件说明"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "search_filter"]
+  - key: "package_level"
+    display_name: "包装层级"
+    description: "包装层级（如盒、箱等）"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "table_column"]
+  - key: "package_unit"
+    display_name: "包装单位"
+    description: "包装单位描述"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "table_column"]
+  - key: "package_qty"
+    display_name: "包装数量"
+    description: "包装包含数量"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "table_column"]
+  - key: "brand_name"
+    display_name: "品牌名"
+    description: "UDI 品牌字段标准化输出"
+    unit: ""
+    source_scopes: ["udi"]
+    stability: "approved"
+    deprecated: false
+    replaced_by: ""
+    created_in_version: 1
+    tags: ["enrichment", "search_filter"]

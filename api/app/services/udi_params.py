@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import hashlib
 import time
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -15,6 +16,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models import AdminConfig, ParamDictionaryCandidate, ProductParam, UdiJobCheckpoint
+from app.services.udi_params_structured import (
+    normalize_brand,
+    normalize_mjfs,
+    parse_packing_json,
+    parse_storage_json,
+)
 
 
 def _utcnow() -> datetime:
@@ -253,6 +260,78 @@ def _normalize_storages(v: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _normalize_packings(v: Any) -> list[dict[str, Any]]:
+    src = v
+    if isinstance(src, str):
+        s = src.strip()
+        if not s:
+            return []
+        try:
+            src = json.loads(s)
+        except Exception:
+            return []
+    if isinstance(src, dict):
+        src = src.get("packings")
+    if not isinstance(src, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in src:
+        if not isinstance(item, dict):
+            continue
+        level = _as_text(item.get("package_level"))
+        unit = _as_text(item.get("package_unit")) or _as_text(item.get("unit")) or _as_text(item.get("contains_unit"))
+        qty = item.get("contains_qty")
+        qty_num: float | None = None
+        if isinstance(qty, (int, float, Decimal)):
+            qty_num = float(qty)
+        out.append({"package_level": level, "package_unit": unit, "contains_qty": qty_num})
+    return out
+
+
+def _fmt_num(v: float | None) -> str | None:
+    if v is None:
+        return None
+    if float(v).is_integer():
+        return str(int(v))
+    return f"{v:.6f}".rstrip("0").rstrip(".")
+
+
+def _join_unique(items: list[str]) -> str | None:
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        s = str(item or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+    if not uniq:
+        return None
+    return "; ".join(uniq)
+
+
+def _extract_storage_transport_temps(storages: list[dict[str, Any]]) -> tuple[float | None, float | None, float | None, float | None]:
+    storage_mins: list[float] = []
+    storage_maxs: list[float] = []
+    transport_mins: list[float] = []
+    transport_maxs: list[float] = []
+    for s in storages:
+        stype = (_as_text(s.get("type")) or "").lower()
+        is_transport = ("运输" in stype) or ("transport" in stype) or ("shipping" in stype)
+        mn = s.get("min")
+        mx = s.get("max")
+        if isinstance(mn, (int, float)):
+            (transport_mins if is_transport else storage_mins).append(float(mn))
+        if isinstance(mx, (int, float)):
+            (transport_maxs if is_transport else storage_maxs).append(float(mx))
+    return (
+        min(storage_mins) if storage_mins else None,
+        max(storage_maxs) if storage_maxs else None,
+        min(transport_mins) if transport_mins else None,
+        max(transport_maxs) if transport_maxs else None,
+    )
+
+
 def _checkpoint_get(db: Session, job_name: str) -> str | None:
     row = db.get(UdiJobCheckpoint, job_name)
     if row is None:
@@ -359,6 +438,7 @@ class UdiParamsReport:
     storage_non_empty_count: int = 0
     outliers_skipped_count: int = 0
     include_outliers: bool = False
+    per_key_written_counts: Counter[str] = field(default_factory=Counter)
 
     @property
     def to_dict(self) -> dict[str, Any]:
@@ -391,6 +471,7 @@ class UdiParamsReport:
             "storage_non_empty_count": self.storage_non_empty_count,
             "outliers_skipped_count": int(self.outliers_skipped_count or 0),
             "include_outliers": bool(self.include_outliers),
+            "per_key_written_counts": dict(self.per_key_written_counts or {}),
         }
 
 
@@ -745,6 +826,8 @@ def write_allowlisted_params(
       u.registration_no_norm,
       u.device_record_key,
       u.storage_json,
+      u.packing_json,
+      u.brand,
       u.mjfs,
       u.tscchcztj,
       u.tsccsm,
@@ -887,15 +970,76 @@ def write_allowlisted_params(
                 rep.storage_present_count += 1
             if storages:
                 rep.storage_non_empty_count += 1
+            structured_storage = parse_storage_json(r.get("storage_json"))
             entries.append(
                 (
-                    "STORAGE",
-                    _storage_summary(storages),
-                    {"storages": storages} if storages else None,
-                    f"UDI storage_json (di={di or '-'}, reg_no={reg_no})",
+                    "STORAGE_TEMP_MIN_C",
+                    _fmt_num(structured_storage.get("STORAGE_TEMP_MIN_C")),
+                    None,
+                    f"UDI storage_json min (di={di or '-'}, reg_no={reg_no})",
                 )
             )
-            entries.append(("STERILIZATION_METHOD", _as_text(r.get("mjfs")), None, f"UDI mjfs (di={di or '-'}, reg_no={reg_no})"))
+            entries.append(
+                (
+                    "STORAGE_TEMP_MAX_C",
+                    _fmt_num(structured_storage.get("STORAGE_TEMP_MAX_C")),
+                    None,
+                    f"UDI storage_json max (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+            entries.append(
+                (
+                    "TRANSPORT_TEMP_MIN_C",
+                    _fmt_num(structured_storage.get("TRANSPORT_TEMP_MIN_C")),
+                    None,
+                    f"UDI storage_json transport min (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+            entries.append(
+                (
+                    "TRANSPORT_TEMP_MAX_C",
+                    _fmt_num(structured_storage.get("TRANSPORT_TEMP_MAX_C")),
+                    None,
+                    f"UDI storage_json transport max (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+            entries.append(
+                (
+                    "STORAGE_NOTE",
+                    _as_text(structured_storage.get("STORAGE_NOTE")) or _storage_summary(storages),
+                    {"storages": storages} if storages else None,
+                    f"UDI storage_json note (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+
+            structured_packing = parse_packing_json(r.get("packing_json"))
+            entries.append(
+                (
+                    "PACKAGE_LEVEL",
+                    _as_text(structured_packing.get("PACKAGE_LEVEL")),
+                    {"packings": structured_packing} if structured_packing else None,
+                    f"UDI packing_json level (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+            entries.append(
+                (
+                    "PACKAGE_UNIT",
+                    _as_text(structured_packing.get("PACKAGE_UNIT")),
+                    {"packings": structured_packing} if structured_packing else None,
+                    f"UDI packing_json unit (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+            entries.append(
+                (
+                    "PACKAGE_QTY",
+                    _as_text(structured_packing.get("PACKAGE_QTY")),
+                    {"packings": structured_packing} if structured_packing else None,
+                    f"UDI packing_json qty (di={di or '-'}, reg_no={reg_no})",
+                )
+            )
+
+            entries.append(("STERILIZATION_METHOD", normalize_mjfs(r.get("mjfs")), None, f"UDI mjfs (di={di or '-'}, reg_no={reg_no})"))
+            entries.append(("BRAND_NAME", normalize_brand(r.get("brand")), None, f"UDI brand (di={di or '-'}, reg_no={reg_no})"))
             entries.append(("SPECIAL_STORAGE_COND", _as_text(r.get("tscchcztj")), None, f"UDI tscchcztj (di={di or '-'}, reg_no={reg_no})"))
             entries.append(("SPECIAL_STORAGE_NOTE", _as_text(r.get("tsccsm")), None, f"UDI tsccsm (di={di or '-'}, reg_no={reg_no})"))
             entries.append(("LABEL_SERIAL_NO", _as_text(r.get("scbssfbhxlh")), None, f"UDI scbssfbhxlh (di={di or '-'}, reg_no={reg_no})"))
@@ -925,7 +1069,9 @@ def write_allowlisted_params(
                     "raw_document_id": raw_id,
                     "evidence_json": {
                         "source": "UDI",
+                        "source_run_id": (int(r.get("source_run_id")) if r.get("source_run_id") is not None else None),
                         "di_norm": di,
+                        "registration_no_norm": reg_no,
                         "deviceRecordKey": _as_text(r.get("device_record_key")),
                         "versionNumber": _as_text(r.get("version_number")),
                         "versionTime": _as_text(r.get("version_time")),
@@ -949,22 +1095,31 @@ def write_allowlisted_params(
         if dry_run:
             rows_written = len(values)
             rep.params_written += rows_written
+            for v in values:
+                rep.per_key_written_counts[str(v["param_code"])] += 1
         else:
             if values:
                 product_ids = sorted({v["product_id"] for v in values})
                 codes = sorted({str(v["param_code"]) for v in values})
 
-                db.execute(
+                existing_non_empty = db.execute(
                     text(
                         """
-                        DELETE FROM product_params
+                        SELECT product_id, param_code
+                        FROM product_params
                         WHERE product_id = ANY(:pids)
                           AND param_code = ANY(:codes)
-                          AND extract_version = 'udi_params_allowlist_v1'
+                          AND (
+                            NULLIF(btrim(COALESCE(value_text, '')), '') IS NOT NULL
+                            OR value_num IS NOT NULL
+                            OR (conditions IS NOT NULL AND conditions::text NOT IN ('{}', '[]', 'null'))
+                          )
                         """
                     ),
                     {"pids": product_ids, "codes": codes},
-                )
+                ).fetchall()
+                non_empty_keys = {(row[0], str(row[1])) for row in existing_non_empty}
+                filtered_values = [v for v in values if (v["product_id"], str(v["param_code"])) not in non_empty_keys]
 
                 insert_rows = [
                     {
@@ -988,12 +1143,14 @@ def write_allowlisted_params(
                         "observed_at": v["observed_at"],
                         "created_at": _utcnow(),
                     }
-                    for v in values
+                    for v in filtered_values
                 ]
                 if insert_rows:
                     db.execute(insert(ProductParam), insert_rows)
                     rows_written = len(insert_rows)
                     rep.params_written += rows_written
+                    for v in filtered_values:
+                        rep.per_key_written_counts[str(v["param_code"])] += 1
 
             cursor = str(rows[-1].get("di_norm") or cursor or "")
             rep.final_cursor = cursor
