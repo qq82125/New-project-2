@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import Product, ProductVariant, Registration
+from app.models import Product, ProductVariant, Registration, ShadowDiffError
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.sources.nmpa_udi.mapper import map_to_variant
 from app.services.normalize_keys import normalize_registration_no
@@ -266,6 +266,10 @@ class UdiVariantsFromIndexReport:
     unbound: int = 0
     upserted: int = 0
     marked_unbound: int = 0
+    duplicate_di_skipped: int = 0
+    outlier_regno_skipped: int = 0
+    multi_bind_di_skipped: int = 0
+    conflicts_recorded: int = 0
     failed: int = 0
     errors: list[dict[str, Any]] | None = None
 
@@ -277,6 +281,10 @@ class UdiVariantsFromIndexReport:
             "unbound": self.unbound,
             "upserted": self.upserted,
             "marked_unbound": self.marked_unbound,
+            "duplicate_di_skipped": self.duplicate_di_skipped,
+            "outlier_regno_skipped": self.outlier_regno_skipped,
+            "multi_bind_di_skipped": self.multi_bind_di_skipped,
+            "conflicts_recorded": self.conflicts_recorded,
             "failed": self.failed,
             "errors": self.errors or [],
         }
@@ -299,6 +307,7 @@ def upsert_udi_variants_from_device_index(
     *,
     source_run_id: int | None = None,
     limit: int | None = None,
+    outlier_threshold: int = 100,
     dry_run: bool,
 ) -> UdiVariantsFromIndexReport:
     """
@@ -341,6 +350,64 @@ def upsert_udi_variants_from_device_index(
 
     rows = db.execute(text(sql), params).mappings().all()
 
+    # Guard-4A: per batch DI dedupe (idempotency safety).
+    # Keep only the latest row per DI (by updated_at desc in SQL order).
+    dedup_by_di: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        di = str(r.get("di_norm") or "").strip()
+        if not di:
+            continue
+        if di in dedup_by_di:
+            rep.duplicate_di_skipped += 1
+            continue
+        dedup_by_di[di] = r
+    rows = list(dedup_by_di.values())
+
+    # Guard-4B: identify outlier reg_no and DI multi-bind from index snapshot.
+    safety_params: dict[str, Any] = {}
+    safety_where = "WHERE di_norm IS NOT NULL AND btrim(di_norm) <> ''"
+    if source_run_id is not None:
+        safety_where += " AND source_run_id = :source_run_id"
+        safety_params["source_run_id"] = int(source_run_id)
+
+    outlier_reg_nos = {
+        str(r[0])
+        for r in db.execute(
+            text(
+                f"""
+                SELECT registration_no_norm
+                FROM udi_device_index
+                {safety_where}
+                  AND registration_no_norm IS NOT NULL
+                  AND btrim(registration_no_norm) <> ''
+                GROUP BY registration_no_norm
+                HAVING COUNT(1) > :threshold
+                """
+            ),
+            {**safety_params, "threshold": int(outlier_threshold)},
+        ).fetchall()
+        if str(r[0] or "").strip()
+    }
+
+    multi_bind_di = {
+        str(r[0])
+        for r in db.execute(
+            text(
+                f"""
+                SELECT di_norm
+                FROM udi_device_index
+                {safety_where}
+                  AND registration_no_norm IS NOT NULL
+                  AND btrim(registration_no_norm) <> ''
+                GROUP BY di_norm
+                HAVING COUNT(DISTINCT registration_no_norm) > 1
+                """
+            ),
+            safety_params,
+        ).fetchall()
+        if str(r[0] or "").strip()
+    }
+
     # Cache registrations by canonical registration_no.
     reg_nos = sorted({str(r.get("registration_no_norm") or "").strip() for r in rows if str(r.get("registration_no_norm") or "").strip()})
     reg_by_no: dict[str, UUID] = {}
@@ -362,6 +429,49 @@ def upsert_udi_variants_from_device_index(
         raw_document_id = r.get("raw_document_id")
 
         reg_id = reg_by_no.get(reg_no) if reg_no else None
+
+        if reg_no and reg_no in outlier_reg_nos:
+            rep.outlier_regno_skipped += 1
+            if not dry_run:
+                try:
+                    db.add(
+                        ShadowDiffError(
+                            id=uuid4(),
+                            raw_document_id=(UUID(str(raw_document_id)) if raw_document_id else None),
+                            raw_source_record_id=None,
+                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
+                            registration_no=reg_no,
+                            reason_code="UDI_VARIANT_OUTLIER_REGNO",
+                            error=f"reg_no {reg_no} exceeds di_count threshold {int(outlier_threshold)}; variant write quarantined",
+                        )
+                    )
+                    rep.conflicts_recorded += 1
+                except Exception as exc:
+                    rep.failed += 1
+                    rep.errors.append({"di": di, "error": f"record_outlier_conflict_failed: {exc}"})
+            continue
+
+        if di and di in multi_bind_di:
+            rep.multi_bind_di_skipped += 1
+            if not dry_run:
+                try:
+                    db.add(
+                        ShadowDiffError(
+                            id=uuid4(),
+                            raw_document_id=(UUID(str(raw_document_id)) if raw_document_id else None),
+                            raw_source_record_id=None,
+                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
+                            registration_no=reg_no or None,
+                            reason_code="UDI_VARIANT_MULTI_BIND_DI",
+                            error=f"di {di} binds multiple registration_no values; variant write quarantined",
+                        )
+                    )
+                    rep.conflicts_recorded += 1
+                except Exception as exc:
+                    rep.failed += 1
+                    rep.errors.append({"di": di, "error": f"record_multi_bind_conflict_failed: {exc}"})
+            continue
+
         if reg_id is None:
             rep.unbound += 1
             if (not dry_run) and udi_id:
@@ -397,6 +507,25 @@ def upsert_udi_variants_from_device_index(
                 evidence_raw_document_id=(UUID(ev_raw_id) if ev_raw_id else None),
                 updated_at=func.now(),
             )
+            existing = db.scalar(select(ProductVariant).where(ProductVariant.di == di).limit(1))
+            if existing is not None:
+                existing_reg = str(getattr(existing, "registry_no", "") or "").strip()
+                if existing_reg and reg_no and existing_reg != reg_no:
+                    rep.multi_bind_di_skipped += 1
+                    db.add(
+                        ShadowDiffError(
+                            id=uuid4(),
+                            raw_document_id=(UUID(ev_raw_id) if ev_raw_id else None),
+                            raw_source_record_id=None,
+                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
+                            registration_no=reg_no,
+                            reason_code="UDI_VARIANT_MULTI_BIND_DI",
+                            error=f"existing variant di={di} already linked to reg_no={existing_reg}, new reg_no={reg_no}; quarantined",
+                        )
+                    )
+                    rep.conflicts_recorded += 1
+                    continue
+
             stmt = stmt.on_conflict_do_update(
                 index_elements=[ProductVariant.di],
                 set_={

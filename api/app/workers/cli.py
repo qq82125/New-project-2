@@ -334,6 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     udi_variants_mode.add_argument('--execute', action='store_true', help='Write product_variants + mark udi_device_index unbound')
     udi_variants.add_argument('--source-run-id', type=int, default=None, help='Filter by source_runs.id')
     udi_variants.add_argument('--limit', type=int, default=None, help='Optional max number of rows to process')
+    udi_variants.add_argument('--outlier-threshold', type=int, default=100, help='regno -> di_count safety threshold (default 100)')
 
     udi_products_enrich = sub.add_parser('udi:products-enrich', help='Enrich products (fill-empty only) from udi_device_index')
     udi_products_enrich_mode = udi_products_enrich.add_mutually_exclusive_group()
@@ -1199,6 +1200,7 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
     try:
         from app.services.udi_outliers import (
             compute_udi_outlier_distribution,
+            find_udi_multi_bind_dis,
             find_udi_outliers,
             materialize_udi_outliers,
         )
@@ -1207,6 +1209,7 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
         source_run_id = int(args.source_run_id) if getattr(args, "source_run_id", None) is not None else None
         dist = compute_udi_outlier_distribution(db, source_run_id=source_run_id)
         outliers = find_udi_outliers(db, threshold=threshold, source_run_id=source_run_id, limit=100)
+        multi_bind_dis = find_udi_multi_bind_dis(db, source_run_id=source_run_id, limit=100)
         write_outliers = bool(getattr(args, "write_outliers", False))
         execute = bool(getattr(args, "execute", False))
         outliers_written = 0
@@ -1227,9 +1230,16 @@ def _run_udi_audit(args: argparse.Namespace) -> int:
                     "di_unbound_registration_count": int(dist.get("di_unbound_registration_count") or 0),
                     "write_outliers": write_outliers,
                     "outliers_written": int(outliers_written),
-                    "outlier_registrations": [
+                    "outlier_regnos_topN": [
                         r.to_dict
                         for r in outliers
+                    ],
+                    "outlier_registrations": [r.to_dict for r in outliers],
+                    "multi_bind_dis_topN": [x.to_dict for x in multi_bind_dis],
+                    "suggested_actions": [
+                        "outlier_regno: review by queue, set udi_outliers.status to ignored/resolved after manual check",
+                        "multi_bind_di: block auto variant promote for the DI and add pending conflict for manual resolution",
+                        "after resolution: rerun udi:variants with the same source_run_id",
                     ],
                 },
                 ensure_ascii=True,
@@ -1732,6 +1742,7 @@ def _run_udi_variants(args: argparse.Namespace) -> int:
             db,
             source_run_id=source_run_id,
             limit=(int(args.limit) if getattr(args, "limit", None) else None),
+            outlier_threshold=int(getattr(args, "outlier_threshold", 100) or 100),
             dry_run=(not bool(getattr(args, "execute", False))),
         )
         print(json.dumps(rep.to_dict, ensure_ascii=True, default=str))

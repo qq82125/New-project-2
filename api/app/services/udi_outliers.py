@@ -17,6 +17,21 @@ class UdiOutlierItem:
         return {"registration_no": self.reg_no, "di_count": self.di_count}
 
 
+@dataclass
+class UdiMultiBindItem:
+    di: str
+    regno_count: int
+    registration_nos: list[str]
+
+    @property
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "di": self.di,
+            "regno_count": int(self.regno_count),
+            "registration_nos": list(self.registration_nos),
+        }
+
+
 def find_udi_outliers(
     db: Session,
     *,
@@ -48,6 +63,55 @@ def find_udi_outliers(
         params,
     ).mappings().all()
     return [UdiOutlierItem(reg_no=str(r.get("reg_no") or ""), di_count=int(r.get("di_count") or 0)) for r in rows]
+
+
+def find_udi_multi_bind_dis(
+    db: Session,
+    *,
+    source_run_id: int | None = None,
+    limit: int = 100,
+) -> list[UdiMultiBindItem]:
+    where = [
+        "di_norm IS NOT NULL",
+        "btrim(di_norm) <> ''",
+        "registration_no_norm IS NOT NULL",
+        "btrim(registration_no_norm) <> ''",
+    ]
+    params: dict[str, Any] = {"lim": int(limit)}
+    if source_run_id is not None:
+        where.append("source_run_id = :srid")
+        params["srid"] = int(source_run_id)
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+              di_norm AS di,
+              COUNT(DISTINCT registration_no_norm)::bigint AS regno_count,
+              ARRAY_AGG(DISTINCT registration_no_norm ORDER BY registration_no_norm) AS regnos
+            FROM udi_device_index
+            WHERE {" AND ".join(where)}
+            GROUP BY di_norm
+            HAVING COUNT(DISTINCT registration_no_norm) > 1
+            ORDER BY regno_count DESC, di_norm ASC
+            LIMIT :lim
+            """
+        ),
+        params,
+    ).mappings().all()
+    out: list[UdiMultiBindItem] = []
+    for r in rows:
+        regnos = r.get("regnos") or []
+        if not isinstance(regnos, list):
+            regnos = list(regnos)
+        out.append(
+            UdiMultiBindItem(
+                di=str(r.get("di") or ""),
+                regno_count=int(r.get("regno_count") or 0),
+                registration_nos=[str(x) for x in regnos if str(x).strip()],
+            )
+        )
+    return out
 
 
 def compute_udi_outlier_distribution(
