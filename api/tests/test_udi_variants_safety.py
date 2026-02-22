@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace
 from uuid import uuid4
 
 from app.services import udi_variants as mod
@@ -58,9 +57,9 @@ class _FakeDb:
         if "FROM udi_device_index udi" in sql:
             return _MappingsResult(self.index_rows)
         if "HAVING COUNT(1) > :threshold" in sql:
-            return _RowsResult([(x,) for x in sorted(self.outlier_regs)])
+            return _RowsResult([(x, 200) for x in sorted(self.outlier_regs)])
         if "HAVING COUNT(DISTINCT registration_no_norm) > 1" in sql:
-            return _RowsResult([(x,) for x in sorted(self.multi_bind_dis)])
+            return _RowsResult([(x, 2) for x in sorted(self.multi_bind_dis)])
         if "SELECT id, registration_no FROM registrations WHERE registration_no = ANY(:arr)" in sql:
             arr = params.get("arr") or []
             rows = [(uuid4(), rno) for rno in arr]
@@ -114,6 +113,10 @@ def test_udi_variants_dedup_and_safety_skip_counts(monkeypatch):
     assert rep.outlier_regno_skipped == 1
     assert rep.multi_bind_di_skipped == 1
     assert rep.upserted == 1
+    assert rep.quarantine_event_counts == {
+        "UDI_VARIANT_OUTLIER_REGNO": 1,
+        "UDI_VARIANT_MULTI_BIND_DI": 1,
+    }
 
 
 def test_udi_variants_existing_di_reg_mismatch_records_conflict(monkeypatch):
@@ -136,4 +139,5 @@ def test_udi_variants_existing_di_reg_mismatch_records_conflict(monkeypatch):
     assert rep.multi_bind_di_skipped == 1
     assert rep.conflicts_recorded == 1
     assert rep.upserted == 0
+    assert rep.quarantine_event_counts == {"UDI_VARIANT_MULTI_BIND_DI": 1}
     assert db.commits == 1

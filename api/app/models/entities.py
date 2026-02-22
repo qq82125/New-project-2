@@ -814,6 +814,20 @@ class UdiOutlier(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
+class UdiQuarantineEvent(Base):
+    __tablename__ = 'udi_quarantine_events'
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source_run_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    reg_no: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+    di: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    details: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+
+
 class DataSource(Base):
     __tablename__ = 'data_sources'
 

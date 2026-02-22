@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from app.models import Product, ProductVariant, Registration, ShadowDiffError
+from app.models import Product, ProductVariant, Registration, UdiQuarantineEvent
 from app.ivd.classifier import DEFAULT_VERSION as IVD_CLASSIFIER_VERSION, classify
 from app.sources.nmpa_udi.mapper import map_to_variant
 from app.services.normalize_keys import normalize_registration_no
@@ -270,6 +270,8 @@ class UdiVariantsFromIndexReport:
     outlier_regno_skipped: int = 0
     multi_bind_di_skipped: int = 0
     conflicts_recorded: int = 0
+    quarantine_event_counts: dict[str, int] | None = None
+    quarantine_samples: list[dict[str, Any]] | None = None
     failed: int = 0
     errors: list[dict[str, Any]] | None = None
 
@@ -285,6 +287,8 @@ class UdiVariantsFromIndexReport:
             "outlier_regno_skipped": self.outlier_regno_skipped,
             "multi_bind_di_skipped": self.multi_bind_di_skipped,
             "conflicts_recorded": self.conflicts_recorded,
+            "quarantine_event_counts": self.quarantine_event_counts or {},
+            "quarantine_samples": self.quarantine_samples or [],
             "failed": self.failed,
             "errors": self.errors or [],
         }
@@ -300,6 +304,48 @@ def _compose_model_spec(ggxh: str | None, sku: str | None) -> str | None:
     if b:
         return b
     return None
+
+
+def _record_quarantine_event(
+    db: Session,
+    *,
+    rep: UdiVariantsFromIndexReport,
+    dry_run: bool,
+    source_run_id: int | None,
+    event_type: str,
+    reg_no: str | None,
+    di: str | None,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    counts = rep.quarantine_event_counts or {}
+    counts[event_type] = int(counts.get(event_type, 0) or 0) + 1
+    rep.quarantine_event_counts = counts
+    samples = rep.quarantine_samples or []
+    if len(samples) < 3:
+        samples.append(
+            {
+                "event_type": event_type,
+                "reg_no": reg_no,
+                "di": di,
+                "message": message,
+            }
+        )
+        rep.quarantine_samples = samples
+
+    if dry_run:
+        return
+    db.add(
+        UdiQuarantineEvent(
+            source_run_id=(int(source_run_id) if source_run_id is not None else None),
+            event_type=event_type,
+            reg_no=(str(reg_no).strip() if reg_no else None),
+            di=(str(di).strip() if di else None),
+            count=1,
+            details=(details or None),
+            message=message,
+        )
+    )
 
 
 def upsert_udi_variants_from_device_index(
@@ -324,7 +370,7 @@ def upsert_udi_variants_from_device_index(
       - packaging_json (udi_device_index.packing_json, schema: packings[] array)
       - evidence_raw_document_id (raw_document_id)
     """
-    rep = UdiVariantsFromIndexReport(errors=[])
+    rep = UdiVariantsFromIndexReport(errors=[], quarantine_event_counts={}, quarantine_samples=[])
 
     sql = """
     SELECT
@@ -370,12 +416,12 @@ def upsert_udi_variants_from_device_index(
         safety_where += " AND source_run_id = :source_run_id"
         safety_params["source_run_id"] = int(source_run_id)
 
-    outlier_reg_nos = {
-        str(r[0])
+    outlier_reg_counts = {
+        str(r[0]): int(r[1] or 0)
         for r in db.execute(
             text(
                 f"""
-                SELECT registration_no_norm
+                SELECT registration_no_norm, COUNT(1)::bigint AS di_count
                 FROM udi_device_index
                 {safety_where}
                   AND registration_no_norm IS NOT NULL
@@ -389,12 +435,12 @@ def upsert_udi_variants_from_device_index(
         if str(r[0] or "").strip()
     }
 
-    multi_bind_di = {
-        str(r[0])
+    multi_bind_di_counts = {
+        str(r[0]): int(r[1] or 0)
         for r in db.execute(
             text(
                 f"""
-                SELECT di_norm
+                SELECT di_norm, COUNT(DISTINCT registration_no_norm)::bigint AS regno_count
                 FROM udi_device_index
                 {safety_where}
                   AND registration_no_norm IS NOT NULL
@@ -430,46 +476,51 @@ def upsert_udi_variants_from_device_index(
 
         reg_id = reg_by_no.get(reg_no) if reg_no else None
 
-        if reg_no and reg_no in outlier_reg_nos:
+        if reg_no and reg_no in outlier_reg_counts:
             rep.outlier_regno_skipped += 1
-            if not dry_run:
-                try:
-                    db.add(
-                        ShadowDiffError(
-                            id=uuid4(),
-                            raw_document_id=(UUID(str(raw_document_id)) if raw_document_id else None),
-                            raw_source_record_id=None,
-                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
-                            registration_no=reg_no,
-                            reason_code="UNKNOWN",
-                            error=f"[UDI_VARIANT_OUTLIER_REGNO] reg_no {reg_no} exceeds di_count threshold {int(outlier_threshold)}; variant write quarantined",
-                        )
-                    )
-                    rep.conflicts_recorded += 1
-                except Exception as exc:
-                    rep.failed += 1
-                    rep.errors.append({"di": di, "error": f"record_outlier_conflict_failed: {exc}"})
+            rep.conflicts_recorded += 1
+            try:
+                _record_quarantine_event(
+                    db,
+                    rep=rep,
+                    dry_run=dry_run,
+                    source_run_id=source_run_id,
+                    event_type="UDI_VARIANT_OUTLIER_REGNO",
+                    reg_no=reg_no,
+                    di=di or None,
+                    message=f"reg_no {reg_no} exceeds di_count threshold {int(outlier_threshold)}; variant write quarantined",
+                    details={
+                        "outlier_threshold": int(outlier_threshold),
+                        "di_count": int(outlier_reg_counts.get(reg_no) or 0),
+                        "note": "variant write quarantined",
+                    },
+                )
+            except Exception as exc:
+                rep.failed += 1
+                rep.errors.append({"di": di, "error": f"record_outlier_quarantine_failed: {exc}"})
             continue
 
-        if di and di in multi_bind_di:
+        if di and di in multi_bind_di_counts:
             rep.multi_bind_di_skipped += 1
-            if not dry_run:
-                try:
-                    db.add(
-                        ShadowDiffError(
-                            id=uuid4(),
-                            raw_document_id=(UUID(str(raw_document_id)) if raw_document_id else None),
-                            raw_source_record_id=None,
-                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
-                            registration_no=reg_no or None,
-                            reason_code="UNKNOWN",
-                            error=f"[UDI_VARIANT_MULTI_BIND_DI] di {di} binds multiple registration_no values; variant write quarantined",
-                        )
-                    )
-                    rep.conflicts_recorded += 1
-                except Exception as exc:
-                    rep.failed += 1
-                    rep.errors.append({"di": di, "error": f"record_multi_bind_conflict_failed: {exc}"})
+            rep.conflicts_recorded += 1
+            try:
+                _record_quarantine_event(
+                    db,
+                    rep=rep,
+                    dry_run=dry_run,
+                    source_run_id=source_run_id,
+                    event_type="UDI_VARIANT_MULTI_BIND_DI",
+                    reg_no=reg_no or None,
+                    di=di,
+                    message=f"di {di} binds multiple registration_no values; variant write quarantined",
+                    details={
+                        "regno_count": int(multi_bind_di_counts.get(di) or 0),
+                        "note": "variant write quarantined",
+                    },
+                )
+            except Exception as exc:
+                rep.failed += 1
+                rep.errors.append({"di": di, "error": f"record_multi_bind_quarantine_failed: {exc}"})
             continue
 
         if reg_id is None:
@@ -512,18 +563,22 @@ def upsert_udi_variants_from_device_index(
                 existing_reg = str(getattr(existing, "registry_no", "") or "").strip()
                 if existing_reg and reg_no and existing_reg != reg_no:
                     rep.multi_bind_di_skipped += 1
-                    db.add(
-                        ShadowDiffError(
-                            id=uuid4(),
-                            raw_document_id=(UUID(ev_raw_id) if ev_raw_id else None),
-                            raw_source_record_id=None,
-                            source_run_id=(int(source_run_id) if source_run_id is not None else None),
-                            registration_no=reg_no,
-                            reason_code="UNKNOWN",
-                            error=f"[UDI_VARIANT_MULTI_BIND_DI] existing variant di={di} already linked to reg_no={existing_reg}, new reg_no={reg_no}; quarantined",
-                        )
-                    )
                     rep.conflicts_recorded += 1
+                    _record_quarantine_event(
+                        db,
+                        rep=rep,
+                        dry_run=dry_run,
+                        source_run_id=source_run_id,
+                        event_type="UDI_VARIANT_MULTI_BIND_DI",
+                        reg_no=reg_no,
+                        di=di,
+                        message=f"existing variant di={di} already linked to reg_no={existing_reg}, new reg_no={reg_no}; quarantined",
+                        details={
+                            "existing_reg_no": existing_reg,
+                            "incoming_reg_no": reg_no,
+                            "note": "variant write quarantined",
+                        },
+                    )
                     continue
 
             stmt = stmt.on_conflict_do_update(
