@@ -85,6 +85,10 @@ class Product(Base):
     registration_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey('registrations.id'), nullable=True
     )
+    superseded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey('products.id'), nullable=True, index=True
+    )
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     raw_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     raw: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

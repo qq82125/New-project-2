@@ -364,6 +364,12 @@ def build_parser() -> argparse.ArgumentParser:
     udi_params.add_argument('--start-cursor', default=None, help='Execute: start from this di_norm cursor (overrides checkpoint)')
     udi_params.set_defaults(resume=True)
 
+    products_dedupe = sub.add_parser('products:dedupe-regno', help='Soft-dedupe products by reg_no with canonical mapping')
+    products_dedupe_mode = products_dedupe.add_mutually_exclusive_group()
+    products_dedupe_mode.add_argument('--dry-run', action='store_true', help='Preview only')
+    products_dedupe_mode.add_argument('--execute', action='store_true', help='Write is_hidden/superseded_by')
+    products_dedupe.add_argument('--limit-regnos', type=int, default=100, help='Optional max duplicated reg_no groups to process')
+
     prod_meth = sub.add_parser('methodology:map-products', help='Ontology V1: map products to methodology_master (rules-based)')
     prod_meth_mode = prod_meth.add_mutually_exclusive_group()
     prod_meth_mode.add_argument('--dry-run', action='store_true', help='Preview only')
@@ -1940,6 +1946,29 @@ def _run_udi_params(args: argparse.Namespace) -> int:
         db.close()
 
 
+def _run_products_dedupe_regno(args: argparse.Namespace) -> int:
+    db = SessionLocal()
+    try:
+        from app.services.product_regno_dedupe import dedupe_products_by_reg_no
+
+        rep = dedupe_products_by_reg_no(
+            db,
+            dry_run=(not bool(getattr(args, "execute", False))),
+            limit_regnos=(int(args.limit_regnos) if getattr(args, "limit_regnos", None) is not None else None),
+        )
+        if bool(getattr(args, "execute", False)):
+            db.commit()
+        else:
+            db.rollback()
+        print(json.dumps(rep.to_dict, ensure_ascii=False, default=str))
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -2090,6 +2119,8 @@ def main() -> None:
         raise SystemExit(_run_udi_products_enrich(args))
     if args.cmd == 'udi:params':
         raise SystemExit(_run_udi_params(args))
+    if args.cmd == 'products:dedupe-regno':
+        raise SystemExit(_run_products_dedupe_regno(args))
     if args.cmd == 'methodology:map-products':
         db = SessionLocal()
         try:

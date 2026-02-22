@@ -87,6 +87,7 @@ def build_search_query(
         .options(joinedload(Product.company))
         .outerjoin(Company, Product.company_id == Company.id)
     )
+    stmt = stmt.where(Product.is_hidden.is_(False))
     if ivd_filter is True:
         stmt = stmt.where(Product.is_ivd.is_(True))
     elif ivd_filter is False:
@@ -257,7 +258,20 @@ def get_product(db: Session, product_id: str) -> Product | None:
     except (ValueError, TypeError):
         return None
     stmt = select(Product).options(joinedload(Product.company)).where(Product.id == normalized_id, Product.is_ivd.is_(True))
-    return db.scalar(stmt)
+    product = db.scalar(stmt)
+    if not product:
+        return None
+    if bool(getattr(product, "is_hidden", False)):
+        canonical_id = getattr(product, "superseded_by", None)
+        if canonical_id:
+            canonical = db.scalar(
+                select(Product)
+                .options(joinedload(Product.company))
+                .where(Product.id == canonical_id, Product.is_ivd.is_(True), Product.is_hidden.is_(False))
+            )
+            if canonical:
+                return canonical
+    return product
 
 
 def admin_search_products(
